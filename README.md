@@ -9,7 +9,7 @@ Extracted from a working project, with that project's language, platform, and
 build system taken back out. What's left is the part that transfers.
 
 ```bash
-ln -sf "$PWD/harness" ~/.local/bin/harness    # once
+ln -sf "$PWD/bin/harness" ~/.local/bin/harness    # once
 cd ../my-project && harness add               # per project
 ```
 
@@ -88,6 +88,23 @@ file needs before it's actually in the binary.
 
 `.claude/HARNESS.md` is the rationale for why the pieces are shaped this way.
 Read it before rearranging them.
+
+## Working on the starter
+
+`harness add` runs inside this repo too — that's how the harness gets worked on
+with the harness: a ledger, the review packet, the gate, the dashboard.
+
+**One trap comes with it.** What `add` writes to `scripts/` is a *copy* of
+`template/scripts/`, with the placeholders filled in. They are separate files
+from that moment on. Edit `template/scripts/brief.sh` and the `scripts/brief.sh`
+that actually runs here does not change; fix a bug in the running copy and the
+template still ships it.
+
+So: **`template/` is the product, and the root is a working install of it.** Make
+every real change in `template/`, and re-copy into the root when you want to run
+what you just wrote. Nothing automates that yet — deleting the root copy and
+re-running `harness add` picks up the new version, but it will not touch a file
+that already exists, which is the whole reason it's safe everywhere else.
 
 ## Adding a command
 

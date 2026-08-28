@@ -1,0 +1,63 @@
+#!/bin/bash
+# Every commit names the bead it came from. Blocking, on purpose: the ledger is
+# only worth reading if it's complete, and "I'll file it after" never happens.
+#
+# Installed by pointing a commit-msg hook at this file. The logic lives in
+# scripts/ rather than in the hook directory itself because that directory is
+# managed by beads and gets rewritten on upgrade.
+set -uo pipefail
+
+msg_file="$1"
+git_dir="$(git rev-parse --git-dir)"
+
+# A merge resolves other commits that already named their beads, and a bisect or
+# a cherry-pick is replaying someone else's message. Neither is new work.
+[ -e "$git_dir/MERGE_HEAD" ] && exit 0
+[ -e "$git_dir/CHERRY_PICK_HEAD" ] && exit 0
+[ -e "$git_dir/BISECT_LOG" ] && exit 0
+
+# Comment lines aren't part of the message, and the diff git appends under
+# --verbose would otherwise match any bead id that happens to be in the patch.
+message="$(sed -e '/^#/d' -e '/^diff --git/,$d' "$msg_file")"
+
+# `fixup!` and `squash!` fold into a commit that already carries the reference.
+case "$message" in fixup!*|squash!*|amend!*) exit 0 ;; esac
+
+ids="$(printf '%s' "$message" | grep -oE '\bhar-[a-z0-9]+(\.[0-9]+)?\b' | sort -u)"
+
+if [ -z "$ids" ]; then
+  cat >&2 <<'EOF'
+
+  ✗ this commit names no bead.
+
+    Every commit links to the work it came from — that link is what lets a
+    later session ask why a line looks the way it does and get an answer.
+
+      bd q "what this commit is doing"    # file one, get an id back
+      bd ready                            # or claim something already filed
+
+    Then put the id in the message: "Closes har-abc", or just har-abc in the body.
+
+    Genuinely unfilable? git commit --no-verify
+
+EOF
+  exit 1
+fi
+
+# A typo'd id is worse than none: it looks like a link and resolves to nothing.
+# Only checked when bd is actually installed, so a fresh clone can still commit.
+if command -v bd >/dev/null 2>&1; then
+  unknown=""
+  for id in $ids; do
+    bd show "$id" >/dev/null 2>&1 || unknown="$unknown $id"
+  done
+  if [ -n "$unknown" ]; then
+    echo >&2
+    echo >&2 "  ✗ no such bead:$unknown"
+    echo >&2 "    Check the id with 'bd list', or file it with 'bd q \"…\"'."
+    echo >&2
+    exit 1
+  fi
+fi
+
+exit 0

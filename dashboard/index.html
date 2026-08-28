@@ -1,0 +1,2769 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>harness-starter · harness</title>
+    <link rel="stylesheet" href="vendor/diff2html.min.css" />
+    <style>
+      :root {
+        --bg: #f6f6f4;
+        --panel: #fffffe;
+        --ink: #14150f;
+        --dim: #6d6f66;
+        --line: #e0e0d8;
+        --accent: #6a5acd;
+        --ok: #2e7d55;
+        --warn: #b4690e;
+        --fail: #b3352c;
+        --blue: #2f6690;
+        --teal: #137a6c;
+        --idle: #b9bab0;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.05);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14150f;
+          --panel: #1c1e17;
+          --ink: #eceade;
+          --dim: #92948a;
+          --line: #2c2f26;
+          --accent: #9d8df1;
+          --ok: #5fc48b;
+          --warn: #e0a33f;
+          --fail: #f0776b;
+          --blue: #6fa8d8;
+          --teal: #4fc3ad;
+          --idle: #4a4d42;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        overflow-x: clip;
+      }
+      body {
+        /* Popovers are in the layout even while hidden, so one hanging past the
+       right edge scrolls the whole page sideways. `clip` refuses the scroll
+       without making the body a scroll container; the width cap below keeps
+       the visible ones inside the viewport so nothing readable is cut off. */
+        overflow-x: clip;
+        margin: 0;
+        padding: 26px clamp(16px, 3.5vw, 40px) 48px;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          15px/1.55 ui-sans-serif,
+          -apple-system,
+          'SF Pro Text',
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      h1 {
+        font-size: 19px;
+        font-weight: 620;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      h2 {
+        font-size: 11px;
+        font-weight: 620;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--ink);
+        margin: 0;
+      }
+      /* The title and the status text sit on one baseline — they read as a single
+     line of writing, not a row of boxes at different heights. The buttons are
+     boxes, so they centre themselves against it instead. */
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 11px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+      .meta-line {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        flex-wrap: wrap;
+      }
+      .runs {
+        align-self: center;
+      }
+      .sub {
+        color: var(--dim);
+        font-size: 13px;
+      }
+      .dot {
+        color: var(--dim);
+        font-size: 13px;
+        opacity: 0.6;
+      }
+      .gate {
+        position: relative;
+        font-size: 13px;
+        color: var(--dim);
+        cursor: help;
+        text-decoration: underline dotted color-mix(in srgb, currentColor 50%, transparent);
+        text-underline-offset: 3px;
+      }
+      .gate.good {
+        color: var(--ok);
+      }
+      .gate.bad {
+        color: var(--fail);
+      }
+      .gate .tip {
+        left: -12px;
+        width: 268px;
+      }
+      /* focus-within, not just focus-visible: the run button lives in this pane, and
+     a pane that vanishes when its own control takes focus can't be pressed. */
+      .gate:hover .tip,
+      .gate:focus-visible .tip,
+      .gate:focus-within .tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+      .pulse {
+        position: relative;
+        font-size: 13px;
+        color: var(--ok);
+        cursor: help;
+        text-decoration: underline dotted color-mix(in srgb, currentColor 50%, transparent);
+        text-underline-offset: 3px;
+      }
+      .pulse.stale {
+        color: var(--fail);
+      }
+      .pulse .tip {
+        left: -12px;
+        width: 250px;
+      }
+      .pulse:hover .tip,
+      .pulse:focus-visible .tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+      @keyframes beat {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.25;
+        }
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px 20px;
+        box-shadow: var(--shadow);
+        /* Rows run to the card's edge, so the card has to clip them: a hover fill
+       squaring off the corner it sits in is the giveaway that it isn't. */
+        overflow: hidden;
+      }
+      .panel-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      /* The page's readable column, the same width the sheet holds prose to. A row
+     gives its title the whole card, so on a wide display an uncapped board turns
+     every bead into one long line the eye has to track back across. The fixed
+     overlays — scrim, sheet, the anchored popovers — set their own geometry and
+     aren't in this flow. */
+      header,
+      .backlog,
+      .board,
+      .harness {
+        max-width: 856px;
+        margin-inline: auto;
+      }
+
+      /* The lanes are the loop, read top to bottom: claimable down to done, with
+     the stages work passes through as lanes like any other rather than a
+     separate diagram to cross-reference. Each is its own card, so a lane can be
+     folded away without taking its neighbours with it, and a lane holding
+     nothing isn't drawn at all. */
+      .board {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      /* One bead per row. A lane is a list you read down, and a row gives a title
+     the whole width instead of wrapping it into a card three lines tall — six
+     beads become six lines rather than a wall. */
+      /* No padding of its own: every edge a row has belongs to the row, so the
+     hover fill and the separators reach the full width of the card instead of
+     stopping short of it. */
+      .lane-cards {
+        display: flex;
+        flex-direction: column;
+      }
+      .lane > summary {
+        border-bottom: 2px solid var(--idle);
+      }
+      .lane[open] > summary {
+        border-radius: 14px 14px 0 0;
+      }
+      .lane > summary h2 {
+        font-size: 11.5px;
+        letter-spacing: 0.06em;
+      }
+      /* Whichever comes first takes the gap, so the pair sits at the far edge
+     rather than against the lane's name. */
+      .lane > summary .mini,
+      .lane > summary .mini ~ .n {
+        margin-left: 0;
+      }
+      .lane > summary .mini:first-of-type {
+        margin-left: auto;
+      }
+      /* A lane arriving is news — work moved into it. It grows out of nothing
+     rather than the page jumping a card taller, and leaves the same way, so the
+     eye can follow which lane changed. */
+      .lane.entering {
+        animation: lane-in 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      .lane.leaving {
+        animation: lane-in 0.22s cubic-bezier(0.32, 0.72, 0, 1) reverse forwards;
+        pointer-events: none;
+      }
+      @keyframes lane-in {
+        from {
+          opacity: 0;
+          transform: translateY(-8px) scaleY(0.96);
+          transform-origin: top;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .lane.entering,
+        .lane.leaving {
+          animation-duration: 0.01ms;
+        }
+      }
+      /* What a lane says when it has no cards. Padded like a row, because that's
+     what it stands in for. */
+      .lane-note {
+        margin: 0;
+        padding: 13px 20px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+
+      /* The tail of a long lane, folded behind one press rather than scrolled past:
+     `done` is sixty-odd beads and nobody opens the page to read them. */
+      .load-more {
+        font: inherit;
+        font-size: 11.5px;
+        color: var(--dim);
+        background: none;
+        border: 0;
+        border-top: 1px solid var(--line);
+        padding: 12px 20px;
+        text-align: left;
+        cursor: pointer;
+        transition: color 0.15s;
+      }
+      .load-more:hover {
+        color: var(--accent);
+      }
+      .mini {
+        font: inherit;
+        font-size: 9.5px;
+        font-weight: 620;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--dim);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 1px 8px;
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          color 0.15s;
+      }
+      .mini:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      /* A toggle button whose popover is open reads as pressed, the same filled
+     look a native segmented control gives its active segment. */
+      .mini[aria-expanded='true'] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--panel);
+      }
+      .mini:disabled {
+        cursor: progress;
+      }
+      .mini.failed {
+        border-color: var(--fail);
+        color: var(--fail);
+      }
+      .mini.ok {
+        border-color: var(--ok);
+        color: var(--ok);
+      }
+      .lane.ready > summary {
+        border-bottom-color: var(--accent);
+      }
+      .lane.in_progress > summary {
+        border-bottom-color: var(--blue);
+      }
+      .lane.blocked > summary {
+        border-bottom-color: var(--fail);
+      }
+      .lane.done > summary {
+        border-bottom-color: var(--ok);
+      }
+      .lane.review > summary {
+        border-bottom-color: var(--accent);
+      }
+      .lane.staging > summary {
+        border-bottom-color: var(--warn);
+      }
+      .lane.worktree > summary {
+        border-bottom-color: var(--teal);
+      }
+
+      .lane-name.hoverable {
+        position: relative;
+        cursor: help;
+      }
+      .commit-row {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 11.5px;
+      }
+      .commit-row:last-child {
+        border-bottom: 0;
+      }
+      .commit-row code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10.5px;
+        color: var(--dim);
+        white-space: nowrap;
+      }
+
+      /* ---- work tree ---------------------------------------------------------- */
+      /* A <details> lane like its siblings — the commit button that opens a
+     popover is exactly the shape the push button already is (a stateless
+     control living inside <summary>, guarded by the same preventDefault so a
+     press on it doesn't also fold the lane), so nothing here needs to fight
+     the native disclosure to get folding and the board's spacing for free. */
+      .mini.danger {
+        border-color: color-mix(in srgb, var(--fail) 55%, var(--line));
+        color: var(--fail);
+      }
+      .mini.danger:hover:not(:disabled) {
+        border-color: var(--fail);
+      }
+      .wt-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 20px;
+        border-bottom: 1px solid var(--line);
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .wt-row:last-child {
+        border-bottom: 0;
+      }
+      .wt-row:hover {
+        background: color-mix(in srgb, var(--accent) 11%, transparent);
+      }
+      .wt-revert {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        color: var(--dim);
+        background: none;
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .wt-revert:hover {
+        color: var(--fail);
+        background: color-mix(in srgb, var(--fail) 14%, transparent);
+      }
+      .wt-revert svg {
+        width: 13px;
+        height: 13px;
+      }
+      /* Native checkboxes carry the OS's own unchecked fill (usually stark white),
+     which reads wrong against a dark row. Redrawn from scratch so both states
+     use the page's own palette — a tinted secondary fill at rest, accent when
+     checked, with the tick drawn as a two-segment border rather than an image.
+     Global rather than scoped to the work-tree rows: any checkbox this page
+     grows later gets the same look for free. */
+      input[type='checkbox'] {
+        appearance: none;
+        -webkit-appearance: none;
+        flex: none;
+        width: 15px;
+        height: 15px;
+        margin: 0;
+        border-radius: 4px;
+        border: 1px solid var(--line);
+        background: color-mix(in srgb, var(--dim) 20%, transparent);
+        cursor: pointer;
+        display: inline-flex;
+        transition:
+          background 0.15s,
+          border-color 0.15s;
+      }
+      input[type='checkbox']:checked {
+        background: var(--accent);
+        border-color: var(--accent);
+      }
+      input[type='checkbox']:checked::after {
+        content: '';
+        width: 4px;
+        height: 7px;
+        margin: 1px auto 0 4px;
+        border: solid #fff;
+        border-width: 0 1.6px 1.6px 0;
+        transform: rotate(45deg);
+      }
+      .wt-status {
+        flex: none;
+        font-size: 9.5px;
+        font-weight: 620;
+        color: var(--dim);
+        text-transform: uppercase;
+      }
+      .wt-status.wt-d {
+        color: var(--fail);
+      }
+      .wt-status.wt-m {
+        color: var(--blue);
+      }
+      .wt-status.wt-n {
+        color: var(--ok);
+      }
+      .wt-name {
+        flex: 1;
+        min-width: 0;
+        font-size: 12.5px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .wt-dir {
+        margin-left: 0.5em;
+        color: var(--dim);
+      }
+      .wt-base {
+        color: var(--ink);
+      }
+
+      /* ---- diff sheet ---------------------------------------------------------- */
+      .sheet.wide {
+        max-width: min(1440px, calc(100vw - 32px));
+      }
+      /* Its own bar, not a `.wt-row` wearing a hat — a row is a whole-row button
+     that opens a diff; this is a sticky toolbar that already IS the open diff,
+     plus a close button a row never needs. Composed from the same `wtIdentity`/
+     `wtRevertButton` pieces, shaped into whatever layout this context wants
+     rather than the row's own div and padding. Sits in a `#sheetBody.flush`
+     sheet (see `#sheetBody` above): with no ambient padding fighting it, it
+     runs edge to edge and `top: 0` sticks it flush against the sheet's own
+     top, no negative margin required to get there. */
+      .diff-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        cursor: default;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        padding: 16px 20px;
+        background: var(--panel);
+        border-radius: 18px 18px 0 0;
+      }
+      .diff-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        font-size: 15px;
+        line-height: 1;
+        color: var(--dim);
+        background: none;
+        border: 0;
+        border-radius: 8px;
+        cursor: pointer;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .diff-close:hover {
+        color: var(--ink);
+        background: color-mix(in srgb, var(--ink) 8%, transparent);
+      }
+      /* diff2html's own per-file header repeats the filename this sheet's own
+     header already shows, right below it — a second name plus its own
+     dividing line read as a stray separator rather than a header for
+     anything, since there's only ever one file in view here. */
+      .diff-body .d2h-file-header {
+        display: none;
+      }
+      /* Side-by-side ships built to scroll a long line rather than wrap it —
+     fine in an IDE, but this sheet is read top to bottom and a line clipped
+     at the edge is a line half the reader never sees. Wrapped instead, so
+     the diff grows down rather than getting cut off sideways. */
+      .diff-body .d2h-file-side-diff {
+        overflow-x: visible;
+      }
+      /* Both were sized for one line: `d2h-code-line-ctn` claims a flat 100% of
+     its row, which is fine when overflow just scrolls off past it, but is
+     exactly wide enough to leave the +/- prefix before it nowhere to sit —
+     wrapping was pushing the prefix onto a line of its own. Block display
+     drops that inline-block box model in favour of ordinary text flow, where
+     the prefix and the content share one line until there's genuinely no
+     room left. The left padding clears the line-number gutter, which is
+     absolutely positioned over the row's own left edge rather than sharing
+     space with it in flow — content padded any less sits underneath it. */
+      .diff-body .d2h-code-line,
+      .diff-body .d2h-code-side-line {
+        display: block;
+        white-space: normal;
+        width: auto;
+        padding: 0 0.6em 0 4.5em;
+      }
+      .diff-body .d2h-code-line-ctn {
+        display: inline;
+        width: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .wt-filename {
+        flex: 1;
+        min-width: 0;
+        display: block;
+        font: inherit;
+        font-size: 15px;
+        font-weight: 620;
+        letter-spacing: -0.01em;
+        background: none;
+        border: 0;
+        padding: 2px 4px;
+        margin: -2px -4px;
+        border-radius: 6px;
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: left;
+      }
+      .wt-filename:hover {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+      .diff-body {
+        padding: 0 0 20px;
+      }
+      /* highlight.js ships themes, but every one of them is a foreign palette
+     dropped inside this page. These are the page's own tokens, so the diff
+     follows the same light/dark switch everything else does and needs no second
+     stylesheet. Only the classes the vendored grammars actually emit. */
+      .d2h-code-line-ctn .hljs-comment,
+      .d2h-code-line-ctn .hljs-quote {
+        color: var(--dim);
+        font-style: italic;
+      }
+      .d2h-code-line-ctn .hljs-keyword,
+      .d2h-code-line-ctn .hljs-selector-tag,
+      .d2h-code-line-ctn .hljs-meta {
+        color: var(--accent);
+      }
+      .d2h-code-line-ctn .hljs-string,
+      .d2h-code-line-ctn .hljs-attr,
+      .d2h-code-line-ctn .hljs-attribute {
+        color: var(--ok);
+      }
+      .d2h-code-line-ctn .hljs-number,
+      .d2h-code-line-ctn .hljs-literal,
+      .d2h-code-line-ctn .hljs-symbol {
+        color: var(--warn);
+      }
+      .d2h-code-line-ctn .hljs-type,
+      .d2h-code-line-ctn .hljs-built_in,
+      .d2h-code-line-ctn .hljs-class .hljs-title {
+        color: var(--teal);
+      }
+      .d2h-code-line-ctn .hljs-title,
+      .d2h-code-line-ctn .hljs-function .hljs-title,
+      .d2h-code-line-ctn .hljs-section {
+        color: var(--blue);
+      }
+      .d2h-code-line-ctn .hljs-variable,
+      .d2h-code-line-ctn .hljs-property,
+      .d2h-code-line-ctn .hljs-params {
+        color: var(--ink);
+      }
+      .diff-body .d2h-wrapper {
+        overflow-x: auto;
+      }
+      .diff-body > .note {
+        padding: 0 20px;
+      }
+      /* diff2html ships its own light/dark palette behind this class, toggled by
+     `colorScheme: 'auto'` — the theme it draws in follows the same media query
+     the rest of the page does, without this page having to restate its colours. */
+
+      /* ---- anchored popovers (revert confirm, file menu, commit compose) ------ */
+      /* Fixed and positioned by JS over whichever control opened them, rather than
+     `position: relative` children of that control — the work-tree rows they
+     hang off get thrown away and rebuilt on every board repaint, and a
+     popover that lived inside one (with typed commit text, say) would vanish
+     or reset out from under the reader mid-use. */
+      .popconfirm,
+      .popmenu,
+      .popover {
+        position: fixed;
+        z-index: 70;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+      }
+      .popconfirm {
+        width: 220px;
+        padding: 12px 14px;
+      }
+      .popconfirm p {
+        margin: 0 0 10px;
+        font-size: 12.5px;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+      .popconfirm .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .popmenu {
+        min-width: 220px;
+        max-width: min(420px, calc(100vw - 24px));
+        padding: 6px;
+      }
+      .popmenu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        font-size: 12.5px;
+        color: inherit;
+        background: none;
+        border: 0;
+        border-radius: 7px;
+        padding: 7px 9px;
+        cursor: pointer;
+      }
+      .popmenu button:hover {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: var(--accent);
+      }
+      .commit-pop {
+        width: 450px;
+        padding: 12px;
+      }
+      .commit-pop textarea {
+        display: block;
+        width: 100%;
+        resize: none;
+        overflow: hidden;
+        font: inherit;
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: var(--ink);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        box-sizing: border-box;
+      }
+      .commit-pop textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .commit-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 9px;
+      }
+      .commit-amend {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--dim);
+        cursor: pointer;
+      }
+      .commit-error {
+        margin-top: 8px;
+        font-size: 11px;
+        color: var(--fail);
+        overflow-wrap: anywhere;
+      }
+
+      /* A row opens a dialog, so it is a button — that buys the keyboard, the
+     focus ring, and the role without re-implementing any of them. Ruled rather
+     than boxed: at one bead per line, six borders read as a grid of cages. */
+      .card {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        color: inherit;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 12px 20px;
+        background: none;
+        min-width: 0;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .card:last-child {
+        border-bottom: 0;
+      }
+      .card:hover {
+        background: color-mix(in srgb, var(--accent) 11%, transparent);
+      }
+      .lane.done .card {
+        opacity: 0.5;
+      }
+      .card b {
+        flex: 1;
+        min-width: 0;
+        font-size: 12.5px;
+        font-weight: 560;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+      /* Held to the row's own line: the title takes what it needs and the meta
+     trails it, rather than the meta wrapping the row into a second line. */
+      .card .meta {
+        display: flex;
+        gap: 7px;
+        align-items: baseline;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        flex: 0 1 auto;
+        font-size: 10.5px;
+        color: var(--dim);
+        font-variant-numeric: tabular-nums;
+      }
+      .card .meta code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        white-space: nowrap;
+      }
+      .chip {
+        font-size: 9.5px;
+        font-weight: 600;
+        padding: 1px 6px;
+        border-radius: 20px;
+        background: color-mix(in srgb, var(--accent) 15%, transparent);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+      }
+      /* An epic's title is a sentence, not a word, and nowrap sent it straight out
+     of the card. The chip gives up its width rather than the card's. */
+      .chip.epic {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        background: color-mix(in srgb, var(--ink) 8%, transparent);
+        color: var(--dim);
+      }
+      .chip.ok {
+        background: color-mix(in srgb, var(--ok) 16%, transparent);
+        color: var(--ok);
+      }
+      /* Sits ahead of the title in the card's own flex row, so it needs its own
+     width protected — the title is the flexible side, not this. */
+      .chip.prio {
+        flex-shrink: 0;
+        background: color-mix(in srgb, var(--ink) 8%, transparent);
+        color: var(--dim);
+      }
+      .waits {
+        color: var(--fail);
+      }
+      .empty {
+        color: var(--dim);
+        font-size: 11.5px;
+        font-style: italic;
+        padding: 6px 2px;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 10px;
+        padding: 4px 0;
+        font-size: 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .row:last-child {
+        border-bottom: 0;
+      }
+      .row .v {
+        color: var(--dim);
+        font-variant-numeric: tabular-nums;
+        font-size: 11.5px;
+        text-align: right;
+      }
+      .v.ok {
+        color: var(--ok);
+      }
+      .v.bad {
+        color: var(--fail);
+      }
+      .v.warn {
+        color: var(--warn);
+      }
+      .name {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+      }
+
+      /* run controls */
+      .runs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-left: auto;
+      }
+      .runs button {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 560;
+        color: var(--ink);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 5px 11px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        transition: border-color 0.15s;
+      }
+      .runs button:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+      .runs button:disabled {
+        cursor: progress;
+        color: var(--dim);
+      }
+      .runs button i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--idle);
+        flex: none;
+      }
+      .runs button.running i {
+        background: var(--warn);
+        animation: beat 1s ease-in-out infinite;
+      }
+      .runs button.ok i {
+        background: var(--ok);
+      }
+      .runs button.failed i {
+        background: var(--fail);
+      }
+      .run-note {
+        font-size: 11.5px;
+        color: var(--dim);
+        margin-bottom: 9px;
+        overflow-wrap: anywhere;
+      }
+
+      /* the "i" affordance: an explanation you read once doesn't earn permanent space */
+      /* The title is the control: the chevron next to it says there's more here,
+     and either half opens it. Opened by a press rather than a hover, because
+     what's inside is read, not glanced at — a panel that evaporates when the
+     pointer drifts can't be. */
+      .titlemenu {
+        position: relative;
+        display: inline-flex;
+        align-items: baseline;
+      }
+      .titletrigger {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        font: inherit;
+        color: inherit;
+        background: none;
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+      }
+      .titletrigger .chev {
+        color: var(--dim);
+        font-size: 13px;
+        display: inline-block;
+        transform: rotate(90deg);
+        transition:
+          transform 0.22s ease,
+          color 0.15s;
+      }
+      .titletrigger:hover .chev {
+        color: var(--accent);
+      }
+      .titlemenu.open .chev {
+        transform: rotate(-90deg);
+      }
+
+      .tip {
+        position: absolute;
+        top: 100%;
+        z-index: 40;
+        max-width: calc(100vw - 28px);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+        padding: 12px 14px;
+        white-space: normal;
+        cursor: default;
+        font:
+          400 12px/1.5 ui-sans-serif,
+          -apple-system,
+          system-ui,
+          sans-serif;
+        text-transform: none;
+        letter-spacing: normal;
+        color: var(--ink);
+        text-align: left;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(-3px);
+        transition:
+          opacity 0.14s ease,
+          transform 0.14s ease,
+          visibility 0.14s;
+      }
+      /* Anchored to its left edge: it hangs under the title, which is the far left
+     of the page, so a panel measured from its right ran off the screen. */
+      .titlemenu .tip {
+        left: 0;
+        width: min(360px, calc(100vw - 32px));
+        margin-top: 6px;
+      }
+      .titlemenu.open .tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+      .lane-name .tip {
+        left: -12px;
+        width: 268px;
+      }
+      .lane-name.hoverable:hover .tip,
+      .lane-name.hoverable:focus-visible .tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+
+      .tip h3 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 10px;
+        font-weight: 620;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--dim);
+        margin: 0 0 7px;
+      }
+      /* A control in a hover pane: the pane is a child of its anchor, so the
+     pointer never leaves the anchor on the way to the button. */
+      .tip h3 .mini {
+        margin-left: auto;
+      }
+      .tip .group + .group {
+        margin-top: 14px;
+        padding-top: 13px;
+        border-top: 1px solid var(--line);
+      }
+      .bar {
+        display: flex;
+        height: 8px;
+        border-radius: 5px;
+        overflow: hidden;
+        margin: 0 0 8px;
+        background: var(--line);
+      }
+      .bar span {
+        display: block;
+      }
+      .legend {
+        display: flex;
+        gap: 12px;
+        font-size: 11px;
+        color: var(--dim);
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .legend i {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 3px;
+        margin-right: 5px;
+        vertical-align: -1px;
+      }
+      .note {
+        color: var(--dim);
+        font-size: 11px;
+        margin-top: 9px;
+        font-weight: 400;
+      }
+      .save b {
+        color: var(--ok);
+      }
+
+      /* ---- backlog ---------------------------------------------------------- */
+      /* <details> is the disclosure control the platform already ships: open state,
+     keyboard, and the summary's role come free. Collapsed is the default
+     because backlog is the work deliberately not being done next. */
+      .backlog {
+        margin-bottom: 18px;
+      }
+      /* A disclosure's own summary and content carry the padding, so the header can
+     hold a full-width rule and the panel doesn't pad what's already padded. */
+      /* The clip moves down with them: a lane's title carries a hover popover that
+     hangs below the header, and a card that clips its own bounds cut it in half. */
+      details.panel {
+        padding: 0;
+        overflow: visible;
+      }
+      .lane-cards,
+      .strip {
+        overflow: hidden;
+        border-radius: 0 0 14px 14px;
+      }
+      details.panel > summary {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        padding: 14px 20px;
+        list-style: none;
+        border-radius: 14px;
+      }
+      details.panel > summary::-webkit-details-marker {
+        display: none;
+      }
+      details.panel .chev {
+        color: var(--dim);
+        font-size: 11px;
+        transition: transform 0.25s ease;
+        display: inline-block;
+      }
+      details.panel[open] .chev {
+        transform: rotate(90deg);
+      }
+      details.panel > summary .n {
+        margin-left: auto;
+        font-size: 11.5px;
+        color: var(--dim);
+      }
+      /* Rows, like the lanes below it — the backlog is read the same way the rest
+     of the ledger is, and it's behind a disclosure, so its length costs nothing
+     until it's opened. */
+      .strip {
+        display: flex;
+        flex-direction: column;
+      }
+      .backlog[open] .strip {
+        animation: unfurl 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+      }
+      @keyframes unfurl {
+        from {
+          opacity: 0;
+          transform: translateY(-6px);
+        }
+      }
+
+      /* ---- the harness ------------------------------------------------------ */
+      /* Top to bottom, because this is a sequence: what a session wakes into, then
+     where it finds work, then what it has to pass before any of it counts. A
+     spine down the left carries the eye between stages so the stack reads as
+     one flow rather than seven unrelated lists. */
+      .harness {
+        margin-top: 18px;
+        padding: 0;
+      }
+      .flow {
+        padding: 2px 20px 20px;
+      }
+      .stage {
+        position: relative;
+        padding: 0 0 20px 26px;
+      }
+      .stage::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 4px;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .stage::after {
+        content: '';
+        position: absolute;
+        left: 4px;
+        top: 17px;
+        bottom: 0;
+        width: 1px;
+        background: var(--line);
+      }
+      .stage:last-child {
+        padding-bottom: 0;
+      }
+      .stage:last-child::after {
+        display: none;
+      }
+      .stage-head {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        flex-wrap: wrap;
+        margin-bottom: 9px;
+      }
+      .stage-head b {
+        font-size: 11.5px;
+        font-weight: 620;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .stage-head span {
+        font-size: 11.5px;
+        color: var(--dim);
+      }
+      .nodes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+      .node {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font: inherit;
+        font-size: 11.5px;
+        color: inherit;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 5px 10px;
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          transform 0.15s;
+      }
+      .node:hover {
+        border-color: var(--accent);
+      }
+      .node:active {
+        transform: scale(0.97);
+      }
+      /* Which half of the system a piece belongs to is the one thing worth seeing
+     without opening anything, so it's the only colour in here. */
+      .node i {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--dim);
+        flex: none;
+      }
+      .node.claude i {
+        background: var(--accent);
+      }
+      .node .t {
+        color: var(--dim);
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---- detail sheet ----------------------------------------------------- */
+      /* Rises from the bottom edge and settles in the middle, so the eye still
+     follows it up from where it was summoned and back down on dismissal. */
+      .scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 55;
+        background: rgba(0, 0, 0, 0.4);
+        opacity: 0;
+        visibility: hidden;
+        transition:
+          opacity 0.3s ease,
+          visibility 0.3s;
+      }
+      .scrim.open {
+        opacity: 1;
+        visibility: visible;
+      }
+      .sheet {
+        /* --edge is a floor, not a frame: the sheet takes the height its contents
+       need and keeps at least this much clear on every side. Both insets are
+       set and the height isn't auto, so `margin: auto` centres it in what's
+       left. Width still fills the band — only the height hugs. */
+        --edge: 54px;
+        position: fixed;
+        inset: var(--edge);
+        margin: auto;
+        z-index: 60;
+        height: fit-content;
+        max-height: calc(100vh - var(--edge) * 2);
+        overflow-y: auto;
+        /* A bead's title and notes are prose, and prose past this stops being
+       readable — on a wide display the sheet centres rather than spanning. */
+        max-width: 856px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        box-shadow: 0 14px 52px rgba(0, 0, 0, 0.34);
+        visibility: hidden;
+        /* A full viewport, because a sheet that hugs its contents can't know where
+       its own top will land. The easing is front-loaded, so the part you watch
+       is the settle either way. */
+        transform: translateY(100vh);
+        transition:
+          transform 0.44s cubic-bezier(0.32, 0.72, 0, 1),
+          visibility 0.44s;
+      }
+      .sheet.open {
+        visibility: visible;
+        transform: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .sheet,
+        .scrim {
+          transition-duration: 0.01ms;
+        }
+        .backlog[open] .strip {
+          animation: none;
+        }
+      }
+      .sheet h3.title {
+        font-size: 17px;
+        font-weight: 620;
+        margin: 0 0 10px;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
+        overflow-wrap: anywhere;
+      }
+      .sheet .meta {
+        display: flex;
+        gap: 7px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .sheet .meta code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: var(--dim);
+      }
+      .sheet section {
+        margin-top: 16px;
+      }
+      /* Direct child only: this styles the section's own label, and a rendered
+     document's headings are nested deeper and set their own type. */
+      .sheet section > h4 {
+        font-size: 10px;
+        font-weight: 620;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--dim);
+        margin: 0 0 7px;
+      }
+      .sheet p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+      .sheet .kids {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+      .sheet .kid {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        font-size: 12.5px;
+        color: inherit;
+        cursor: pointer;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 8px 11px;
+        transition: border-color 0.15s;
+      }
+      .sheet .kid:hover {
+        border-color: var(--accent);
+      }
+      .sheet .kid.closed {
+        color: var(--dim);
+      }
+      .sheet .kid .tick {
+        color: var(--ok);
+        flex: none;
+      }
+      /* No height cap and no scroller of its own: the sheet is the one thing that
+     scrolls, so a long file runs its full length instead of pooling in a short
+     box with dead space under it. */
+      .sheet pre.file {
+        margin: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+
+      /* Rendered markdown. Documents here are read, not skimmed, so this is a
+     reading column rather than another dense panel. */
+      .md {
+        font-size: 13.5px;
+        line-height: 1.62;
+        overflow-wrap: anywhere;
+      }
+      .md > :first-child {
+        margin-top: 0;
+      }
+      .md > :last-child {
+        margin-bottom: 0;
+      }
+      .md p {
+        margin: 0 0 11px;
+        white-space: normal;
+        font-size: inherit;
+      }
+      .md h3,
+      .md h4,
+      .md h5,
+      .md h6 {
+        font-weight: 620;
+        letter-spacing: -0.005em;
+        color: var(--ink);
+        margin: 22px 0 8px;
+        text-transform: none;
+      }
+      .md h3 {
+        font-size: 16px;
+      }
+      .md h4 {
+        font-size: 14px;
+      }
+      .md h5,
+      .md h6 {
+        font-size: 12.5px;
+        color: var(--dim);
+      }
+      .md ul,
+      .md ol {
+        margin: 0 0 11px;
+        padding-left: 20px;
+      }
+      .md li {
+        margin: 0 0 5px;
+      }
+      .md li::marker {
+        color: var(--dim);
+      }
+      /* A list item holding several paragraphs is the shape these documents use
+     most; without this its prose sits flush against the next item. */
+      .md li > p {
+        margin-bottom: 8px;
+      }
+      .md li > :last-child {
+        margin-bottom: 0;
+      }
+      .md strong {
+        font-weight: 620;
+      }
+      .md a {
+        color: var(--accent);
+      }
+      .md hr {
+        border: 0;
+        border-top: 1px solid var(--line);
+        margin: 20px 0;
+      }
+      .md blockquote {
+        margin: 0 0 11px;
+        padding: 2px 0 2px 13px;
+        border-left: 2px solid var(--line);
+        color: var(--dim);
+      }
+      .md code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 1px 4px;
+      }
+      .md pre {
+        margin: 0 0 13px;
+        padding: 11px 13px;
+        overflow-x: auto;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        line-height: 1.5;
+      }
+      /* A code block's own <code> child would otherwise get the inline chip. */
+      .md pre code {
+        background: none;
+        border: 0;
+        padding: 0;
+        font-size: inherit;
+      }
+      /* Frontmatter is the file's own bookkeeping — present, and visibly not prose. */
+      .md pre.front {
+        color: var(--dim);
+        font-size: 10.5px;
+        margin-bottom: 18px;
+      }
+      .sheet .close {
+        position: sticky;
+        top: 0;
+        float: right;
+        margin: 14px 14px 0 0;
+        font: inherit;
+        font-size: 18px;
+        line-height: 1;
+        color: var(--dim);
+        background: none;
+        border: 0;
+        cursor: pointer;
+        padding: 4px 6px;
+        border-radius: 8px;
+      }
+      /* The diff header carries its own close button, right in the row next to
+     undo rather than floating outside it — the generic one would either sit
+     stranded above a flush header or get painted over by it. */
+      .sheet:has(#sheetBody.flush) .close {
+        display: none;
+      }
+      /* The sheet itself carries no padding any more — a diff's own header needs
+     to run flush to every edge to stay opaque over content scrolling under it,
+     which a shared ambient inset would fight. Ordinary sheets (a bead, a
+     harness node) get their padding here instead; the diff sheet skips it via
+     `.flush` and paddings its own pieces individually. */
+      #sheetBody {
+        padding: 20px 22px 26px;
+      }
+      #sheetBody.flush {
+        padding: 0;
+      }
+      .sheet .close:hover {
+        color: var(--ink);
+        background: var(--bg);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="titlemenu" id="titlemenu">
+        <button class="titletrigger" id="metaToggle" aria-expanded="false" aria-controls="metaTip">
+          <h1>harness-starter</h1>
+          <span class="chev">›</span>
+        </button>
+        <span
+          class="tip"
+          id="metaTip"
+          role="region"
+          aria-label="Context budget, ledger health, and capabilities"
+        ></span>
+      </span>
+      <span class="meta-line">
+        <span class="sub" id="branchline">—</span>
+        <span class="dot">·</span>
+        <span class="gate hoverable" id="gate" tabindex="0" role="note" aria-label="Gate detail">
+          <span id="gateLabel">—</span>
+          <span class="tip" id="verifyTip"></span>
+        </span>
+        <span class="dot">·</span>
+        <span class="pulse" id="pulse" tabindex="0" role="note" aria-label="Connection">
+          <span id="pulseLabel">connecting</span>
+          <span class="tip" id="pulseTip"></span>
+        </span>
+      </span>
+      <div class="runs" id="runs"></div>
+    </header>
+
+    <details class="panel backlog" id="backlog" hidden>
+      <summary>
+        <span class="chev">›</span>
+        <h2>backlog</h2>
+        <span class="n" id="backlogCount"></span>
+      </summary>
+      <div class="strip" id="backlogStrip"></div>
+    </details>
+
+    <div class="board" id="board"></div>
+
+    <!-- Static overlays for the work-tree row actions. A single instance of each,
+         repositioned over whichever row was pressed — the rows themselves are
+         thrown away and rebuilt on every board repaint, and anything stateful
+         (typed commit text, an open confirm) living inside one would vanish or
+         reset out from under the reader mid-use. -->
+    <div class="popconfirm" id="revertConfirm" hidden role="dialog" aria-label="Confirm revert">
+      <p>revert changes to <b id="revertConfirmName"></b>?</p>
+      <div class="actions">
+        <button class="mini" id="revertCancel" type="button">cancel</button>
+        <button class="mini danger" id="revertConfirmBtn" type="button">revert</button>
+      </div>
+    </div>
+
+    <div class="popmenu" id="fileMenu" hidden role="menu" aria-label="File actions">
+      <button role="menuitem" id="fileMenuReveal" type="button">show in Finder</button>
+      <button role="menuitem" id="fileMenuVscode" type="button">open in VS Code</button>
+    </div>
+
+    <div class="popover commit-pop" id="commitPop" hidden role="dialog" aria-label="Compose commit">
+      <textarea id="commitMsg" rows="3" placeholder="commit message…"></textarea>
+      <div class="commit-actions">
+        <label class="commit-amend"><input type="checkbox" id="commitAmend" />amend</label>
+        <button class="mini" id="commitSubmit" type="button">commit</button>
+      </div>
+      <div class="commit-error" id="commitError" hidden></div>
+    </div>
+
+    <details class="panel harness" id="harness">
+      <summary>
+        <span class="chev">›</span>
+        <h2>the harness</h2>
+        <span class="n" id="harnessCount"></span>
+      </summary>
+      <div class="flow" id="harnessFlow"></div>
+    </details>
+
+    <div class="scrim" id="scrim"></div>
+    <aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <button class="close" id="sheetClose" aria-label="Close detail">✕</button>
+      <div id="sheetBody"></div>
+    </aside>
+
+    <script src="vendor/marked.umd.js"></script>
+    <script src="vendor/diff2html.min.js"></script>
+    <!-- Registers its grammars on load; swift, python and bash are all in here. -->
+    <script src="vendor/highlight.min.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const esc = (s) =>
+        String(s ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c])
+      const row = (label, value, cls = '') =>
+        `<div class="row"><span class="name">${esc(label)}</span><span class="v ${cls}">${esc(value)}</span></div>`
+
+      /* ---- the board -------------------------------------------------------- */
+      /* Bead lanes hold work. Stage lanes hold the state of the machinery the work
+         has to pass through — they report rather than accumulate, which is why they
+         carry one card instead of a stack. */
+      const BEAD_LANES = [
+        ['ready', 'ready'],
+        ['blocked', 'blocked'],
+        ['in_progress', 'in progress'],
+        ['review', 'review'],
+        ['staging', 'staging'],
+      ]
+
+      let boardSignature = ''
+      let backlogSignature = ''
+
+      /* Which lanes the reader has folded away, and how far they've opened the long
+         ones. Both live here rather than in the DOM because the board is rebuilt from
+         scratch whenever the ledger changes, and a rebuild that forgets these would
+         re-open a lane you just closed. */
+      const foldedLanes = new Set()
+      const laneLimits = {}
+      const LANE_PAGE = 8
+
+      let runStates = {}
+      const runState = (task) => (runStates[task] || {}).state || 'idle'
+
+      /* Everything the board and the sheet both need to know about the ledger. */
+      let ledger = {byId: {}, epicName: () => ''}
+
+      /* Staging takes closed beads, but a commit can name one that's still open —
+         a handoff note referencing work in progress is the usual case. Those
+         commits are pending all the same, so the lane names the beads rather than
+         standing there empty above a push button. */
+      function stagingNote(d) {
+        const open = (d.git.unpushed_beads || []).filter((id) => (ledger.byId[id] || {}).status !== 'closed')
+        if (!open.length) return ''
+        return `In-progress beads with commits ready to push: ${open.join(', ')}`
+      }
+
+      function beadCard(i) {
+        const waiting = (i.deps || []).filter((x) => {
+          const dep = ledger.byId[x]
+          return dep && dep.status !== 'closed'
+        })
+        const kids = i.children || []
+        const parent = ledger.epicName(i.parent)
+        return `<button class="card" data-bead="${esc(i.id)}">
+          <span class="chip prio">P${esc(i.priority)}</span>
+          <b>${esc(i.title)}</b>
+          <div class="meta">
+            ${i.type !== 'task' ? `<span class="chip">${esc(i.type)}</span>` : ''}
+            ${parent ? `<span class="chip epic">${esc(parent)}</span>` : ''}
+            ${kids.length ? `<span class="chip">${kids.length} sub-bead${kids.length === 1 ? '' : 's'}</span>` : ''}
+            ${i.commit_count ? `<span>${i.commit_count} commit${i.commit_count === 1 ? '' : 's'}</span>` : ''}
+            ${waiting.length ? `<span class="waits">waits on ${waiting.map(esc).join(', ')}</span>` : ''}
+          </div>
+        </button>`
+      }
+
+      /* The last ledger the board was drawn from, so a press that only changes how
+         much of a lane is showing can repaint without waiting for the next poll. */
+      let lastLedger = null
+      function redrawBoard() {
+        if (lastLedger) drawBoard(lastLedger)
+      }
+
+      function drawBoard(d) {
+        lastLedger = d
+        runStates = d.runs || {}
+        const all = d.ledger.issues
+        ledger.byId = Object.fromEntries(all.map((i) => [i.id, i]))
+        ledger.epicName = (id) => (ledger.byId[id] || {}).title || ''
+        // Review outranks the others: a bead being reviewed is in review, whatever
+        // else is true of it. Staging is a subset of closed, not every bead named in
+        // an unpushed commit — a handoff note that mentions a still-open bead for
+        // context shouldn't drag it out of its real lane.
+        const pushedPending = new Set(d.git.unpushed_beads || [])
+        const lane = (i) =>
+          i.status === 'closed' && pushedPending.has(i.id)
+            ? 'staging'
+            : i.status === 'closed'
+              ? 'done'
+              : i.in_review
+                ? 'review'
+                : i.status === 'in_progress'
+                  ? 'in_progress'
+                  : i.ready
+                    ? 'ready'
+                    : 'blocked'
+
+        // A parent stands for its children on the board — six cards that are one
+        // piece of work read as six pieces of work. The children are in the parent's
+        // sheet, where the relationship is legible. Backlog has its own strip.
+        const cards = all.filter((i) => !ledger.byId[i.parent] && !i.backlog)
+        const beadLanes = BEAD_LANES.map(([key, label]) => {
+          // Staging keeps the recency order it's always had — it reports
+          // which pushes are pending, not what to work on next. Every other
+          // lane is a worklist, so it reads top to bottom by priority.
+          const items = cards
+            .filter((i) => lane(i) === key)
+            .sort((a, b) => (key === 'staging' ? 0 : a.priority - b.priority))
+          const tip = {review: 'reviewTip', staging: 'commitTip'}[key] || ''
+          return {
+            key,
+            label,
+            count: items.length,
+            hover: tip,
+            action: key === 'staging' && (d.git.unpushed || []).length ? 'push' : '',
+            note: key === 'staging' && !items.length ? stagingNote(d) : '',
+            items,
+          }
+        })
+        // The raw working copy sits next to staging — the two lanes together are
+        // the whole story of what a commit right now would take. Spliced in
+        // rather than added to BEAD_LANES: it's not a bead lane, it carries no
+        // `items`/`action` shape the rest of that pipeline understands.
+        beadLanes.splice(beadLanes.findIndex((l) => l.key === 'staging'), 0, {key: 'worktree', worktree: true})
+
+        // The sheet's own lookup table, kept current whether or not the board
+        // below ends up repainting — a diff sheet already open has to see a
+        // staged/unstaged flip even on a poll where no bead moved lanes.
+        worktree.byPath = Object.fromEntries((d.worktree || []).map((e) => [e.path, e]))
+
+        const lanes = [
+          ...beadLanes,
+          {key: 'done', label: 'done', count: d.ledger.counts.closed, items: cards.filter((i) => lane(i) === 'done')},
+          // An empty lane says nothing worth the room it takes. Staging is the
+          // exception: with commits to push it carries the button that pushes them,
+          // and that has to stay reachable whether or not a bead sits under it.
+        ].filter((l) => (l.worktree ? (d.worktree || []).length : l.items.length || l.action))
+
+        // Rebuilt only when something changed: two lanes carry hover popovers, and
+        // replacing one under the pointer would close it mid-read.
+        //
+        // Fingerprinted on the markup rather than on which beads are in which lane —
+        // a bead renamed in place, or one whose blocker just closed, moves no lane and
+        // would otherwise sit there stale until something else forced a repaint. The
+        // markup also carries the fold and the load-more limit, so those need no
+        // separate accounting.
+        const rendered = lanes.map((l) => ({key: l.key, html: l.worktree ? worktreeLane(d) : laneCard(l)}))
+        const signature = JSON.stringify(rendered)
+        if (signature === boardSignature) return
+        boardSignature = signature
+
+        paintBoard(rendered)
+      }
+
+      /* Lanes are swapped in place rather than the board being thrown away, so one
+         arriving or leaving can be animated while the rest hold still. */
+      function paintBoard(rendered) {
+        const board = $('board')
+        const keys = new Set(rendered.map((l) => l.key))
+        const leaving = [...board.children].filter((el) => el.dataset.lane && !keys.has(el.dataset.lane))
+
+        const paint = () => {
+          const had = new Set([...board.children].map((el) => el.dataset.lane))
+          board.innerHTML = rendered.map((l) => l.html).join('') || '<div class="empty">nothing in the ledger</div>'
+          for (const el of board.children) {
+            if (el.dataset.lane && !had.has(el.dataset.lane)) el.classList.add('entering')
+          }
+        }
+
+        // Nothing left: repaint now, and let whatever is new grow in.
+        if (!leaving.length) return paint()
+        leaving.forEach((el) => el.classList.add('leaving'))
+        setTimeout(paint, 220)
+      }
+
+      function laneCard(l) {
+        const limit = laneLimits[l.key] ?? LANE_PAGE
+        const shown = l.items.slice(0, limit)
+        const rest = l.items.length - shown.length
+        return `
+          <details class="panel lane ${l.key}" data-lane="${esc(l.key)}" ${foldedLanes.has(l.key) ? '' : 'open'}>
+            <summary>
+              <span class="chev">›</span>
+              <h2 class="lane-name ${l.hover ? 'hoverable' : ''}"
+                  ${l.hover ? 'tabindex="0" role="note" aria-label="Stage detail"' : ''}>
+                ${esc(l.label)}
+                ${l.hover ? `<span class="tip" id="${l.hover}"></span>` : ''}
+              </h2>
+              ${
+                l.action
+                  ? `<button class="mini ${runState(l.action)}" data-task="${l.action}"
+                  ${runState(l.action) === 'running' ? 'disabled' : ''}>${
+                    runState(l.action) === 'running' ? 'pushing…' : 'push'
+                  }</button>`
+                  : ''
+              }
+              ${l.count !== undefined ? `<span class="n">${l.count}</span>` : ''}
+            </summary>
+            <div class="lane-cards">
+              ${l.note ? `<p class="lane-note">${esc(l.note)}</p>` : ''}
+              ${shown.map(beadCard).join('')}
+              ${
+                rest > 0
+                  ? `<button class="load-more" data-more="${esc(l.key)}">
+                  load ${Math.min(rest, LANE_PAGE)} more</button>`
+                  : ''
+              }
+            </div>
+          </details>`
+      }
+
+      /* ---- backlog ---------------------------------------------------------- */
+      /* Filed, not offered. It sits above the board because it's the shelf the board
+         draws from, and collapsed because nothing here is the next thing to do. */
+      function drawBacklog(d) {
+        const items = d.ledger.issues
+          .filter((i) => i.backlog)
+          // bd returns no meaningful order, so the strip reads down by priority —
+          // otherwise "first" would change between polls.
+          .sort((a, b) => a.priority - b.priority || String(a.created_at).localeCompare(String(b.created_at)))
+        const signature = JSON.stringify(items.map((i) => i.id + i.title + i.priority))
+        if (signature === backlogSignature) return
+        backlogSignature = signature
+
+        $('backlog').hidden = !items.length
+        $('backlogCount').textContent = items.length
+        $('backlogStrip').innerHTML = items.map(beadCard).join('')
+      }
+
+      /* ---- work tree ---------------------------------------------------------- */
+      /* Every path git status has an opinion about — the raw working copy, not the
+         beads it might carry. Staged rows first, then unstaged, alphabetical within
+         each: the same order `git status` reads in, which is the order a commit
+         right now would actually take. */
+      const UNDO_ICON = `<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 8h7a5 5 0 1 1 0 10h-2" stroke="currentColor" stroke-width="1.6"
+          stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M7.5 4.5 4 8l3.5 3.5" stroke="currentColor" stroke-width="1.6"
+          stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>`
+
+      let worktree = {byPath: {}}
+
+      // The directory is context; the filename is the thing being identified —
+      // splitting them lets one read as secondary and the other as primary,
+      // rather than one long string of one weight.
+      function splitPath(path) {
+        const i = path.lastIndexOf('/')
+        return i === -1 ? {dir: '', base: path} : {dir: path.slice(0, i + 1), base: path.slice(i + 1)}
+      }
+
+      /* The work-tree row is two components, not one div shape: the identity
+         (checkbox, status letter, coloured name) and the undo button. The list
+         row and the diff sheet's header both compose them, each into whatever
+         shell actually fits its context, rather than the header borrowing the
+         row's own div and fighting its CSS. `clickable` is the one thing that
+         differs between them — the header's name opens a menu, the row's doesn't. */
+      function wtIdentity(e, {clickable = false} = {}) {
+        const {dir, base} = splitPath(e.path)
+        const label = `<span class="wt-base">${esc(base)}</span><span class="wt-dir">${esc(dir)}</span>`
+        const name = clickable
+          ? `<button class="wt-filename" id="sheetTitle" data-filemenu="${esc(e.path)}">${label}</button>`
+          : `<span class="wt-name">${label}</span>`
+        const cls = esc((e.untracked ? 'n' : e.status).toLowerCase())
+        return `<input class="wt-checkbox" type="checkbox" data-stage="${esc(e.path)}"
+              aria-label="Stage ${esc(e.path)}" ${e.staged ? 'checked' : ''} />
+            <span class="wt-status wt-${cls}">${esc(e.untracked ? 'N' : e.status)}</span>
+            ${name}`
+      }
+
+      function wtRevertButton(e) {
+        return `<button class="wt-revert" data-revert="${esc(e.path)}" aria-label="Revert ${esc(e.path)}"
+            title="Revert">${UNDO_ICON}</button>`
+      }
+
+      function wtRow(e) {
+        return `<div class="wt-row" data-diff="${esc(e.path)}" tabindex="0" role="button"
+              aria-label="View diff for ${esc(e.path)}">
+          ${wtIdentity(e)}
+          ${wtRevertButton(e)}
+        </div>`
+      }
+
+      /* Same lane shell as a bead lane (panel/details/summary/lane-cards), so it
+         gets the board's spacing, fold state, and enter/leave animation for free
+         — it's rendered by `drawBoard` alongside the bead lanes rather than
+         standing outside the board as its own panel. Unlike a bead lane, it
+         never paginates behind `laneCard`'s load-more: the working tree is
+         everything a commit right now would take, and hiding some of it behind
+         a click is the one place that's actively the wrong default. */
+      function worktreeLane(d) {
+        const items = d.worktree || []
+        return `
+          <details class="panel lane worktree" data-lane="worktree" ${foldedLanes.has('worktree') ? '' : 'open'}>
+            <summary>
+              <span class="chev">›</span>
+              <h2>work tree</h2>
+              <button class="mini" type="button" data-commit-toggle
+                  aria-expanded="${commitComposeOpen}" aria-controls="commitPop">commit</button>
+              <span class="n">${items.length}</span>
+            </summary>
+            <div class="lane-cards">${items.map(wtRow).join('')}</div>
+          </details>`
+      }
+
+      /* ---- markdown ---------------------------------------------------------- */
+      /* marked, vendored beside this page — no CDN, no build step, no node_modules.
+         A hand-rolled parser handled the simple cases and then met a numbered list
+         whose items hold several paragraphs, which is most of these documents: it
+         closed the list at the first blank line and restarted the count, so a
+         seven-step loop rendered as step one, then steps one through six again.
+         Getting that right is block-level nesting, which is the whole job. */
+
+      /* marked passes raw HTML in the source straight through. These files are local
+         and the user's own, but they're also written by an agent summarising things
+         it read elsewhere, so what reaches innerHTML is rebuilt from an allowlist
+         rather than trusted. An unknown element gives up its tags and keeps its text. */
+      const MD_TAGS = new Set([
+        'P',
+        'BR',
+        'HR',
+        'EM',
+        'STRONG',
+        'DEL',
+        'CODE',
+        'PRE',
+        'A',
+        'UL',
+        'OL',
+        'LI',
+        'BLOCKQUOTE',
+        'H1',
+        'H2',
+        'H3',
+        'H4',
+        'H5',
+        'H6',
+        'TABLE',
+        'THEAD',
+        'TBODY',
+        'TR',
+        'TH',
+        'TD',
+      ])
+
+      function sanitize(html) {
+        const doc = new DOMParser().parseFromString(html, 'text/html')
+        for (const el of doc.body.querySelectorAll('*')) {
+          if (!MD_TAGS.has(el.tagName)) {
+            el.replaceWith(...el.childNodes)
+            continue
+          }
+          for (const attr of [...el.attributes]) {
+            // href only, and only somewhere a browser can actually go. A relative
+            // link is a path on this machine: it keeps its text and loses the link
+            // rather than navigating the dashboard to a 404.
+            if (!(attr.name === 'href' && /^https?:\/\//i.test(attr.value))) {
+              el.removeAttribute(attr.name)
+            }
+          }
+          if (el.tagName !== 'A') continue
+          if (el.getAttribute('href')) {
+            el.target = '_blank'
+            el.rel = 'noreferrer'
+          } else el.replaceWith(...el.childNodes)
+        }
+        return doc.body.innerHTML
+      }
+
+      function markdown(src) {
+        // Frontmatter is the file's own bookkeeping rather than prose in it: shown
+        // plainly, and kept away from the parser where its `---` reads as a rule.
+        let head = ''
+        const front = src.match(/^---\n([\s\S]*?)\n---\n/)
+        if (front) {
+          head = `<pre class="front">${esc(front[1])}</pre>`
+          src = src.slice(front[0].length)
+        }
+        // The page owns h1 and h2, so a document's headings start below them instead
+        // of competing with the panel titles. An <h1> written inside a code block
+        // arrives escaped as &lt;h1&gt; and is left alone by this.
+        const shifted = marked
+          .parse(src)
+          .replace(/<(\/?)h([1-4])\b/g, (_, close, n) => `<${close}h${Math.min(+n + 2, 6)}`)
+        return head + sanitize(shifted)
+      }
+
+      /* ---- the harness ------------------------------------------------------- */
+      /* The system that produced everything above it, in the order a session meets
+         it. Collapsed by default: this is the machinery, not the work. */
+      let harnessSignature = ''
+      let harness = {byId: {}}
+
+      function drawHarness(d) {
+        const stages = d.harness || []
+        const signature = JSON.stringify(stages)
+        if (signature === harnessSignature) return
+        harnessSignature = signature
+
+        harness.byId = Object.fromEntries(stages.flatMap((s) => s.nodes.map((n) => [n.id, n])))
+        const nodes = Object.keys(harness.byId).length
+        const mine = Object.values(harness.byId).filter((n) => n.origin === 'claude').length
+        $('harnessCount').textContent = `${nodes} pieces`
+
+        $('harnessFlow').innerHTML =
+          `
+          <div class="legend">
+            <span><i style="background:var(--accent)"></i>${mine} from claude code</span>
+            <span><i style="background:var(--dim)"></i>${nodes - mine} built on top</span>
+          </div>` +
+          stages
+            .map(
+              (s) => `
+          <div class="stage">
+            <div class="stage-head"><b>${esc(s.name)}</b><span>${esc(s.blurb)}</span></div>
+            <div class="nodes">${
+              s.nodes
+                .map(
+                  (n) =>
+                    `<button class="node ${n.origin}" data-node="${esc(n.id)}" title="${esc(n.path)}">
+                 <i></i>${esc(n.name)}<span class="t">${n.tokens}</span>
+               </button>`,
+                )
+                .join('') || '<div class="empty">nothing here</div>'
+            }</div>
+          </div>`,
+            )
+            .join('')
+      }
+
+      /* ---- the detail sheet -------------------------------------------------- */
+      /* One sheet, and a source per kind of thing it can be pointed at. The sheet
+         knows how to open, stay current, and close; each source knows how to find its
+         subject and draw it, and may hydrate it with anything too expensive to poll. */
+      const SHEET = {
+        bead: {find: (id) => ledger.byId[id], draw: beadSheet},
+        node: {find: (id) => harness.byId[id], draw: nodeSheet, hydrate: readFile},
+        diff: {find: (path) => worktree.byPath[path], draw: diffSheet, hydrate: hydrateDiff},
+      }
+      // The one sheet that needs the room: a unified diff read line by line is
+      // fine in a reading column, but side-by-side is the point of vendoring a
+      // diff renderer at all, and that needs width the prose sheet doesn't.
+      const WIDE_SHEET = new Set(['diff'])
+      let subject = null
+
+      function beadSheet(i) {
+        const kids = (i.children || []).map((id) => ledger.byId[id]).filter(Boolean)
+        const commits = i.commits || []
+        const block = (label, text) => (text ? `<section><h4>${esc(label)}</h4><p>${esc(text)}</p></section>` : '')
+
+        return `
+          <h3 class="title" id="sheetTitle">${esc(i.title)}</h3>
+          <div class="meta">
+            <code>${esc(i.id)}</code>
+            <span class="chip">P${i.priority}</span>
+            ${i.type !== 'task' ? `<span class="chip">${esc(i.type)}</span>` : ''}
+            <span class="chip ${i.status === 'closed' ? 'ok' : ''}">${esc(i.status.replace('_', ' '))}</span>
+            ${(i.labels || []).map((l) => `<span class="chip epic">${esc(l)}</span>`).join('')}
+            ${i.owner ? `<code>@${esc(i.owner)}</code>` : ''}
+          </div>
+          ${block('description', i.description)}
+          ${block('design', i.design)}
+          ${block('notes', i.notes)}
+          ${block('why it closed', i.close_reason)}
+          ${
+            kids.length
+              ? `<section><h4>sub-beads</h4><div class="kids">${kids
+                  .map(
+                    (k) =>
+                      `<button class="kid ${k.status === 'closed' ? 'closed' : ''}" data-bead="${esc(k.id)}">
+               <span class="tick">${k.status === 'closed' ? '✓' : '○'}</span>
+               <span>${esc(k.title)}</span>
+             </button>`,
+                  )
+                  .join('')}</div></section>`
+              : ''
+          }
+          ${
+            commits.length
+              ? `<section><h4>waiting to push</h4>${commits
+                  .map(
+                    (c) =>
+                      `<div class="commit-row"><code>${esc(c.sha)}</code>
+               <span>${esc(c.subject)}</span></div>`,
+                  )
+                  .join('')}</section>`
+              : ''
+          }`
+      }
+
+      /* A harness node's file is tens of thousands of characters and nobody reads it
+         until they open it, so it never rides the poll — the sheet asks for one file
+         and keeps it. `{text}` on success, `{error}` when there's nothing serving. */
+      const fileText = {}
+      const reading = new Set()
+
+      async function readFile(id) {
+        if (id in fileText || reading.has(id)) return
+        reading.add(id)
+        try {
+          const r = await fetch('harness/' + encodeURIComponent(id))
+          fileText[id] = r.ok ? {text: (await r.json()).body} : {error: 'The server has no file under that name.'}
+        } catch {
+          fileText[id] = {error: "Nothing is serving this page, so its contents can't be read."}
+        }
+        reading.delete(id)
+        refreshSheet()
+      }
+
+      function nodeSheet(n) {
+        const got = fileText[n.id]
+        return `
+          <h3 class="title" id="sheetTitle">${esc(n.name)}</h3>
+          <div class="meta">
+            <code>${esc(n.path)}</code>
+            <span class="chip">${esc(n.origin === 'claude' ? 'claude code' : n.origin)}</span>
+            <span class="chip epic">${n.tokens} tokens</span>
+          </div>
+          <section><h4>role</h4><p>${esc(n.role)}</p></section>
+          <section><h4>contents</h4>${
+            !got
+              ? `<div class="note">reading…</div>`
+              : got.error
+                ? `<div class="note">${esc(got.error)}</div>`
+                : // Prose gets rendered; a script or a ledger export is code, and code is
+                  // only readable as the characters that were actually written.
+                  /\.md$/i.test(n.path)
+                  ? `<div class="md">${markdown(got.text)}</div>`
+                  : `<pre class="file">${esc(got.text)}</pre>`
+          }</section>`
+      }
+
+      /* A diff never rides the poll either — it's the unified text for one path,
+         fetched fresh each time the sheet opens on it. Keyed rather than a single
+         slot, so toggling a file's checkbox and reopening it doesn't show a stale
+         diff for a second while the fresh one is in flight. */
+      const diffCache = {}
+      const diffReading = new Set()
+
+      async function hydrateDiff(path) {
+        if (diffReading.has(path)) return
+        diffReading.add(path)
+        try {
+          const r = await fetch('diff?path=' + encodeURIComponent(path))
+          diffCache[path] = r.ok ? await r.json() : {error: 'Could not load the diff.'}
+        } catch {
+          diffCache[path] = {error: "Nothing is serving this page, so the diff can't be read."}
+        }
+        diffReading.delete(path)
+        refreshSheet()
+      }
+
+      /* Which grammar a path gets. Only the languages this repo actually holds —
+         an extension that isn't here renders plain, which is the honest outcome
+         for a file highlight.js would guess wrong about anyway. */
+      const DIFF_LANGUAGE = {
+        swift: 'swift',
+        py: 'python',
+        sh: 'bash',
+        bash: 'bash',
+        js: 'javascript',
+        json: 'json',
+        html: 'xml',
+        css: 'css',
+        md: 'markdown',
+        yml: 'yaml',
+        yaml: 'yaml',
+      }
+
+      /* diff2html's core bundle renders the table; the UI bundle that would call
+         highlight.js is a separate script and does no more than this. A line at a
+         time, because that's the cell the side-by-side table lays out — a string
+         or comment spanning lines loses its colour at the break.
+         Text nodes rather than the cell's innerHTML, because a modified line
+         already holds diff2html's word-level <ins>/<del> marking which word
+         changed. Overwriting the cell threw that away and left a renamed variable
+         looking like an untouched line — the one thing the reader opened the diff
+         for. The cost is that a token split across a mark's edge is highlighted
+         as two pieces, which is the same break the line-at-a-time rule already
+         accepts. */
+      function highlightDiff(root, path) {
+        const language = DIFF_LANGUAGE[(path.split('.').pop() || '').toLowerCase()]
+        if (!language || !window.hljs || !hljs.getLanguage(language)) return
+        root.querySelectorAll('.d2h-code-line-ctn').forEach((line) => {
+          const walk = document.createTreeWalker(line, NodeFilter.SHOW_TEXT)
+          const runs = []
+          while (walk.nextNode()) runs.push(walk.currentNode)
+          runs.forEach((run) => {
+            if (!run.nodeValue.trim()) return
+            const holder = document.createElement('span')
+            holder.innerHTML = hljs.highlight(run.nodeValue, {language, ignoreIllegals: true}).value
+            run.replaceWith(holder)
+          })
+        })
+      }
+
+      function renderDiff(text, path) {
+        try {
+          const holder = document.createElement('div')
+          holder.innerHTML = Diff2Html.html(text, {
+            drawFileList: false,
+            matching: 'lines',
+            outputFormat: 'side-by-side',
+            // Follows the same prefers-color-scheme query the rest of the page
+            // does, so a diff doesn't sit there in light mode inside a dark sheet.
+            colorScheme: 'auto',
+          })
+          highlightDiff(holder, path)
+          return holder.innerHTML
+        } catch {
+          return `<pre class="file">${esc(text)}</pre>`
+        }
+      }
+
+      function diffSheet(e) {
+        const got = diffCache[e.path]
+        return `
+          <div class="diff-header">
+            ${wtIdentity(e, {clickable: true})}
+            ${wtRevertButton(e)}
+            <button class="diff-close" data-close-sheet aria-label="Close" title="Close">✕</button>
+          </div>
+          <div class="diff-body">${
+            !got
+              ? `<div class="note">reading…</div>`
+              : got.error
+                ? `<div class="note">${esc(got.error)}</div>`
+                : !got.diff || !got.diff.trim()
+                  ? `<div class="note">no changes.</div>`
+                  : renderDiff(got.diff, e.path)
+          }</div>`
+      }
+
+      /* What the sheet is currently showing. Assigning innerHTML resets the scroll
+         position of everything inside it, even when the markup is identical — and a
+         file long enough to scroll is exactly what this sheet holds — so the poll has
+         to be able to tell "nothing changed" from "changed to the same thing". */
+      let sheetHtml = ''
+
+      function drawSheet(kind, id) {
+        const found = SHEET[kind].find(id)
+        if (!found) return
+        const html = SHEET[kind].draw(found)
+        if (html === sheetHtml) return
+        sheetHtml = html
+        $('sheetBody').innerHTML = html
+      }
+
+      function openSheet(kind, id) {
+        if (!SHEET[kind].find(id)) return
+        subject = {kind, id}
+        sheetHtml = ''
+        // A diff is refetched on every open — the last one is whatever the file
+        // looked like the last time this path was checked, which by the time a
+        // row is clicked again may not be true any more.
+        if (kind === 'diff') delete diffCache[id]
+        drawSheet(kind, id)
+        $('sheet').classList.toggle('wide', WIDE_SHEET.has(kind))
+        $('sheetBody').classList.toggle('flush', kind === 'diff')
+        $('sheet').classList.add('open')
+        $('scrim').classList.add('open')
+        // The generic close button is hidden for a diff sheet in favour of the
+        // one in its own header — that's the one to hand focus to.
+        ;(kind === 'diff' ? document.querySelector('.diff-close') : $('sheetClose'))?.focus()
+        SHEET[kind].hydrate?.(id)
+      }
+
+      function closeSheet() {
+        subject = null
+        sheetHtml = ''
+        $('sheet').classList.remove('open')
+        $('scrim').classList.remove('open')
+      }
+
+      /* Keep an open sheet honest: the board behind it is still polling. */
+      function refreshSheet() {
+        if (subject) drawSheet(subject.kind, subject.id)
+      }
+
+      /* Wired above the polling section on purpose: the frozen artifact keeps
+         everything up to that line, so its cards stay openable. Nothing here needs
+         the server — the sheet reads the state the page already has. */
+      /* The header panel opens on a press and stays open until dismissed — clicking
+         the title, anywhere outside it, or Escape. */
+      document.addEventListener('click', (e) => {
+        const menu = $('titlemenu')
+        if (e.target.closest('#metaToggle')) {
+          const open = menu.classList.toggle('open')
+          $('metaToggle').setAttribute('aria-expanded', open)
+          if (open) keepInView(menu)
+          return
+        }
+        // A click inside the panel is reading it, not dismissing it.
+        if (menu.classList.contains('open') && !e.target.closest('#metaTip')) closeTitleMenu()
+      })
+
+      function closeTitleMenu() {
+        $('titlemenu').classList.remove('open')
+        $('metaToggle').setAttribute('aria-expanded', 'false')
+      }
+
+      document.addEventListener('click', (e) => {
+        const more = e.target.closest('[data-more]')
+        if (more) {
+          const key = more.dataset.more
+          laneLimits[key] = (laneLimits[key] ?? LANE_PAGE) + LANE_PAGE
+          // Redrawn from the state the page already has rather than waiting for the
+          // next poll, which is up to a second away and would feel like a dead press.
+          return redrawBoard()
+        }
+        // A sub-bead in the sheet swaps the sheet's subject rather than stacking
+        // another one on top — there's only ever one thing being looked at.
+        const bead = e.target.closest('[data-bead]')
+        if (bead) return openSheet('bead', bead.dataset.bead)
+        const node = e.target.closest('[data-node]')
+        if (node) return openSheet('node', node.dataset.node)
+        // The revert button, the checkbox, and the file-menu button (in the diff
+        // sheet's own header) all live inside a row that opens a diff on any
+        // other click — each has to claim its own press before that row-level
+        // handler ever sees it.
+        const revertBtn = e.target.closest('[data-revert]')
+        if (revertBtn) return openRevertConfirm(revertBtn)
+        if (e.target.closest('.wt-checkbox')) return
+        const fileMenuBtn = e.target.closest('[data-filemenu]')
+        if (fileMenuBtn) return openFileMenu(fileMenuBtn)
+        // Lives inside <summary> like the push button before it, so a press has
+        // to stop the native fold the same way that one does.
+        const commitToggle = e.target.closest('[data-commit-toggle]')
+        if (commitToggle) {
+          e.preventDefault()
+          return $('commitPop').hidden ? openCommitCompose(commitToggle) : closeCommitCompose()
+        }
+        const wtRow = e.target.closest('[data-diff]')
+        if (wtRow) return openSheet('diff', wtRow.dataset.diff)
+        if (e.target.closest('#scrim, #sheetClose, [data-close-sheet]')) closeSheet()
+      })
+
+      /* Row keyboard support piggybacks on click's own dispatch: it needs the same
+         guards against the checkbox and the revert button that click already has,
+         so this doesn't reimplement them — it just makes Enter/Space open one. */
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        const row = e.target.closest?.('[data-diff]')
+        if (!row || row !== e.target) return
+        e.preventDefault()
+        openSheet('diff', row.dataset.diff)
+      })
+
+      /* `toggle` doesn't bubble, so it's caught on the way down. Folding is the
+         reader's, not the ledger's: it survives every repaint until they say
+         otherwise. */
+      document.addEventListener(
+        'toggle',
+        (e) => {
+          const lane = e.target.closest?.('[data-lane]')
+          if (!lane) return
+          lane.open ? foldedLanes.delete(lane.dataset.lane) : foldedLanes.add(lane.dataset.lane)
+        },
+        true,
+      )
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return
+        closeTitleMenu()
+        closeRevertConfirm()
+        closeFileMenu()
+        closeCommitCompose()
+        if (subject) closeSheet()
+      })
+
+      /* ---- work tree interactions --------------------------------------------- */
+      /* A checkbox's own change fires after click already ran and let it through
+         (the click handler above returns early on `.wt-checkbox` rather than
+         opening a diff), so staging is wired here instead of there. */
+      document.addEventListener('change', (e) => {
+        if (!e.target.matches('.wt-checkbox')) return
+        const path = e.target.dataset.stage
+        const staged = e.target.checked
+        e.target.disabled = true
+        fetch('worktree/' + (staged ? 'stage' : 'unstage'), {method: 'POST', body: JSON.stringify({path})})
+          .then(() => {
+            // Whichever side of the index the file is on now, the diff for it just
+            // changed — a stale cached one would show the wrong half of the edit.
+            delete diffCache[path]
+            if (subject && subject.kind === 'diff' && subject.id === path) hydrateDiff(path)
+            return tick()
+          })
+          .finally(() => (e.target.disabled = false))
+      })
+
+      /* The revert and file-action popovers are single fixed elements repositioned
+         over whichever row was pressed, rather than one per row — rows are thrown
+         away and rebuilt on every poll, and a popover that lived inside one would
+         vanish out from under a reader mid-decision. */
+      let revertTarget = null
+
+      // Anchored under the control that opened it, but nudged back onto the
+      // screen when that control sits near an edge — the revert icon and the
+      // commit button both live at the far right of their rows, and either can
+      // sit close enough to the bottom that a popover opening below it (the
+      // commit compose is tall enough, with its textarea, to do this often)
+      // would render partly off-screen with nothing to scroll it into view.
+      function placePopover(pop, box, width) {
+        pop.style.left = `${Math.round(Math.min(box.left, innerWidth - width - 12))}px`
+        const height = pop.getBoundingClientRect().height
+        const fitsBelow = box.bottom + 6 + height <= innerHeight - 12
+        const top = fitsBelow ? box.bottom + 6 : Math.max(12, box.top - height - 6)
+        pop.style.top = `${Math.round(top)}px`
+      }
+
+      function openRevertConfirm(btn) {
+        closeFileMenu()
+        revertTarget = btn.dataset.revert
+        $('revertConfirmName').textContent = revertTarget
+        const pop = $('revertConfirm')
+        pop.hidden = false
+        placePopover(pop, btn.getBoundingClientRect(), 220)
+      }
+
+      function closeRevertConfirm() {
+        $('revertConfirm').hidden = true
+        revertTarget = null
+      }
+
+      $('revertCancel').addEventListener('click', closeRevertConfirm)
+      $('revertConfirmBtn').addEventListener('click', () => {
+        if (!revertTarget) return
+        const path = revertTarget
+        closeRevertConfirm()
+        fetch('worktree/revert', {method: 'POST', body: JSON.stringify({path})}).then(() => {
+          delete diffCache[path]
+          // The row it belonged to is gone — reverting is what a diff sheet's own
+          // checkbox can trigger, and the sheet has nothing left to show.
+          if (subject && subject.kind === 'diff' && subject.id === path) closeSheet()
+          return tick()
+        })
+      })
+
+      let fileMenuTarget = null
+
+      function openFileMenu(btn) {
+        closeRevertConfirm()
+        fileMenuTarget = btn.dataset.filemenu
+        const pop = $('fileMenu')
+        pop.hidden = false
+        placePopover(pop, btn.getBoundingClientRect(), 200)
+      }
+
+      function closeFileMenu() {
+        $('fileMenu').hidden = true
+        fileMenuTarget = null
+      }
+
+      $('fileMenuReveal').addEventListener('click', () => {
+        if (!fileMenuTarget) return
+        fetch('worktree/reveal', {method: 'POST', body: JSON.stringify({path: fileMenuTarget})})
+        closeFileMenu()
+      })
+      $('fileMenuVscode').addEventListener('click', () => {
+        if (!fileMenuTarget) return
+        fetch('worktree/vscode', {method: 'POST', body: JSON.stringify({path: fileMenuTarget})})
+        closeFileMenu()
+      })
+
+      /* ---- commit compose ------------------------------------------------------ */
+      function autoGrowTextarea(el) {
+        el.style.height = 'auto'
+        el.style.height = `${el.scrollHeight}px`
+      }
+      $('commitMsg').addEventListener('input', (e) => autoGrowTextarea(e.target))
+
+      // Read by `worktreeLane` so the toggle button still renders pressed after
+      // a board repaint regenerates it from scratch — the DOM attribute set
+      // below is only the instant feedback, not the source of truth.
+      let commitComposeOpen = false
+
+      function openCommitCompose(btn) {
+        closeRevertConfirm()
+        closeFileMenu()
+        commitComposeOpen = true
+        const pop = $('commitPop')
+        pop.hidden = false
+        placePopover(pop, btn.getBoundingClientRect(), 450)
+        btn.setAttribute('aria-expanded', 'true')
+        const ta = $('commitMsg')
+        requestAnimationFrame(() => {
+          ta.focus()
+          autoGrowTextarea(ta)
+        })
+      }
+
+      function closeCommitCompose() {
+        commitComposeOpen = false
+        $('commitPop').hidden = true
+      }
+
+      // A click anywhere else is a dismissal — these three are the only popovers
+      // that open on a press rather than a hover, so they're the only ones that
+      // need to catch a press that lands somewhere else.
+      document.addEventListener('click', (e) => {
+        if (!$('revertConfirm').hidden && !e.target.closest('#revertConfirm, [data-revert]')) closeRevertConfirm()
+        if (!$('fileMenu').hidden && !e.target.closest('#fileMenu, [data-filemenu]')) closeFileMenu()
+        if (!$('commitPop').hidden && !e.target.closest('#commitPop, [data-commit-toggle]')) closeCommitCompose()
+      })
+
+      $('commitSubmit').addEventListener('click', async () => {
+        const message = $('commitMsg').value
+        const amend = $('commitAmend').checked
+        const btn = $('commitSubmit')
+        const err = $('commitError')
+        btn.disabled = true
+        err.hidden = true
+        try {
+          const r = await (
+            await fetch('worktree/commit', {method: 'POST', body: JSON.stringify({message, amend})})
+          ).json()
+          if (r.ok) {
+            $('commitMsg').value = ''
+            $('commitAmend').checked = false
+            autoGrowTextarea($('commitMsg'))
+            closeCommitCompose()
+            tick()
+          } else {
+            err.textContent = r.error || 'commit failed'
+            err.hidden = false
+          }
+        } catch {
+          err.textContent = "nothing is serving this page, so the commit didn't go through"
+          err.hidden = false
+        } finally {
+          btn.disabled = false
+        }
+      })
+
+      /* ---- run controls ----------------------------------------------------- */
+      /* The header carries the ones that put the app in front of you. Running the gate
+         belongs with the word that reports it, so it lives in the gate's own pane.
+
+         FILL THIS IN: add [key, label] pairs here for whatever launches your app,
+         with a matching entry in TASKS in scripts/dashboard.py — that table is the
+         only place a command can come from. Empty until you do, which is correct:
+         a button for a script that doesn't exist is worse than no button. */
+      const TASKS = []
+      const RUN_LABEL = {verify: 'verify'}
+      let runsSignature = ''
+      let lastRunNote = ''
+
+      function drawRuns(d) {
+        const runs = d.runs || {}
+        const signature = TASKS.map(([k]) => (runs[k] || {}).state).join('|')
+
+        if (signature !== runsSignature) {
+          runsSignature = signature
+          $('runs').innerHTML = TASKS.map(([key, label]) => {
+            const r = runs[key] || {state: 'idle'}
+            const busy = r.state === 'running'
+            return `<button data-task="${key}" class="${r.state}" ${busy ? 'disabled' : ''}>
+              <i></i>${esc(busy ? label + '…' : label)}</button>`
+          }).join('')
+        }
+
+        const last = Object.entries(RUN_LABEL)
+          .map(([k, label]) => [label, runs[k]])
+          .filter(([, r]) => r && r.state !== 'idle' && r.output)
+          .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0]
+        lastRunNote = last ? `${last[0]}: ${last[1].output} · ${last[1].ago}` : ''
+      }
+
+      /* ---- the popovers ----------------------------------------------------- */
+      /* The gate is one word in the header. Green means what's on disk has been
+         proven; anything else is the number of commits nobody has checked. */
+      function drawGate(d) {
+        const v = d.verify
+        $('gateLabel').textContent =
+          v.status === 'passed' ? 'verified' : v.status === 'failed' ? 'failing' : 'unverified'
+        $('gate').className = 'gate hoverable ' + (v.status === 'passed' ? 'good' : v.status === 'failed' ? 'bad' : '')
+      }
+
+      let verifySignature = ''
+
+      function drawVerify(d) {
+        const tip = $('verifyTip')
+        if (!tip) return
+        const v = d.verify
+        const cls = v.status === 'passed' ? 'ok' : v.status === 'failed' ? 'bad' : ''
+        // The pane holds a button now, so it can't be rebuilt on every poll — the
+        // press would land on an element that had already been replaced under it.
+        const signature = JSON.stringify([v, lastRunNote, runState('verify'), d.git.branch])
+        if (signature === verifySignature) return
+        verifySignature = signature
+        tip.innerHTML =
+          `<h3>the gate<button class="mini ${runState('verify')}" data-task="verify"
+            ${runState('verify') === 'running' ? 'disabled' : ''}>${
+              runState('verify') === 'running' ? 'running…' : 'run'
+            }</button></h3>` +
+          (lastRunNote ? `<div class="run-note">${esc(lastRunNote)}</div>` : '') +
+          row('last run', v.status + (v.when ? ' · ' + v.when : ''), cls) +
+          v.steps.map((s) => row(s.name, s.ok ? 'ok' : 'failed', s.ok ? 'ok' : 'bad')).join('') +
+          (v.tests ? row('suite', v.tests) : '') +
+          (v.took ? row('took', v.took) : '') +
+          row('branch', d.git.branch) +
+          ((v.unverified || []).length
+            ? `<h3 style="margin-top:12px">landed since</h3>` +
+              v.unverified
+                .map(
+                  (c) =>
+                    `<div class="note" style="margin-top:4px"><code>${esc(c.sha)}</code>
+                     ${esc(c.subject)}</div>`,
+                )
+                .join('') +
+              `<div class="note">Counted as commits, not beads — a commit that names
+                   no bead has no card in the commit lane.</div>`
+            : `<div class="note">scripts/verify.sh — build, tests, and a smoke check
+                 behind one exit code.</div>`)
+      }
+
+      function drawReview(d) {
+        const tip = $('reviewTip')
+        if (!tip) return
+        tip.innerHTML =
+          `<h3>reviewers</h3>` +
+          d.agents.map((a) => row(a.name, a.model, 'warn')).join('') +
+          `<div class="note">scripts/review.sh bundles the diff once; both agents read
+             that packet rather than the repo. Move a bead here with
+             <code>bd label add &lt;id&gt; review</code>.</div>`
+      }
+
+      function drawCommit(d) {
+        const tip = $('commitTip')
+        if (!tip) return
+        const g = d.git
+        tip.innerHTML =
+          `<h3>committing</h3>` +
+          row('uncommitted files', g.dirty, g.dirty ? 'warn' : 'ok') +
+          row('unpushed commits', (g.unpushed || []).length, (g.unpushed || []).length ? 'warn' : 'ok') +
+          row('tracking', g.upstream || 'no upstream', g.upstream ? '' : 'warn') +
+          row('last commit', `${g.last.sha} · ${g.last.when}`) +
+          `<div class="note">A bead lands here when an unpushed commit names it —
+             finished on this machine, nowhere else.</div>`
+      }
+
+      function drawMeta(d) {
+        const b = d.budget
+        const onDemand = b.on_demand.reduce((n, x) => n + x.tokens, 0)
+        const total = b.always_total + onDemand
+        const pct = (n) => ((100 * n) / total).toFixed(1) + '%'
+
+        $('metaTip').innerHTML = `
+          <div class="group">
+            <h3>context budget</h3>
+            <div class="bar">
+              <span style="width:${pct(b.always_total)};background:var(--warn)"></span>
+              <span style="width:${pct(onDemand)};background:var(--accent);opacity:.45"></span>
+            </div>
+            <div class="legend">
+              <span><i style="background:var(--warn)"></i>${b.always_total} every session</span>
+              <span><i style="background:var(--accent);opacity:.45"></i>${onDemand} on demand</span>
+            </div>
+            ${b.always.map((a) => row(a.name, a.tokens)).join('')}
+            <div class="note save">The session brief costs <b>${b.brief_tokens} tokens</b> where
+              <code>bd prime</code> cost ~${b.prime_tokens} — <b>${b.prime_tokens - b.brief_tokens}
+              saved</b> on every session, not just the first.</div>
+          </div>
+          <div class="group">
+            <h3>ledger health</h3>
+            ${row('ready to claim', d.ledger.counts.ready, d.ledger.counts.ready ? '' : 'warn')}
+            ${row('stale (14d+)', d.ledger.stale ?? 0, d.ledger.stale ? 'warn' : '')}
+            ${row('commits today', d.git.commits_today)}
+            <div class="note">Work that stops moving is the failure a solo loop can't
+              see. Nothing ready means the next session has nothing to pick up.</div>
+          </div>
+          <div class="group">
+            <h3>capabilities</h3>
+            ${d.skills.map((s) => row(s.name, `${s.idle} idle · ${s.loaded} loaded`)).join('')}
+            ${d.agents.map((a) => row(a.name, a.model, 'warn')).join('')}
+            <div class="note">Skills cost their description until invoked. Reviewers run on
+              cheap models, off the diff.</div>
+          </div>`
+      }
+
+      /* ---- polling ---------------------------------------------------------- */
+      async function tick() {
+        try {
+          const d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
+          drawRuns(d)
+          drawBoard(d)
+          drawBacklog(d)
+          drawHarness(d)
+          refreshSheet()
+          drawVerify(d)
+          drawReview(d)
+          drawCommit(d)
+          drawMeta(d)
+          $('branchline').textContent = `${d.git.branch} · ${d.ledger.counts.open} open`
+          drawGate(d)
+          $('pulse').className = 'pulse'
+          $('pulseLabel').textContent = 'live'
+          $('pulseTip').innerHTML =
+            `<h3>live</h3>` +
+            row('last read', d.generated) +
+            row('polling', 'every 2.5s') +
+            `<div class="note">Read straight from bd and git by
+               <code>scripts/dashboard.py</code>, cached a few seconds so the page
+               can't outrun it.</div>`
+        } catch (e) {
+          $('pulse').className = 'pulse stale'
+          $('pulseLabel').textContent = 'offline'
+          $('pulseTip').innerHTML = `<h3>offline</h3>
+            <div class="note">Nothing is serving this page. Start it with
+            <code>scripts/dashboard.py</code>.</div>`
+        }
+      }
+      /* Pane placement is measured, not guessed. Which lane sits nearest an edge
+         changes with the wrap, so a nth-child rule was always going to be wrong on
+         some layout; this nudges whichever pane is about to open back inside the
+         viewport. */
+      function keepInView(anchor) {
+        const tip = anchor.querySelector(':scope > .tip')
+        if (!tip) return
+        tip.style.marginLeft = '0px'
+        const box = tip.getBoundingClientRect()
+        const edge = 12
+        let dx = 0
+        if (box.right > innerWidth - edge) dx = innerWidth - edge - box.right
+        if (box.left + dx < edge) dx = edge - box.left
+        tip.style.marginLeft = `${Math.round(dx)}px`
+      }
+
+      for (const event of ['pointerenter', 'focusin']) {
+        document.addEventListener(
+          event,
+          (e) => {
+            const anchor = e.target.closest?.('.gate, .pulse, .lane-name.hoverable')
+            if (anchor) keepInView(anchor)
+          },
+          true,
+        )
+      }
+
+      /* Below the polling line, so the frozen artifact drops it: without a server
+         these would be dead controls, and one that looks live and isn't is worse
+         than none. */
+      document.addEventListener('click', (e) => {
+        const button = e.target.closest('[data-task]')
+        if (!button) return
+        // `push` sits in a lane's summary, where a plain click would also fold the
+        // lane out from under the reader.
+        e.preventDefault()
+        button.disabled = true
+        button.classList.add('running')
+        fetch('run/' + button.dataset.task, {method: 'POST'}).then(tick)
+      })
+
+      tick()
+      setInterval(tick, 2500)
+    </script>
+  </body>
+</html>

@@ -1,77 +1,69 @@
-# Project Instructions for AI Agents
+# CLAUDE.md
 
-This file provides instructions and context for AI coding agents working on this project.
+harness-starter is the agentic development harness itself, packaged so it can be
+installed into any project. `template/` is the product; the root is a working
+install of it, put there by `harness add`.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
-## Beads Issue Tracker
+**Every real change goes in `template/`.** The root `scripts/` are substituted
+copies made at install time — editing one does not change the other, and the
+running harness here is the copy. See "Working on the starter" in README.md.
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+## Taste
 
-### Quick Reference
+Shell and Python read by someone at 2am when something has broken: the usage
+comment at the top and the error message on the way out are part of the
+interface, not decoration. Small single-purpose functions. Comments explain a
+*why* — a workaround, a platform gotcha — never what the line below already says.
+Names read as documentation.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+A starter is judged on what it does when its assumptions are wrong: a bad path,
+a half-initialised ledger, a name with no usable characters, a symlink pointing
+somewhere surprising. Failing loudly beats failing silently every time, and
+silent success on a broken install is the worst outcome available.
 
-### Rules
+## Review
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+Every change worth committing gets the review pass: build the packet with
+`scripts/review.sh`, then run `reviewer-taste` and `reviewer-correctness`
+against it, plus `reviewer-design` whenever anything on screen moved. Reach for
+the `agentic-review` skill for the details.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+**This is a standing request for those subagents, in every session — treat them
+as explicitly asked for and spawn them without checking first.** It is not a
+judgment call and not an option to offer; a diff reviewed in the context that
+wrote it mostly gets agreement. Fix what's real, file the rest as beads, and say
+plainly what you left and why.
 
-## Agent Context Profiles
+## Commits
 
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
+Default to lowercase, terse, plain English — no conventional-commit prefixes
+unless the project already enforces them. Commit often, after a complete feature
+or capability, once the work reaches a point where the app builds and runs
+without errors. Don't be afraid to commit after completing sub-capabilities or
+infrastructure too, even if they have no user-facing piece.
 
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
+## Work tracking
 
-## Session Completion
+Work lives in **beads** (`bd`), a dependency-aware issue graph in `.beads/`. It is
+the ledger: every session finds work there and leaves discoveries there, so the
+next session starts where this one stopped. Don't track project work in
+TodoWrite, TaskCreate, or markdown TODOs.
 
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
-
-
-## Build & Test
-
-_Add your build and test commands here_
+**File the bead as planning begins, not after.** The moment a task is real —
+the user asked for something not already in the ledger, or you're about to plan
+a multi-step change — `bd q "<title>"` it before the first Edit or Write, not
+when the commit-msg hook demands one. Then move its status honestly as the work
+actually moves: `--claim` (→ in_progress) before implementing, the `review`
+label on while a review pass is outstanding and off once it's dealt with,
+`bd close --reason "<what happened>"` at commit. A bead that's still `open`
+while you're mid-implementation, or still `in_progress` after you've closed the
+matching commit, is a ledger that's lying.
 
 ```bash
-# Example:
-# npm install
-# npm test
+bd ready            # claimable work, nothing blocking it
+bd q "<title>"      # capture a discovery in one line, get an id back
+bd update <id> --claim | bd close <id>
 ```
 
-## Architecture Overview
-
-_Add a brief overview of your project architecture_
-
-## Conventions & Patterns
-
-_Add your project-specific conventions here_
+Reach for the `workflow` skill for how work moves through the system, `beads` for
+the full `bd` surface. Both load on demand — don't paste their contents here.

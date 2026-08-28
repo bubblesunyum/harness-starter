@@ -7,7 +7,7 @@
 # Put it on PATH with a symlink — it resolves back to its own checkout, so it
 # always runs whatever the starter says today:
 #
-#   ln -sf "$PWD/harness" ~/.local/bin/harness
+#   ln -sf "$PWD/bin/harness" ~/.local/bin/harness
 set -euo pipefail
 
 # Resolved through symlinks, because the usual way to reach this is a link on
@@ -27,7 +27,7 @@ if [ -L "$self" ]; then
   echo "✗ symlink loop resolving $0 — check what ${BASH_SOURCE[0]} points at." >&2
   exit 1
 fi
-ROOT="$(cd "$(dirname "$self")" && pwd -P)"
+ROOT="$(cd "$(dirname "$self")/.." && pwd -P)"
 
 me="$(basename "$0")"
 

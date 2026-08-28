@@ -55,7 +55,9 @@ target="$(cd "$target" && pwd -P)"
   echo "  The commit-msg hook and the review packet both need one — run 'git init' first." >&2
   exit 1
 }
-[ "$target" = "$HERE" ] && { echo "✗ that's the starter itself — pass a project path, or run this from inside one." >&2; exit 1; }
+# Installing into the starter itself is allowed on purpose — that is how the
+# harness gets worked on with the harness. It is not free of a trap; see
+# "Working on the starter" in the README.
 
 name="$(basename "$target")"
 

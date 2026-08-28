@@ -19,7 +19,7 @@ mtime() { stat -f '%m' "$@" 2>/dev/null || stat -c '%Y' "$@"; }
 stamp() { date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$1" +%Y%m%d%H%M.%S; }
 
 base="${1:-}"
-packet=/tmp/{{PREFIX}}-review-packet.md
+packet=/tmp/har-review-packet.md
 
 # No base given: review what isn't committed yet, and fall back to the last
 # commit when the tree is clean — "review my work" almost never means "review
@@ -40,16 +40,16 @@ fi
 # scope that omits it means those never get reviewed. Exclude generated churn: a
 # lockfile or project file whose ids got reshuffled, and the ledger export, are
 # noise that dilutes the read.
-# Add this project's own source globs. The docs are here from the start: a
-# CLAUDE.md or a skill that quietly stopped being true is a defect the reviewers
-# should see, and a suffix-only scope is also how a file with no extension at all
-# stays unreviewable — list such files by path.
-SCOPE=('*.py' '*.sh' '*.md' 'scripts/hooks/*'
+# bin/* and commands/* are listed by path because the two most important files
+# here carry no extension at all — a glob-by-suffix scope leaves the dispatcher
+# unreviewable, which is how it kept its path-traversal bug through a full pass.
+# The docs are in scope too: in this project the prose is half the product.
+SCOPE=('*.py' '*.sh' '*.md' 'bin/*' 'commands/*' 'scripts/hooks/*'
        ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
 
 # Screenshots the design reviewer looks at. Whatever drives your app should
 # write its captures to /tmp with this prefix.
-CAPTURES='{{PREFIX}}-*.png'
+CAPTURES='har-*.png'
 # ── END CONFIGURE ─────────────────────────────────────────────────────────
 
 diff_cmd() {
