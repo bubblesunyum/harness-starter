@@ -9,12 +9,23 @@ Extracted from a working project, with that project's language, platform, and
 build system taken back out. What's left is the part that transfers.
 
 ```bash
-./install.sh ../my-project --name "my project" --prefix mp --seat Wren
+ln -sf "$PWD/install.sh" ~/.local/bin/harness    # once
+cd ../my-project && harness                      # per project
 ```
 
+The symlink resolves back to this checkout every time it runs, so an install
+always uses whatever the starter says today — edit the template and the next
+install picks it up, no reinstall step.
+
+That's the whole invocation. The project's name and its bead prefix are inferred
+from the directory, and a project that already has a ledger keeps the prefix it
+already has. Pass a path as the one optional argument to install somewhere other
+than the current directory.
+
 Requires `bash`, `python3`, `git`, and [beads](https://github.com/steveyegge/beads)
-(`bd`) on PATH. The installer never overwrites an existing file, so re-running it
-is a safe way to pick up pieces added later.
+(`bd`) on PATH, and a git repository to install into. The installer never
+overwrites an existing file, so re-running it is a safe way to pick up pieces
+added later.
 
 ## What you get
 
@@ -47,20 +58,25 @@ file is never in the diff — the thing it describes is.
 
 **The seat outlives the session.** `harness/seat.md` is the role, not the run,
 and what it has shipped is derived from the ledger rather than written by hand.
+The agent chooses its own name there at install — it is greeted by it at the top
+of every session afterwards.
 Alongside it: `harness/handoffs/` (one note per closing session, never
 overwritten) and `harness/laurels.jsonl` (praise the user offered unprompted,
 replayed one at a time, carrying no work and no priority by design).
 
 ## After installing
 
-The installer prints this too, but: four things are yours to fill in.
+The installer closes with instructions addressed to the agent that ran it. Four
+things are left, because no script can infer them.
 
-1. **`CLAUDE.snippet.md`** — paste its three sections into your `CLAUDE.md`,
-   then delete it. They have to be always-loaded; everything else about the
-   harness lives behind the `workflow` skill, and should stay there.
-2. **`scripts/verify.sh`** — the `PROJECT STEPS` block. Everything around it is
+1. **`harness/seat.md`** — the agent names the seat and writes what it's for.
+   The Name field ships blank on purpose: until it's filled in the brief greets
+   you as "unnamed", which is the file saying it isn't done.
+2. **`CLAUDE.snippet.md`** — paste its three sections into `CLAUDE.md`, then
+   delete it. They have to be always-loaded; everything else about the harness
+   lives behind the `workflow` skill, and should stay there.
+3. **`scripts/verify.sh`** — the `PROJECT STEPS` block. Everything around it is
    scaffolding that works as-is.
-3. **`harness/seat.md`** — who the seat is and what it's for.
 4. **The reviewers** — each of `.claude/agents/reviewer-*.md` has a `FILL THIS
    IN` block for this project's language, framework, and *actual recurring
    bugs*. The specific traps are worth ten generic ones; add them as you find

@@ -1,55 +1,104 @@
 #!/bin/bash
 # Installs the harness into a project.
 #
-#   ./install.sh <target-repo> [--name "<project name>"] [--prefix <p>] [--seat <name>]
+#   harness              # into the current directory
+#   harness <path>       # into that project instead
 #
-# Copies the template in, substitutes the placeholders, wires the commit-msg
-# hook, and initialises the ledger. Never overwrites a file that already exists
-# in the target — it prints what it skipped, so a re-run is a safe way to pick
-# up pieces added since.
+# Put it on PATH with a symlink — it resolves back to its own checkout, so an
+# install always uses whatever the starter says today:
+#
+#   ln -sf "$PWD/install.sh" ~/.local/bin/harness
+#
+# Everything else is inferred: the project's name and its bead prefix come from
+# the directory, and an existing ledger keeps the prefix it already has. The one
+# thing no script can infer is who the seat is — that's the agent's to choose,
+# and it's the first thing the closing instructions ask for.
+#
+# Never overwrites a file that already exists in the target, and prints what it
+# skipped, so a re-run is a safe way to pick up pieces added since.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE="$HERE/template"
-
-target=""; name=""; prefix=""; seat=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --name)   name="$2";   shift 2 ;;
-    --prefix) prefix="$2"; shift 2 ;;
-    --seat)   seat="$2";   shift 2 ;;
-    -h|--help) sed -n '2,8p' "$0" | sed 's/^# \?//'; exit 0 ;;
-    *) target="$1"; shift ;;
+# Resolved through symlinks, because the usual way to reach this is a link on
+# PATH: `dirname` of the link gives the bin directory, and the template isn't
+# there. Following the chain lands on the real checkout, which is also what
+# makes an installed copy always use whatever the starter says today.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *)  self="$(dirname "$self")/$link" ;;
   esac
 done
+HERE="$(cd "$(dirname "$self")" && pwd -P)"
+TEMPLATE="$HERE/template"
 
-[ -n "$target" ] || { echo "usage: ./install.sh <target-repo> [--name …] [--prefix …] [--seat …]" >&2; exit 1; }
-target="$(cd "$target" && pwd)"
-[ -d "$target/.git" ] || { echo "✗ $target is not a git repository — the commit-msg hook and the review packet both need one." >&2; exit 1; }
+# Spelled out rather than sed'd off the comment block above: BSD sed has no
+# `\?`, so the version that did that shipped the leading `#` of every line.
+usage() {
+  cat <<EOF
+Installs the agentic development harness into a project.
 
-# Defaults derived from the target, so the common case needs no flags. The
-# prefix has to be short: it prefixes every bead id you will ever type.
-name="${name:-$(basename "$target")}"
-prefix="${prefix:-$(basename "$target" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | cut -c1-3)}"
-seat="${seat:-$(basename "$target")}"
+  $(basename "$0")              into the current directory
+  $(basename "$0") <path>       into that project instead
 
-# Checked rather than trusted, because an empty or malformed prefix fails in the
-# two places you can least afford it and does not announce itself: `bd init
-# --prefix ""` exits 0 and leaves a ledger where every later command errors, and
-# the commit-msg regex becomes `\b-[a-z0-9]+` — a word boundary before a bare
-# dash, which nothing can ever match. The result is a repo where no bead can be
-# filed and no commit can be made without --no-verify.
-if ! printf '%s' "$prefix" | grep -qE '^[a-z][a-z0-9]{0,7}$'; then
-  echo "✗ bad bead prefix: '$prefix'" >&2
-  echo "  It must start with a letter and be 1–8 lowercase letters or digits." >&2
-  echo "  Derived from the directory name; pass --prefix explicitly instead." >&2
+The project's name and its bead prefix are inferred from the directory, and a
+project that already has a ledger keeps the prefix it already has. Needs a git
+repository, and beads (bd) on PATH.
+
+Never overwrites a file that already exists, so re-running is a safe way to
+pick up pieces added to the starter since.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+
+target="${1:-$PWD}"
+[ -e "$target" ] || { echo "✗ no such path: $target" >&2; exit 1; }
+[ -d "$target" ] || { echo "✗ not a directory: $target" >&2; exit 1; }
+# -P, so a symlink pointing at the starter can't slip past the guard below by
+# comparing unequal to the path it resolves to — that lets the installer write
+# its own template files into its own checkout.
+target="$(cd "$target" && pwd -P)"
+[ -d "$target/.git" ] || {
+  echo "✗ $target is not a git repository." >&2
+  echo "  The commit-msg hook and the review packet both need one — run 'git init' first." >&2
   exit 1
+}
+[ "$target" = "$HERE" ] && { echo "✗ that's the starter itself — pass a project path, or run this from inside one." >&2; exit 1; }
+
+name="$(basename "$target")"
+
+# An existing ledger keeps the prefix it already has: every bead ever filed
+# carries it, and a second one would orphan all of them.
+# `|| true` because a `.beads` directory can exist without a database behind it
+# — copied in, or left by an interrupted `bd init`. Without it the failing
+# command substitution takes the whole script down under `set -e`, silently:
+# stderr is already going to /dev/null, so the install just stops with no
+# output, nothing copied, and no hook wired.
+prefix=""
+if [ -d "$target/.beads" ] && command -v bd >/dev/null 2>&1; then
+  prefix="$(cd "$target" && bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+fi
+existing_prefix="$prefix"
+
+# Otherwise derived from the directory name. Leading digits go because a prefix
+# has to start with a letter, and the fallback exists because a name with no
+# usable characters must not leave this empty: `bd init --prefix ""` exits 0 and
+# leaves a ledger where every later command errors, and the commit-msg regex
+# becomes `\b-[a-z0-9]+` — a word boundary before a bare dash, which nothing can
+# ever match. That combination is a repo where no bead can be filed and no
+# commit made without --no-verify.
+if [ -z "$prefix" ]; then
+  prefix="$(printf '%s' "$name" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
+  [ -n "$prefix" ] || prefix="bd"
 fi
 
 echo "installing the harness into $target"
 echo "  project: $name"
 echo "  prefix:  $prefix-"
-echo "  seat:    $seat"
 echo
 
 copied=0; skipped=0
@@ -66,9 +115,8 @@ while IFS= read -r src; do
   case "$rel" in
     dashboard/vendor/*) cp "$src" "$dst" ;;
     *) sed -e "s/{{PROJECT}}/$name/g" \
-           -e "s/{{PREFIX_UPPER}}/$(echo "$prefix" | tr 'a-z' 'A-Z')/g" \
-           -e "s/{{PREFIX}}/$prefix/g" \
-           -e "s/{{SEAT}}/$seat/g" "$src" > "$dst" ;;
+           -e "s/{{PREFIX_UPPER}}/$(printf '%s' "$prefix" | tr 'a-z' 'A-Z')/g" \
+           -e "s/{{PREFIX}}/$prefix/g" "$src" > "$dst" ;;
   esac
   [ -x "$src" ] && chmod +x "$dst"
   echo "  add   $rel"
@@ -82,20 +130,30 @@ echo
 # The hook lives in scripts/ and is pointed at, rather than copied into
 # .git/hooks — beads rewrites that directory on upgrade and would eat it.
 hook="$target/.git/hooks/commit-msg"
-if [ -e "$hook" ]; then
-  echo "  ! $target/.git/hooks/commit-msg exists — add this line to it yourself:"
+delegate='exec "$(git rev-parse --show-toplevel)"/scripts/hooks/commit-msg "$@"'
+if [ -e "$hook" ] && grep -qF "$delegate" "$hook"; then
+  echo "  commit-msg hook already wired"
+elif [ -e "$hook" ]; then
+  # Someone else's hook. Left alone rather than merged into: it is the one file
+  # here that can block every commit in the repo if it is got wrong.
+  echo "  ! .git/hooks/commit-msg exists — add this line to it yourself:"
   echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
 else
-  printf '#!/bin/bash\nexec "$(git rev-parse --show-toplevel)"/scripts/hooks/commit-msg "$@"\n' > "$hook"
+  printf '#!/bin/bash\n%s\n' "$delegate" > "$hook"
   chmod +x "$hook"
   echo "  wired the commit-msg hook"
 fi
 
 if command -v bd >/dev/null 2>&1; then
-  if [ -d "$target/.beads" ]; then
-    echo "  ledger already initialised"
+  # Keyed on whether a prefix came back above, not on `.beads` existing: the
+  # directory can be there with no database behind it, and reporting that as an
+  # initialised ledger is how you find out later, one failing `bd` at a time.
+  if [ -n "$existing_prefix" ]; then
+    echo "  ledger already initialised ($prefix-)"
+  elif (cd "$target" && bd init --prefix "$prefix" >/dev/null 2>&1); then
+    echo "  initialised the ledger ($prefix-)"
   else
-    (cd "$target" && bd init --prefix "$prefix") && echo "  initialised the ledger ($prefix-)"
+    echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
   fi
 else
   echo "  ! bd is not installed — the ledger, the brief, and the commit hook all need it."
@@ -104,16 +162,34 @@ fi
 
 (cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true
 
-cat <<EOF
+cat <<'EOF'
 
-done. Four things are yours to fill in before this is really running:
+── for the agent reading this ────────────────────────────────────────────────
 
-  1. CLAUDE.snippet.md      paste its three sections into your CLAUDE.md, delete it
-  2. scripts/verify.sh      the PROJECT STEPS block — your build and test commands
-  3. harness/seat.md        who the seat is and what it's for
-  4. the reviewers          .claude/agents/reviewer-{taste,correctness,design}.md
-                            each has a FILL THIS IN block for this project's
-                            language, framework, and actual recurring bugs
+Do these now, in this order. They are the parts no script can infer.
 
-Then: scripts/verify.sh, and open localhost:7391.
+1. harness/seat.md — name the seat, and write what it's for.
+
+   Choose the name yourself. It is yours: you will be greeted by it at the top
+   of every session from here on, and it outlives any one of them. Pick
+   something you would want to be called rather than something descriptive —
+   the seat is a role with an identity, not a label for a job. Then write the
+   two or three paragraphs under it in your own words, about this project
+   specifically. Fill in the Name field or the brief will greet you as
+   "unnamed", which is the file telling you it isn't done.
+
+2. CLAUDE.snippet.md — paste its three sections into CLAUDE.md, delete the file.
+   They have to be always-loaded; everything else about the harness lives
+   behind the `workflow` skill and should stay there.
+
+3. scripts/verify.sh — the PROJECT STEPS block, with this project's real build
+   and test commands. Everything around it works as-is.
+
+4. .claude/agents/reviewer-{taste,correctness,design}.md — each has a
+   FILL THIS IN block for this project's language, framework, and actual
+   recurring bugs. Generic ones are already there; the specific ones are worth
+   ten of those, so add them as you find them.
+
+Then run scripts/verify.sh, and open the dashboard it points you at.
+Read .claude/HARNESS.md before rearranging any of it.
 EOF
