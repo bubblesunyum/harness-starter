@@ -1,0 +1,80 @@
+# harness-starter
+
+An agentic development harness for a project worked on by one person and one
+Claude account. It exists so a session can start cold, find the work, prove the
+work, and leave a trail — without a human reading a screen at every step, and
+without spending the day's tokens on ceremony.
+
+Extracted from a working project, with that project's language, platform, and
+build system taken back out. What's left is the part that transfers.
+
+```bash
+./install.sh ../my-project --name "my project" --prefix mp --seat Wren
+```
+
+Requires `bash`, `python3`, `git`, and [beads](https://github.com/steveyegge/beads)
+(`bd`) on PATH. The installer never overwrites an existing file, so re-running it
+is a safe way to pick up pieces added later.
+
+## What you get
+
+| | |
+|---|---|
+| **Ledger** | beads in `.beads/` — work and discoveries survive the session that found them |
+| **Brief** | `scripts/brief.sh`, a SessionStart hook: the seat, the last note, the ready list, the memory keys, in ~100 tokens |
+| **Gate** | `scripts/verify.sh` — build, tests, and doc staleness behind one exit code and about six lines of output |
+| **Review** | `scripts/review.sh` builds one packet; three subagents read it — taste on Haiku, correctness on Sonnet, design on Sonnet reading screenshots |
+| **Librarian** | audits the knowledge layer from a digest, on a cadence, and proposes what to delete |
+| **Dashboard** | `scripts/dashboard.py` — a live diagram of all of it at localhost:7391 |
+| **Skills** | `workflow` (the hub), `agentic-review`, `beads`, `handoff` — each costs a description line until invoked |
+
+## The four ideas worth keeping
+
+**Everything is token-budgeted.** One account means progressive disclosure over
+always-loaded context, cheap models for bulk reading, and review scoped to the
+diff rather than the tree. The brief replaces `bd prime` (~1600 tokens every
+session, whether or not the ledger gets touched) with ~100.
+
+**A reviewer that reads pixels.** Two diff-reading reviewers will both pass a
+card that clips every value it exists to show, because nothing in the diff is
+wrong. `reviewer-design` reads the screenshots instead. It is the cheapest pass
+to run and it catches what nothing else can.
+
+**Staleness is the failure review can't catch.** A doc declares what it
+describes in a `<!-- tracks: … -->` comment, hashes go in `.claude/context.lock`,
+and the gate fails when a tracked source moves and the doc doesn't. The stale
+file is never in the diff — the thing it describes is.
+
+**The seat outlives the session.** `harness/seat.md` is the role, not the run,
+and what it has shipped is derived from the ledger rather than written by hand.
+Alongside it: `harness/handoffs/` (one note per closing session, never
+overwritten) and `harness/laurels.jsonl` (praise the user offered unprompted,
+replayed one at a time, carrying no work and no priority by design).
+
+## After installing
+
+The installer prints this too, but: four things are yours to fill in.
+
+1. **`CLAUDE.snippet.md`** — paste its three sections into your `CLAUDE.md`,
+   then delete it. They have to be always-loaded; everything else about the
+   harness lives behind the `workflow` skill, and should stay there.
+2. **`scripts/verify.sh`** — the `PROJECT STEPS` block. Everything around it is
+   scaffolding that works as-is.
+3. **`harness/seat.md`** — who the seat is and what it's for.
+4. **The reviewers** — each of `.claude/agents/reviewer-*.md` has a `FILL THIS
+   IN` block for this project's language, framework, and *actual recurring
+   bugs*. The specific traps are worth ten generic ones; add them as you find
+   them.
+
+Two more worth adding early, as project skills, once you know their shape: how
+to build and drive the real app for a screenshot, and whatever step a new source
+file needs before it's actually in the binary.
+
+`.claude/HARNESS.md` is the rationale for why the pieces are shaped this way.
+Read it before rearranging them.
+
+## Portability
+
+Developed on macOS. The scripts avoid BSD-only `stat` and `date` where it
+mattered, but the dashboard and the capture-collection path have had the least
+exercise elsewhere — if you run this on Linux, that's where to look first.

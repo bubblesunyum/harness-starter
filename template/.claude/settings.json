@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/brief.sh --hook",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/dashboard.py up",
+            "timeout": 30,
+            "statusMessage": "bringing up the harness dashboard"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/dashboard.py up",
+            "async": true,
+            "timeout": 120,
+            "statusMessage": "bringing up the harness dashboard"
+          }
+        ]
+      }
+    ]
+  }
+}

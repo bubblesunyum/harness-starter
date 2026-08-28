@@ -1,0 +1,147 @@
+#!/bin/bash
+# Builds the review packet: everything a reviewing agent needs about a change,
+# in one file, so it doesn't spend a dozen tool calls rediscovering the diff.
+#
+#   scripts/review.sh                 # working tree vs HEAD
+#   scripts/review.sh HEAD~3          # since a commit
+#   scripts/review.sh master          # since a branch (use on a feature branch)
+#
+# Prints the packet path. Hand that to the reviewer agents — see the
+# agentic-review skill.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# BSD and GNU disagree on both of these, and a starter shouldn't only run on the
+# machine it was written on.
+mtime() { stat -f '%m' "$@" 2>/dev/null || stat -c '%Y' "$@"; }
+stamp() { date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$1" +%Y%m%d%H%M.%S; }
+
+base="${1:-}"
+packet=/tmp/{{PREFIX}}-review-packet.md
+
+# No base given: review what isn't committed yet, and fall back to the last
+# commit when the tree is clean — "review my work" almost never means "review
+# nothing".
+if [ -z "$base" ]; then
+  if [ -n "$(git status --porcelain)" ]; then
+    range=""; label="uncommitted working tree"
+  else
+    range="HEAD~1"; label="HEAD (last commit)"
+  fi
+else
+  range="$base"; label="since $base"
+fi
+
+# ── CONFIGURE ─────────────────────────────────────────────────────────────
+# What a review is allowed to see: the app's source, and the harness that builds
+# it. Include the harness — it grows enough code of its own to have bugs, and a
+# scope that omits it means those never get reviewed. Exclude generated churn: a
+# lockfile or project file whose ids got reshuffled, and the ledger export, are
+# noise that dilutes the read.
+SCOPE=('*.py' '*.sh' 'scripts/hooks/*'
+       ':(exclude).beads/*')
+
+# Screenshots the design reviewer looks at. Whatever drives your app should
+# write its captures to /tmp with this prefix.
+CAPTURES='{{PREFIX}}-*.png'
+# ── END CONFIGURE ─────────────────────────────────────────────────────────
+
+diff_cmd() {
+  if [ -z "$range" ]; then git diff HEAD "$@" -- "${SCOPE[@]}"
+  else git diff "$range"... "$@" -- "${SCOPE[@]}"; fi
+}
+
+# A file that isn't tracked yet is still part of the change — usually the most
+# important part, since a new file is where a new capability lands, and a review
+# that can't see it is reviewing half the work.
+#
+# Read out with `--no-index` rather than staged with `add -N`: this script is
+# read-only about the repository, and an intent-to-add entry it left behind
+# would be picked up in full by the next `git commit -a` — an untracked scratch
+# file riding along in an unrelated commit.
+untracked() { [ -n "$range" ] || git ls-files --others --exclude-standard -- "${SCOPE[@]}"; }
+
+untracked_diff() {
+  untracked | while IFS= read -r file; do
+    [ -n "$file" ] && git diff --no-index --no-color -- /dev/null "$file" || true
+  done
+}
+
+files=$(printf '%s\n%s' "$(diff_cmd --name-only)" "$(untracked)" | sed '/^$/d')
+
+# Captures taken while the change was being verified. The design reviewer looks
+# at these rather than at the diff — a card that clips its own text is invisible
+# in a diff and obvious in a screenshot.
+#
+# What counts as "since" differs by what's being reviewed. For a range, it's that
+# commit's date. For an uncommitted tree it can't be HEAD's: the last commit may
+# be days old, and everything screenshot since then — including whole sessions of
+# unrelated work — gets swept in and read as this change's current state. The
+# first edit in the working tree is the honest mark, so the oldest changed file
+# is what dates the window.
+marker=$(mktemp)
+if [ -n "$range" ]; then
+  since=$(git log -1 --format=%cd --date=format:'%Y%m%d%H%M.%S' "$range" 2>/dev/null || true)
+else
+  # NUL-separated, and forgiving: a changed file may have a space in its name or
+  # have been deleted outright, and under `set -e` a stat that fails on one of
+  # those would take the whole script down before the fallback below could run.
+  since=$(printf '%s' "$files" | tr '\n' '\0' | xargs -0 mtime 2>/dev/null | sort -n | head -1 || true)
+  [ -n "$since" ] && since=$(stamp "$since")
+fi
+# An hour back is the fallback when there's nothing to date against at all — a
+# tree whose changed files have all been deleted, say.
+touch -t "${since:-$(stamp $(( $(date +%s) - 3600 )))}" "$marker"
+# -L because /tmp is a symlink to /private/tmp, and find won't descend one.
+# Ordered by when they were taken, not by name, so the last capture of a screen
+# is the one that's true now — a verification run leaves the broken states it
+# was fixing behind it, and a reviewer reading those as current would report
+# bugs that no longer exist.
+shots=$(find -L /tmp -maxdepth 1 -name "$CAPTURES" -newer "$marker" 2>/dev/null |
+        while IFS= read -r f; do echo "$(mtime "$f") $f"; done | sort -n | cut -d' ' -f2-)
+rm -f "$marker"
+
+{
+  echo "# Review packet — $label"
+  echo
+  if [ -z "$files" ]; then
+    echo "Nothing in scope changed."
+  else
+    echo "## Files changed"
+    echo '```'
+    diff_cmd --stat
+    untracked | sed 's/^/ new: /'
+    echo '```'
+    echo
+    echo "## Diff"
+    echo '```diff'
+    diff_cmd
+    untracked_diff
+    echo '```'
+  fi
+  echo
+  echo "## Captures"
+  echo
+  if [ -n "$shots" ]; then
+    echo "Screenshots taken while verifying this change, oldest first. Read each one."
+    echo "Where several show the same screen, the **last** is how it looks now and"
+    echo "the earlier ones are states already fixed — review the last, and don't"
+    echo "report a defect a later capture shows resolved."
+    echo
+    echo "$shots" | sed 's/^/- /'
+  else
+    echo "None. If this change alters anything on screen, that is itself a finding:"
+    echo "it shipped unseen. Drive the app and capture it first."
+  fi
+} > "$packet"
+
+lines=$(wc -l < "$packet" | tr -d ' ')
+echo "$packet ($label, $(echo "$files" | grep -c . ) files, $lines lines)"
+
+# A packet past a few thousand lines means the change is too big to review in
+# one pass — say so rather than letting a reviewer silently skim it.
+if [ "$lines" -gt 3000 ]; then
+  echo "warning: packet is large; consider reviewing in stages (scripts/review.sh <earlier-commit>)" >&2
+fi
