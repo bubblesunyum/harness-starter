@@ -299,9 +299,12 @@ def ledger_state():
     return {"counts": counts, "issues": issues, "stale": stale}
 
 
+# ── FILL THIS IN ──────────────────────────────────────────────────────────
 # Your build tool's success/failure line, if it prints one — e.g. xcodebuild's
-# "** BUILD SUCCEEDED **". Left as a pattern that matches nothing by default, so
-# the error-line fallback below is what runs until you fill this in.
+# "** BUILD SUCCEEDED **" wants r"\*\* (?:BUILD|TEST) (SUCCEEDED|FAILED) \*\*".
+# Leave it as r"(?!)" — a pattern that matches nothing — if yours prints no
+# verdict; the error-line fallback below is what runs then.
+# ──────────────────────────────────────────────────────────────────────────
 VERDICT = r"(?!)"
 
 
@@ -933,6 +936,16 @@ def main():
 
     os.chdir(ROOT)
     url = f"http://localhost:{port}/"
+
+    # The hooks leave a dashboard running via `up`, so by the time anyone types
+    # the bare command their own instance usually holds the port. Open it rather
+    # than binding on top of it and dying with a traceback.
+    if holder(port) is not None:
+        print(f"harness dashboard → {url}   (already running)")
+        if "--no-open" not in args:
+            webbrowser.open(url)
+        return
+
     with http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler) as srv:
         claim_file(port).write_text(json.dumps({"root": str(ROOT)}))
         print(f"harness dashboard → {url}   (ctrl-c to stop)")

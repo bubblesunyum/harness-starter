@@ -30,8 +30,21 @@ target="$(cd "$target" && pwd)"
 # Defaults derived from the target, so the common case needs no flags. The
 # prefix has to be short: it prefixes every bead id you will ever type.
 name="${name:-$(basename "$target")}"
-prefix="${prefix:-$(basename "$target" | tr -cd '[:alnum:]' | tr 'A-Z' 'a-z' | cut -c1-3)}"
+prefix="${prefix:-$(basename "$target" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | cut -c1-3)}"
 seat="${seat:-$(basename "$target")}"
+
+# Checked rather than trusted, because an empty or malformed prefix fails in the
+# two places you can least afford it and does not announce itself: `bd init
+# --prefix ""` exits 0 and leaves a ledger where every later command errors, and
+# the commit-msg regex becomes `\b-[a-z0-9]+` — a word boundary before a bare
+# dash, which nothing can ever match. The result is a repo where no bead can be
+# filed and no commit can be made without --no-verify.
+if ! printf '%s' "$prefix" | grep -qE '^[a-z][a-z0-9]{0,7}$'; then
+  echo "✗ bad bead prefix: '$prefix'" >&2
+  echo "  It must start with a letter and be 1–8 lowercase letters or digits." >&2
+  echo "  Derived from the directory name; pass --prefix explicitly instead." >&2
+  exit 1
+fi
 
 echo "installing the harness into $target"
 echo "  project: $name"
