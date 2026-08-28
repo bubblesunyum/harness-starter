@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" \u0026\u0026 scripts/brief.sh --hook",
+            "timeout": 60,
+            "type": "command"
+          },
+          {
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" \u0026\u0026 scripts/dashboard.py up",
+            "statusMessage": "bringing up the harness dashboard",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      },
+      {
+        "hooks": [
+          {
+            "command": "bd prime --hook-json",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" \u0026\u0026 scripts/dashboard.py up",
+            "statusMessage": "bringing up the harness dashboard",
+            "timeout": 120,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
