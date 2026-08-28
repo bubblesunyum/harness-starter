@@ -911,7 +911,8 @@ def main():
         print(write_snapshot())
         return
 
-    port = int(args[args.index("--port") + 1]) if "--port" in args else free_port(PORT)
+    explicit_port = "--port" in args
+    port = int(args[args.index("--port") + 1]) if explicit_port else free_port(PORT)
 
     # Named so `scripts/review.sh` picks it up with the app's own captures.
     if args and args[0] == "shot":
@@ -927,7 +928,13 @@ def main():
             print(f"already serving on {port}")
         else:
             log = open("/tmp/{{PREFIX}}-dash.log", "a")
-            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--no-open"],
+            # --port, or the child re-runs free_port() from scratch and can
+            # pick a different one than the port just printed — two siblings
+            # starting at once then both claim to have started on 7391, one
+            # child dies binding it, and its parent has already handed over the
+            # link. The process that binds must be told which port was chosen.
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
+                              "--no-open", "--port", str(port)],
                              cwd=ROOT, stdout=log, stderr=log,
                              stdin=subprocess.DEVNULL, start_new_session=True)
             print(f"started on {port}")
@@ -937,16 +944,38 @@ def main():
     os.chdir(ROOT)
     url = f"http://localhost:{port}/"
 
-    # The hooks leave a dashboard running via `up`, so by the time anyone types
-    # the bare command their own instance usually holds the port. Open it rather
-    # than binding on top of it and dying with a traceback.
-    if holder(port) is not None:
-        print(f"harness dashboard → {url}   (already running)")
-        if "--no-open" not in args:
-            webbrowser.open(url)
-        return
+    # The bind is the only honest check: anything that asks first and binds
+    # second loses the port in the gap between the two, and the hooks make that
+    # gap easy to hit — `up` decides a port is free a moment before its own
+    # child takes it. So try to take it, and read failure as "someone got here
+    # first" rather than asking in advance.
+    #
+    # An explicitly named port is an instruction, not a starting point: wander
+    # off it and the caller who asked for 9000 gets told about 9001. Only the
+    # inferred port is allowed to keep looking.
+    candidates = [port] if explicit_port else range(port, port + 20)
+    srv = None
+    for candidate in candidates:
+        try:
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            port = candidate
+            break
+        except OSError:
+            # Ours, or unclaimed and therefore not ours to displace: either way
+            # the dashboard the caller wanted is already there.
+            if holder(candidate) in (str(ROOT), "unknown"):
+                url = f"http://localhost:{candidate}/"
+                print(f"harness dashboard → {url}   (already running)")
+                if "--no-open" not in args:
+                    webbrowser.open(url)
+                return
+            # Another checkout holds it. Keep looking.
+    if srv is None:
+        raise SystemExit(f"could not bind {port}" if explicit_port
+                         else f"no free port in {port}–{port + 19}")
 
-    with http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler) as srv:
+    url = f"http://localhost:{port}/"
+    with srv:
         claim_file(port).write_text(json.dumps({"root": str(ROOT)}))
         print(f"harness dashboard → {url}   (ctrl-c to stop)")
         if "--no-open" not in args:
