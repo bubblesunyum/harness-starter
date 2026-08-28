@@ -1,16 +1,11 @@
 #!/bin/bash
-# Installs the harness into a project.
+# install the harness into a project
 #
-#   harness              # into the current directory
-#   harness <path>       # into that project instead
+#   harness add              into the current directory
+#   harness add <path>       into that project instead
 #
-# Put it on PATH with a symlink — it resolves back to its own checkout, so an
-# install always uses whatever the starter says today:
-#
-#   ln -sf "$PWD/install.sh" ~/.local/bin/harness
-#
-# Everything else is inferred: the project's name and its bead prefix come from
-# the directory, and an existing ledger keeps the prefix it already has. The one
+# Everything is inferred: the project's name and its bead prefix come from the
+# directory, and an existing ledger keeps the prefix it already has. The one
 # thing no script can infer is who the seat is — that's the agent's to choose,
 # and it's the first thing the closing instructions ask for.
 #
@@ -18,19 +13,12 @@
 # skipped, so a re-run is a safe way to pick up pieces added since.
 set -euo pipefail
 
-# Resolved through symlinks, because the usual way to reach this is a link on
-# PATH: `dirname` of the link gives the bin directory, and the template isn't
-# there. Following the chain lands on the real checkout, which is also what
-# makes an installed copy always use whatever the starter says today.
-self="${BASH_SOURCE[0]}"
-while [ -L "$self" ]; do
-  link="$(readlink "$self")"
-  case "$link" in
-    /*) self="$link" ;;
-    *)  self="$(dirname "$self")/$link" ;;
-  esac
-done
-HERE="$(cd "$(dirname "$self")" && pwd -P)"
+# Derived from this file's own location, never from the environment. The
+# dispatcher execs an already-resolved absolute path, so this is correct there
+# too — and a command that took its root from an exported variable would install
+# a different checkout's template whenever a stale one was lying around, with no
+# error and no sign that it had happened.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TEMPLATE="$HERE/template"
 
 # Spelled out rather than sed'd off the comment block above: BSD sed has no
@@ -39,8 +27,8 @@ usage() {
   cat <<EOF
 Installs the agentic development harness into a project.
 
-  $(basename "$0")              into the current directory
-  $(basename "$0") <path>       into that project instead
+  harness add              into the current directory
+  harness add <path>       into that project instead
 
 The project's name and its bead prefix are inferred from the directory, and a
 project that already has a ledger keeps the prefix it already has. Needs a git

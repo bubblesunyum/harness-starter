@@ -9,8 +9,8 @@ Extracted from a working project, with that project's language, platform, and
 build system taken back out. What's left is the part that transfers.
 
 ```bash
-ln -sf "$PWD/install.sh" ~/.local/bin/harness    # once
-cd ../my-project && harness                      # per project
+ln -sf "$PWD/harness" ~/.local/bin/harness    # once
+cd ../my-project && harness add               # per project
 ```
 
 The symlink resolves back to this checkout every time it runs, so an install
@@ -88,6 +88,23 @@ file needs before it's actually in the binary.
 
 `.claude/HARNESS.md` is the rationale for why the pieces are shaped this way.
 Read it before rearranging them.
+
+## Adding a command
+
+`harness` is a dispatcher over `commands/`. A new command is a new file — no
+case statement to edit, nothing to register:
+
+```bash
+commands/<name>.sh        # harness <name>
+```
+
+Line 2 of the file is its one-line description, and that's what the command
+listing prints, so the listing can't drift away from the command it describes.
+
+A command works out where it lives from its own path (`dirname "${BASH_SOURCE[0]}"/..`),
+not from an inherited variable — the dispatcher hands it an already-resolved
+absolute path, and a root taken from the environment would silently point at
+whichever checkout last exported one.
 
 ## Portability
 

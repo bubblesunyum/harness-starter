@@ -1,0 +1,75 @@
+#!/bin/bash
+# The harness CLI. One command per file in commands/, so adding one is dropping
+# a file in rather than editing a case statement here.
+#
+#   harness <command> [args]
+#
+# Put it on PATH with a symlink — it resolves back to its own checkout, so it
+# always runs whatever the starter says today:
+#
+#   ln -sf "$PWD/harness" ~/.local/bin/harness
+set -euo pipefail
+
+# Resolved through symlinks, because the usual way to reach this is a link on
+# PATH: `dirname` of the link gives the bin directory, and commands/ isn't there.
+# Bounded, because a link that points back into its own chain is a hang with no
+# output rather than an error — the worst way for a PATH command to fail.
+self="${BASH_SOURCE[0]}"
+for _ in $(seq 40); do
+  [ -L "$self" ] || break
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *)  self="$(dirname "$self")/$link" ;;
+  esac
+done
+if [ -L "$self" ]; then
+  echo "✗ symlink loop resolving $0 — check what ${BASH_SOURCE[0]} points at." >&2
+  exit 1
+fi
+ROOT="$(cd "$(dirname "$self")" && pwd -P)"
+
+me="$(basename "$0")"
+
+# Each command's one-line description is the second line of its file, so the
+# listing can't drift away from the command it describes.
+usage() {
+  echo "The agentic development harness."
+  echo
+  echo "  $me <command> [args]"
+  echo
+  echo "Commands:"
+  for cmd in "$ROOT"/commands/*.sh; do
+    [ -e "$cmd" ] || continue
+    name="$(basename "$cmd" .sh)"
+    printf '  %-10s %s\n' "$name" "$(sed -n '2s/^# \{0,1\}//p' "$cmd")"
+  done
+  echo
+  echo "  $me <command> --help   for that command's own usage"
+}
+
+command="${1:-}"
+case "$command" in
+  ""|-h|--help|help) usage; exit 0 ;;
+esac
+shift
+
+# Checked against the shape of a command name rather than passed through, or a
+# name carrying `..` walks out of commands/ and runs any .sh on the disk under
+# this script's environment — `harness ../../../tmp/evil/pwned` is the whole
+# exploit. Matters most where the name isn't a literal: a wrapper, a completion
+# function, anything threading a value in from elsewhere.
+if ! printf '%s' "$command" | grep -qE '^[a-z][a-z0-9-]*$'; then
+  echo "✗ not a command name: $command" >&2
+  exit 1
+fi
+
+script="$ROOT/commands/$command.sh"
+if [ ! -f "$script" ]; then
+  echo "✗ no such command: $command" >&2
+  echo >&2
+  usage >&2
+  exit 1
+fi
+
+exec bash "$script" "$@"
