@@ -2693,38 +2693,72 @@
       }
 
       /* ---- polling ---------------------------------------------------------- */
+      function draw(d) {
+        // Before anything else: every run button on the page reads this.
+        runStates = d.runs || {}
+        drawRuns()
+        drawBoard(d)
+        drawBacklog(d)
+        drawHarness(d)
+        refreshSheet()
+        drawVerify(d)
+        drawReview(d)
+        drawCommit(d)
+        drawMeta(d)
+        $('branchline').textContent = `${d.git.branch} · ${d.ledger.counts.open} open`
+        drawGate(d)
+      }
+
+      /* A dropped poll and a broken repaint are different failures and are caught
+         apart. They used to share one try: a fetch that didn't come back jumped
+         past every draw, so the pulse read offline while the board silently held
+         whatever it last painted — which is what "the dashboard stopped showing
+         new beads" looks like from the outside. The connection is the pulse's
+         business. The board keeps showing the last state that arrived, because a
+         few seconds stale is still the truest picture anyone has. */
       async function tick() {
+        let d
         try {
-          const d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
-          // Before anything draws: every run button on the page reads this.
-          runStates = d.runs || {}
-          drawRuns()
-          drawBoard(d)
-          drawBacklog(d)
-          drawHarness(d)
-          refreshSheet()
-          drawVerify(d)
-          drawReview(d)
-          drawCommit(d)
-          drawMeta(d)
-          $('branchline').textContent = `${d.git.branch} · ${d.ledger.counts.open} open`
-          drawGate(d)
-          $('pulse').className = 'pulse'
-          $('pulseLabel').textContent = 'live'
-          $('pulseTip').innerHTML =
-            `<h3>live</h3>` +
-            row('last read', d.generated) +
-            row('polling', 'every 2.5s') +
-            `<div class="note">Read straight from bd and git by
-               <code>scripts/dashboard.py</code>, cached a few seconds so the page
-               can't outrun it.</div>`
+          d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
         } catch (e) {
           $('pulse').className = 'pulse stale'
           $('pulseLabel').textContent = 'offline'
-          $('pulseTip').innerHTML = `<h3>offline</h3>
-            <div class="note">Nothing is serving this page. Start it with
+          $('pulseTip').innerHTML =
+            `<h3>offline</h3>` +
+            `<div class="note">The last poll didn't come back. ${
+              lastLedger
+                ? 'The board is the last state that did.'
+                : 'Nothing has arrived yet.'
+            } If this stays, start the server with
             <code>scripts/dashboard.py</code>.</div>`
+          return
         }
+
+        try {
+          draw(d)
+        } catch (e) {
+          // The state arrived; the page couldn't paint it. That's a bug here, not
+          // a server that stopped answering, and saying "offline" would send
+          // whoever reads this looking in the wrong place.
+          $('pulse').className = 'pulse stale'
+          $('pulseLabel').textContent = 'draw failed'
+          $('pulseTip').innerHTML =
+            `<h3>draw failed</h3>` +
+            `<div class="note">The state arrived but the page could not paint it:
+             <code>${esc(String(e))}</code></div>`
+          return
+        }
+
+        $('pulse').className = 'pulse'
+        $('pulseLabel').textContent = 'live'
+        $('pulseTip').innerHTML =
+          `<h3>live</h3>` +
+          row('last read', d.generated) +
+          row('polling', 'every 2.5s') +
+          `<div class="note">Read from bd and git by
+             <code>scripts/dashboard.py</code>, which rebuilds on a thread of its
+             own. Every poll after the first is handed the last snapshot it
+             finished, rather than waiting for a new one.</div>`
       }
       /* Pane placement is measured, not guessed. Which lane sits nearest an edge
          changes with the wrap, so a nth-child rule was always going to be wrong on
