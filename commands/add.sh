@@ -91,9 +91,42 @@ echo "  project: $name"
 echo "  prefix:  $prefix-"
 echo
 
+# What ships is what the repo says ships. `find` would also sweep up whatever a
+# working checkout has left lying in template/ — __pycache__, once the dashboard
+# has run — and a .pyc reaching the sed below dies with "illegal byte sequence"
+# partway through the copy, leaving a half-installed project behind. Tracked
+# files plus untracked ones git isn't ignoring: the set `git status` calls clean.
+if ! git -C "$HERE" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "✗ $HERE is not a git checkout — the installer takes its file list from git." >&2
+  exit 1
+fi
+files="$(git -C "$HERE" ls-files --cached --others --exclude-standard -- template | sort)"
+if [ -z "$files" ]; then
+  echo "✗ git lists no files under $HERE/template — nothing to install." >&2
+  exit 1
+fi
+
+# git lists what the index knows about, which is not the same as what is on disk:
+# a tracked file deleted and not yet staged is still listed. Checked here, before
+# a single file is written, because the copy below redirects into the destination
+# before sed reads the source — a missing source leaves a 0-byte file behind, and
+# the never-overwrite guard then reads that as already installed on every re-run.
+# Half an install that reports success is the failure this whole script is shaped
+# to avoid.
+missing="$(while IFS= read -r rel; do
+  [ -f "$HERE/$rel" ] || echo "  $rel"
+done <<< "$files")"
+if [ -n "$missing" ]; then
+  echo "✗ git lists files that aren't on disk in $HERE:" >&2
+  echo "$missing" >&2
+  echo "  restore them (git checkout -- template) or stage the deletions, then re-run." >&2
+  exit 1
+fi
+
 copied=0; skipped=0
-while IFS= read -r src; do
-  rel="${src#$TEMPLATE/}"
+while IFS= read -r rel; do
+  rel="${rel#template/}"
+  src="$TEMPLATE/$rel"
   dst="$target/$rel"
   if [ -e "$dst" ]; then
     echo "  skip  $rel (already there)"
@@ -111,7 +144,7 @@ while IFS= read -r src; do
   [ -x "$src" ] && chmod +x "$dst"
   echo "  add   $rel"
   copied=$((copied + 1))
-done < <(find "$TEMPLATE" -type f | sort)
+done <<< "$files"
 
 echo
 echo "  $copied added, $skipped skipped"
