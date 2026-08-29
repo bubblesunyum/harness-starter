@@ -86,10 +86,17 @@ report a clean session while the hook ran from the user's home directory.
 New procedures become skills, new work becomes beads — the instinct to add one
 more paragraph to CLAUDE.md is the thing this design exists to resist.
 
-`scripts/context.py` reports what a session pays before it does anything
-(CLAUDE.md, the brief, `MEMORY.md`, and skill descriptions). It is a trend line,
-not a gate. A cap here only ever measures how long it has been since someone
-argued with the layer, and the librarian does that better.
+`scripts/context.py` reports what a session pays before it does anything —
+both instruction files, the brief, `MEMORY.md`, and skill descriptions. It
+counts `AGENTS.md` as well as `CLAUDE.md` because both are always-loaded, and
+counting only one would let a session move text into the other and watch the
+number fall while nothing changed.
+
+The number is a trend line, not a gate: a cap here only ever measures how long
+it has been since someone argued with the layer, and the librarian does that
+better. Three things beside it *are* gates, because each is a silent regression
+rather than a judgment call — a SessionStart hook the harness didn't install, a
+bd managed block outside AGENTS.md, and a doc whose sources moved without it.
 
 ## Staleness is the failure review can't catch
 

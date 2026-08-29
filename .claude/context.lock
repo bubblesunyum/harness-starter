@@ -5,7 +5,7 @@
     ".claude/agents/reviewer-design.md": "37c85b605d41ad0a",
     ".claude/agents/reviewer-taste.md": "44b609dd1c241b4a",
     ".claude/skills/workflow/SKILL.md": "7897296475bca636",
-    "doc": "a6c91f2b02439251",
+    "doc": "f2088b9209cd59bf",
     "scripts/brief.sh": "0915195c1bc945e5",
     "scripts/context.py": "fc59580f472b1492",
     "scripts/review.sh": "0e8e93cc41907785",
