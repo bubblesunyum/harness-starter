@@ -59,7 +59,9 @@ The board at `scripts/dashboard.py` (localhost:7391) shows all of this live, and
 its buttons run the gate and the push. It opens in Claude Code's browser pane
 and nowhere else — `preview_start harness-dashboard`, or navigate to the URL the
 hook printed. The pane is the only browser you can read back, so a board you
-opened is a board you can check your own work against.
+opened is a board you can check your own work against. Starting it is
+`scripts/dashboard.py`, which backgrounds and returns; `serve` is the form that
+blocks, and you almost never want it.
 
 ## Capture — the step that pays for the next session
 

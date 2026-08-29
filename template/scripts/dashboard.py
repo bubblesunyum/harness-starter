@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """The harness dashboard: what the development system is doing, as a live picture.
 
-    scripts/dashboard.py            # serve at localhost:7391 (or the next free port)
-    scripts/dashboard.py up         # serve only if nothing is (what the Stop hook runs)
+    scripts/dashboard.py            # start it in the background if nothing is serving
+    scripts/dashboard.py up          # the same thing, spelled the way the hooks call it
+    scripts/dashboard.py serve      # stay in the foreground instead (ctrl-c to stop)
     scripts/dashboard.py snapshot   # just write dashboard/state.json
     scripts/dashboard.py shot [png] # photograph it, for the design review pass
     scripts/dashboard.py --port N   # serve somewhere else
+
+Backgrounding is the default because of who runs this: a hook at the end of a
+turn, or an agent that has other work to get to. A foreground server there is a
+terminal nobody gets back. `serve` is the one that blocks, and it is also what
+the background form re-runs as its own detached child.
 
 State is rebuilt from bd and git behind a few seconds of cache, so the page is
 live — claim a bead in one terminal and the diagram moves — without the polling
@@ -947,11 +953,48 @@ def write_launch_config(port):
     path.write_text(json.dumps(config, indent=2) + "\n")
 
 
+# Portside (the menubar app for this machine's servers) gives every listener a
+# stable one-word name and answers it at <alias>.local, so the board has a name
+# worth saying out loud instead of a port worth forgetting. Read-only, and best
+# effort: the map is a cache the app republishes every few seconds, so a
+# dashboard that just started has no entry yet, and that is not an error.
+PORTSIDE_ALIASES = Path.home() / ".portside/aliases.json"
+
+
+def portside_alias(port):
+    """This dashboard's Portside name, or None.
+
+    Matched on the launch directory as well as the port. The map is only as
+    fresh as the last scan, and a port this checkout just took may still be
+    recorded against whatever held it before — naming the board after someone
+    else's server is worse than not naming it.
+    """
+    try:
+        aliases = json.loads(PORTSIDE_ALIASES.read_text())
+    except (OSError, ValueError):
+        # ValueError rather than JSONDecodeError: this file belongs to another
+        # program, and the read can land mid-write. Bad UTF-8 raises
+        # UnicodeDecodeError — a ValueError, not an OSError — and a nicety that
+        # takes the Stop hook down every turn is not a nicety.
+        return None
+    if not isinstance(aliases, dict):
+        return None
+    for alias, server in aliases.items():
+        if not isinstance(server, dict):
+            continue
+        if str(server.get("port")) == str(port) and server.get("directory") == str(ROOT):
+            return alias
+    return None
+
+
 def announce(url, note):
     """Hand the link over. Printed rather than opened, because the only thing
     that can open Claude Code's browser pane is the agent reading this line —
     hook output is context, so the instruction travels with the URL."""
     print(f"harness dashboard → {url}   ({note})")
+    alias = portside_alias(urlparse(url).port)
+    if alias:
+        print(f"portside calls it {alias} → http://{alias}.local")
     print(f"open it in Claude Code's browser pane — preview_start "
           f"{LAUNCH_NAME}, or navigate to {url}. Not the system browser.")
 
@@ -980,9 +1023,20 @@ def shot(path, port, width=900, height=1400):
     return path if Path(path).exists() else "chrome wrote nothing"
 
 
+COMMANDS = ("up", "serve", "snapshot", "shot")
+
+
 def main():
     args = sys.argv[1:]
-    if args and args[0] == "snapshot":
+    # Bare flags are arguments to the default command, not a command. Anything
+    # else that isn't in the table is a typo, and a typo that silently starts a
+    # server is one nobody notices until they look for the thing they asked for.
+    command = args[0] if args and not args[0].startswith("-") else "up"
+    if command not in COMMANDS:
+        raise SystemExit(f"{Path(__file__).name}: no such command: {command}\n"
+                         f"  try: {', '.join(COMMANDS)}")
+
+    if command == "snapshot":
         print(write_snapshot())
         return
 
@@ -990,15 +1044,16 @@ def main():
     port = int(args[args.index("--port") + 1]) if explicit_port else free_port(PORT)
 
     # Named so `scripts/review.sh` picks it up with the app's own captures.
-    if args and args[0] == "shot":
+    if command == "shot":
         target = args[1] if len(args) > 1 else "/tmp/{{PREFIX}}-dashboard.png"
         print(shot(target, port))
         return
 
-    # `up` is what the Stop hook calls: leave a dashboard running at the end of
-    # every turn, so the link handed to the user always resolves. Detached and
-    # in a session of its own, or it dies with the hook that started it.
-    if args and args[0] == "up":
+    # The default, and what both hooks call: leave a dashboard running at the
+    # end of every turn, so the link handed to the user always resolves.
+    # Detached and in a session of its own, or it dies with the hook that
+    # started it.
+    if command == "up":
         if holder(port) is not None:
             note = "already serving"
         else:
@@ -1008,8 +1063,11 @@ def main():
             # starting at once then both claim to have started on 7391, one
             # child dies binding it, and its parent has already handed over the
             # link. The process that binds must be told which port was chosen.
+            # `serve`, explicitly: the child is the process that blocks, and
+            # a child that inherited the backgrounding default would fork
+            # again and again, each one handing off and exiting.
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
-                              "--port", str(port)],
+                              "serve", "--port", str(port)],
                              cwd=ROOT, stdout=log, stderr=log,
                              stdin=subprocess.DEVNULL, start_new_session=True)
             # Watched rather than assumed. The child was pinned to this port

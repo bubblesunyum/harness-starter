@@ -52,7 +52,11 @@ how the pieces fit together.
   `.claude/launch.json` and prints the link with the instruction to open it in
   Claude Code's browser pane — the one browser the agent can read back and
   screenshot, and the one that doesn't land behind whatever window the human was
-  already in.
+  already in. It backgrounds by default — the callers are hooks and
+  agents, and a foreground server there is a terminal nobody gets back;
+  `dashboard.py serve` is the form that blocks. If Portside knows the port it
+  also prints the alias, matched on the launch directory too so a stale map
+  can't name the board after someone else's server.
 
 ## Why it's shaped this way
 
