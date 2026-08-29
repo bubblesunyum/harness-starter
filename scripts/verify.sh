@@ -62,6 +62,18 @@ else
   echo "$context_out"
 fi
 
+# The reviewers exist twice — .claude/agents/ for Claude Code, .opencode/agent/
+# generated from it — and the generated half drifts silently, because nothing
+# about editing the source makes opencode complain. Checked rather than
+# regenerated: a gate that quietly fixed this would pass every time and never
+# say the two had parted company.
+if agents_out="$(scripts/opencode-agents.py check 2>&1)"; then
+  echo "$agents_out"
+else
+  failed=1
+  echo "$agents_out"
+fi
+
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────
 # There is no compiler here, so the gate is what a compiler would have caught:
 # every script parses, and the CLI can still list its own commands. Cheap enough

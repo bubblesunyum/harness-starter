@@ -6,6 +6,7 @@
   .claude/skills/workflow/SKILL.md
   scripts/brief.sh
   scripts/context.py
+  scripts/opencode-agents.py
   scripts/review.sh
   scripts/verify.sh
 -->
@@ -42,6 +43,10 @@ how the pieces fit together.
 - **Librarian:** `.claude/agents/librarian` (sonnet) audits the knowledge layer
   from a digest, on a cadence, never on the hot path. It proposes; the calling
   session decides.
+- **opencode:** `opencode.json` names the always-loaded files, and
+  `.opencode/agent/` holds the reviewers translated into opencode's dialect by
+  `scripts/opencode-agents.py`. See below — two of the obvious moves here are
+  traps.
 - **Gate:** `scripts/verify.sh`, plus doc staleness. Tiny output on purpose.
   There is no compiler in this project, so the gate is what a compiler would
   have caught: every shell and Python file parses, the CLI still lists its own
@@ -106,6 +111,50 @@ it has been since someone argued with the layer, and the librarian does that
 better. Three things beside it *are* gates, because each is a silent regression
 rather than a judgment call — a SessionStart hook the harness didn't install, a
 bd managed block outside AGENTS.md, and a doc whose sources moved without it.
+
+## opencode gets a config and generated agents, never a symlink
+
+Three things were checked against the installed binary rather than assumed, and
+each one rules out a shortcut somebody will otherwise reach for:
+
+**Skills need nothing.** opencode already discovers `.claude/skills/` natively —
+`opencode debug skill` finds `workflow`, `beads` and `handoff` with no
+`.opencode/` directory present at all, and the binary carries an
+`OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` switch, so it is deliberate rather than
+incidental. Do not add a skills symlink.
+
+**Agents cannot be symlinked.** opencode does not read `.claude/agents/`, and
+pointing it at those files is worse than leaving them: the frontmatter loads and
+then corrupts. `model: haiku` parses as provider "haiku" with an empty model id,
+the comma-separated `tools:` string resolves to invalid, and `mode: all` puts
+each reviewer in the primary agent picker beside build and plan. It looks like
+it worked and fails at spawn. So the prompt body has one home,
+`.claude/agents/`, and `scripts/opencode-agents.py` writes the other dialect's
+header around it into `.opencode/agent/`. The gate checks the two match, because
+nothing about editing the source makes opencode complain.
+
+The generated agents carry no `model:`. Claude's tier names are aliases opencode
+doesn't have — it wants a provider-qualified id, and which provider a given
+install has authenticated isn't knowable from the starter. Omitted, the agent
+inherits the session's model and always resolves; the cost is that
+`reviewer-taste` stops being the cheap one under opencode until there's a real
+tier→model roster.
+
+**There is no session-start hook to write.** opencode's plugin hooks are
+`event`, `chat.message`, `chat.params`, `chat.headers`, `chat.completion`,
+`tool.execute.before/after`, `auth`, `config`, and `permission.*`. None of them
+can inject context at session start — `event` is a notification sink with no
+return channel. So the dynamic half of the brief has no automatic path here, and
+AGENTS.md's "run `scripts/brief.sh` yourself" line is the fallback that covers
+it. Don't build the plugin.
+
+`opencode.json`'s `instructions` list is `AGENTS.md` and `CLAUDE.md` — exactly
+what Claude Code always-loads, since `CLAUDE.md` imports `AGENTS.md`. opencode
+finds `AGENTS.md` on its own and dedupes by resolved path, so naming it there
+costs nothing and says what the harness intends. `HARNESS.md` is deliberately
+not in the list: it is the rationale, read when the pieces are being rearranged,
+and always-loading it in one tool and not the other would put the two sessions
+on different budgets while `context.py` counted neither.
 
 ## Staleness is the failure review can't catch
 

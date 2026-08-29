@@ -286,6 +286,16 @@ else
   echo "    beads blocks, and .claude/settings.json a bd prime hook."
 fi
 
+# After substitution, not before: the generated opencode agents carry the
+# project's name, which template/.claude/agents/ still spells {{PROJECT}}.
+if agents_out="$(cd "$target" && ./scripts/opencode-agents.py 2>&1)"; then
+  echo "$agents_out"
+else
+  echo "$agents_out" >&2
+  echo "  ! couldn't generate .opencode/agent/ — fix the above and run" >&2
+  echo "    scripts/opencode-agents.py. opencode has no reviewers until you do." >&2
+fi
+
 (cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true
 
 cat <<'EOF'

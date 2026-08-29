@@ -39,12 +39,14 @@ fi
 # it. Include the harness — it grows enough code of its own to have bugs, and a
 # scope that omits it means those never get reviewed. Exclude generated churn: a
 # lockfile or project file whose ids got reshuffled, and the ledger export, are
-# noise that dilutes the read.
+# noise that dilutes the read. Config files are in scope: opencode.json is
+# three lines that decide what every session in the project loads, and it went
+# through a full review pass invisible because the scope had no *.json.
 # bin/* and commands/* are listed by path because the two most important files
 # here carry no extension at all — a glob-by-suffix scope leaves the dispatcher
 # unreviewable, which is how it kept its path-traversal bug through a full pass.
 # The docs are in scope too: in this project the prose is half the product.
-SCOPE=('*.py' '*.sh' '*.md' '*.html' 'bin/*' 'commands/*' 'scripts/hooks/*'
+SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'bin/*' 'commands/*' 'scripts/hooks/*'
        ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
 
 # Screenshots the design reviewer looks at. Whatever drives your app should
