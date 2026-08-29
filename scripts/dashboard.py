@@ -13,10 +13,13 @@ turn, or an agent that has other work to get to. A foreground server there is a
 terminal nobody gets back. `serve` is the one that blocks, and it is also what
 the background form re-runs as its own detached child.
 
-State is rebuilt from bd and git behind a few seconds of cache, so the page is
-live — claim a bead in one terminal and the diagram moves — without the polling
-outrunning the generation. The snapshot form exists for the Stop hook, which
-leaves a readable file behind even when nothing is serving.
+State is rebuilt from bd and git by a thread of its own, and a request is only
+ever handed the snapshot that thread last finished — so the page is live (claim a
+bead in one terminal and the diagram moves) and every poll after the first is
+answered at once, however long bd takes. Only the first waits, for the first
+build. Building state on the request instead is what made the server fall behind
+its own polling. The snapshot form exists for the Stop hook, which leaves
+a readable file behind even when nothing is serving.
 """
 
 import http.server
@@ -29,6 +32,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+import urllib.request
 from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -522,6 +526,21 @@ def harness():
     return stages, index
 
 
+# The budget runs brief.sh, which runs bd, and that is 1.7s of a 3s state build
+# — over half of it — for a number that moves when a doc is edited, not between
+# two polls a few seconds apart. On its own slower clock it stops dominating the
+# refresh it rides on. Only the refresher thread builds state, so no lock.
+_budget = {"at": 0.0, "data": None}
+BUDGET_TTL = 60.0
+
+
+def cached_budget(skills, agents):
+    if _budget["data"] is None or time.time() - _budget["at"] > BUDGET_TTL:
+        _budget["data"] = budget(skills, agents)
+        _budget["at"] = time.time()
+    return _budget["data"]
+
+
 def budget(skills, agents):
     claude_md = (ROOT / "CLAUDE.md")
     brief = run("bash", str(ROOT / "scripts/brief.sh"))
@@ -613,7 +632,7 @@ def state():
         "skills": skills,
         "agents": agents,
         "harness": stages,
-        "budget": budget(skills, agents),
+        "budget": cached_budget(skills, agents),
     }
 
 
@@ -731,7 +750,7 @@ def start_task(name):
         # tracking ref, so the beads named in those commits stop being unpushed
         # and fall back to done. Drop the cache so the next poll sees it rather
         # than showing work that has already left the machine.
-        _cache["at"] = 0
+        touch()
 
     threading.Thread(target=work, daemon=True).start()
     return _runs[name]
@@ -753,28 +772,62 @@ def runs_state():
     return out
 
 
-# Building the state shells out to bd several times and takes a second or two.
-# The page polls faster than that, so without a cache each poll piles another
-# generation on top of the last, several embedded Dolt engines end up contending
-# for the same lock, and the server stops answering entirely — which is exactly
-# what it did. One generation at a time, and everyone else gets the last one.
-_cache = {"at": 0.0, "data": None}
-_lock = threading.Lock()
-CACHE_TTL = 4.0
+# Building the state shells out to bd several times and takes two or three
+# seconds — longer than the page's poll interval. Generating it on the request
+# meant the cache expired between polls, so roughly every other request paid the
+# whole build while holding the lock; responses arriving slower than the poll
+# cadence backed up until the browser dropped the connection, and the page,
+# seeing a failed fetch, stopped repainting. Retuning the TTL only moves that
+# collision around. So a thread owns the build and requests only ever read the
+# snapshot it last finished: a poll never waits on bd, however slow bd is.
+_snapshot = {"data": None}
+_built = threading.Event()
+_wake = threading.Event()
+
+# How long the refresher rests between builds, not how long a build takes — a
+# build is a second or two here and will be longer on a big ledger, so the real
+# cycle is that plus this. Nothing downstream depends on the number: the page
+# shows when the snapshot it is drawing was generated, so a slow machine reads
+# as an honest timestamp rather than a board that lies about being current.
+REFRESH = 2.0
+# Long enough to cover a cold bd on a big ledger. Past it, something is wrong in
+# a way that silence would hide.
+FIRST_BUILD_TIMEOUT = 60.0
+
+
+def refresher():
+    """Rebuild the state forever, resting REFRESH between builds."""
+    while True:
+        try:
+            data = state()
+            # One assignment, so a reader gets the previous dict or this one and
+            # never a half-filled one. Nothing here mutates a published snapshot.
+            _snapshot["data"] = data
+            _built.set()
+        except Exception as e:
+            # A build that throws leaves the last good snapshot up rather than
+            # blanking the board. Said out loud, because a dashboard quietly
+            # serving a frozen picture is the failure this file is arranged
+            # against.
+            print(f"! state build failed: {e}", flush=True)
+        # Woken early by anything that changes the answer — a run finishing, a
+        # file staged — so those land on the next poll instead of waiting out
+        # the rest.
+        _wake.wait(REFRESH)
+        _wake.clear()
+
+
+def touch():
+    """Something changed the world the page describes; rebuild without waiting."""
+    _wake.set()
 
 
 def cached_state():
-    fresh = time.time() - _cache["at"] < CACHE_TTL
-    if fresh and _cache["data"] is not None:
-        return _cache["data"]
-    # A blocked thread re-checks under the lock: by the time it gets in, the
-    # thread ahead of it has usually already refreshed.
-    with _lock:
-        if time.time() - _cache["at"] < CACHE_TTL and _cache["data"] is not None:
-            return _cache["data"]
-        _cache["data"] = state()
-        _cache["at"] = time.time()
-        return _cache["data"]
+    """The snapshot the refresher last finished. Waits only for the first one."""
+    if not _built.wait(FIRST_BUILD_TIMEOUT):
+        raise RuntimeError(
+            f"no state built in {FIRST_BUILD_TIMEOUT:.0f}s — is `bd` answering in {ROOT}?")
+    return _snapshot["data"]
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -793,7 +846,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
             # A run changes what the page should show, so don't make it wait out
             # the cache before it finds out.
-            _cache["at"] = 0
+            touch()
             return
         if self.path.startswith("/worktree/"):
             action = self.path[len("/worktree/"):].split("?")[0]
@@ -821,7 +874,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 else:
                     return self.send_error(404)
             self.send_json(result)
-            _cache["at"] = 0
+            touch()
             return
         self.send_error(404)
 
@@ -1035,6 +1088,19 @@ def shot(path, port, width=900, height=1400):
         return f"no Chrome at {CHROME} — install it or capture by hand"
     if not is_serving(port):
         return f"nothing serving on {port} — run `dashboard.py up` first"
+    # Warmed on real time first. Chrome's virtual clock stops while a request is
+    # outstanding, so against a server that hasn't built its first snapshot the
+    # page's own poll spends the whole budget waiting — and the capture comes
+    # back with a header, no board, and nothing to say it was photographed too
+    # early. The design reviewer reads that as a blank page, which is worse than
+    # no capture at all.
+    try:
+        with urllib.request.urlopen(f"http://localhost:{port}/state.json",
+                                    timeout=FIRST_BUILD_TIMEOUT + 5) as r:
+            r.read()
+    except Exception as e:
+        return (f"the dashboard on {port} gave no state in "
+                f"{FIRST_BUILD_TIMEOUT + 5:.0f}s, so there is nothing to photograph: {e}")
     # A budget rather than a sleep: the page paints once its first poll lands,
     # and virtual time runs it forward without waiting in real seconds.
     subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars",
@@ -1143,6 +1209,9 @@ def main():
         claim_file(port).write_text(json.dumps({"root": str(ROOT)}))
         write_launch_config(port)
         announce(url, "ctrl-c to stop")
+        # Started before the first request, so the opening poll usually finds a
+        # snapshot already waiting rather than paying for the build itself.
+        threading.Thread(target=refresher, daemon=True).start()
         try:
             srv.serve_forever()
         except KeyboardInterrupt:
