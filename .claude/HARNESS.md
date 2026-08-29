@@ -48,6 +48,11 @@ how the pieces fit together.
   behind — that last one only ever shows up at the far end, in someone else's
   project, long after anyone would connect it to the change that caused it.
 - **Dashboard:** `scripts/dashboard.py` serves a live diagram at localhost:7391.
+  It never opens a browser itself. It publishes the live port to
+  `.claude/launch.json` and prints the link with the instruction to open it in
+  Claude Code's browser pane — the one browser the agent can read back and
+  screenshot, and the one that doesn't land behind whatever window the human was
+  already in.
 
 ## Why it's shaped this way
 

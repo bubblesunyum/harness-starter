@@ -36,7 +36,7 @@ added later.
 | **Gate** | `scripts/verify.sh` — build, tests, and doc staleness behind one exit code and about six lines of output |
 | **Review** | `scripts/review.sh` builds one packet; three subagents read it — taste on Haiku, correctness on Sonnet, design on Sonnet reading screenshots |
 | **Librarian** | audits the knowledge layer from a digest, on a cadence, and proposes what to delete |
-| **Dashboard** | `scripts/dashboard.py` — a live diagram of all of it at localhost:7391 |
+| **Dashboard** | `scripts/dashboard.py` — a live diagram of all of it at localhost:7391, opened in Claude Code's browser pane |
 | **Skills** | `workflow` (the hub), `agentic-review`, `beads`, `handoff` — each costs a description line until invoked |
 
 ## The four ideas worth keeping

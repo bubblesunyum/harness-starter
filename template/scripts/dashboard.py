@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The harness dashboard: what the development system is doing, as a live picture.
 
-    scripts/dashboard.py            # serve at localhost:7391 (or the next free port) and open it
+    scripts/dashboard.py            # serve at localhost:7391 (or the next free port)
     scripts/dashboard.py up         # serve only if nothing is (what the Stop hook runs)
     scripts/dashboard.py snapshot   # just write dashboard/state.json
     scripts/dashboard.py shot [png] # photograph it, for the design review pass
@@ -22,7 +22,6 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -874,11 +873,87 @@ def free_port(start):
     raise SystemExit(f"no free port in {start}–{start + 19}")
 
 
+def wait_until_serving(port, timeout=5.0):
+    """True once something answers on `port`. A just-spawned child needs a
+    moment to bind, and the alternative to waiting for it is handing over a
+    link before anyone knows whether it resolves."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_serving(port):
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def write_snapshot():
     out = ROOT / "dashboard/state.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(state(), indent=2))
     return out
+
+
+# The dashboard opens in Claude Code's own browser pane and nowhere else. Two
+# reasons it is worth enforcing rather than suggesting: the pane is the only
+# browser the agent can see into — it can read the page, screenshot it, and
+# check its own work — and a system browser puts the board behind whatever
+# window the human was already in, where it goes unread. Nothing here shells out
+# to `open`; instead the port is published two ways, and both point at the pane.
+LAUNCH_NAME = "harness-dashboard"
+
+
+def write_launch_config(port):
+    """Publish the live port as a `.claude/launch.json` entry, so the agent's
+    `preview_start` can find the board by name however the port landed.
+
+    An entry with a url and no command attaches to the server already running
+    rather than starting a second one. The port moves between checkouts and
+    across restarts, so this is rewritten on every bind — a stale entry points
+    the pane at someone else's dashboard, which is worse than no entry at all.
+    """
+    path = ROOT / ".claude/launch.json"
+    config = {"version": "0.0.1", "configurations": []}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            # Hand-edited into something unreadable: say so and keep serving.
+            # A dashboard with no launch entry still works, the agent just has
+            # to navigate to the printed URL by hand. Bailing out rather than
+            # overwriting, because whatever is in there is someone's, and this
+            # runs from a hook at the end of every turn.
+            print(f"! {path} is not readable JSON — leaving it alone")
+            return
+        # Valid JSON of the wrong shape is the same situation, and it has to be
+        # checked before `.get`: a top-level list parses fine and then raises
+        # AttributeError, out of a hook, on every invocation until a human
+        # notices.
+        if not isinstance(existing, dict) or not isinstance(
+                existing.get("configurations"), list):
+            print(f"! {path} is not a launch config — leaving it alone")
+            return
+        config = existing
+    # `isinstance` first, because an entry that isn't an object is someone
+    # else's problem to fix and `.get` on it is this hook crashing every turn.
+    # Left in place rather than dropped: this function's business is one entry.
+    config["configurations"] = [c for c in config["configurations"]
+                                if not isinstance(c, dict)
+                                or c.get("name") != LAUNCH_NAME]
+    config["configurations"].append({
+        "name": LAUNCH_NAME,
+        "url": f"http://localhost:{port}",
+        "port": port,
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2) + "\n")
+
+
+def announce(url, note):
+    """Hand the link over. Printed rather than opened, because the only thing
+    that can open Claude Code's browser pane is the agent reading this line —
+    hook output is context, so the instruction travels with the URL."""
+    print(f"harness dashboard → {url}   ({note})")
+    print(f"open it in Claude Code's browser pane — preview_start "
+          f"{LAUNCH_NAME}, or navigate to {url}. Not the system browser.")
 
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -925,7 +1000,7 @@ def main():
     # in a session of its own, or it dies with the hook that started it.
     if args and args[0] == "up":
         if holder(port) is not None:
-            print(f"already serving on {port}")
+            note = "already serving"
         else:
             log = open("/tmp/{{PREFIX}}-dash.log", "a")
             # --port, or the child re-runs free_port() from scratch and can
@@ -934,10 +1009,22 @@ def main():
             # child dies binding it, and its parent has already handed over the
             # link. The process that binds must be told which port was chosen.
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
-                              "--no-open", "--port", str(port)],
+                              "--port", str(port)],
                              cwd=ROOT, stdout=log, stderr=log,
                              stdin=subprocess.DEVNULL, start_new_session=True)
-            print(f"started on {port}")
+            # Watched rather than assumed. The child was pinned to this port
+            # and has no second candidate, so a sibling that won the race
+            # leaves it dead — and publishing the port would then persist a
+            # link to nothing until some later `up` overwrites it.
+            note = "started" if wait_until_serving(port) else ""
+        if not note:
+            print(f"! nothing came up on {port} — see " + "/tmp/{{PREFIX}}-dash.log")
+        else:
+            # Written here rather than left to the child: the hook output the
+            # agent reads is this process's, and a launch entry that lands
+            # after it is a `preview_start` that misses by a second.
+            write_launch_config(port)
+            announce(f"http://localhost:{port}/", note)
         write_snapshot()
         return
 
@@ -964,10 +1051,8 @@ def main():
             # Ours, or unclaimed and therefore not ours to displace: either way
             # the dashboard the caller wanted is already there.
             if holder(candidate) in (str(ROOT), "unknown"):
-                url = f"http://localhost:{candidate}/"
-                print(f"harness dashboard → {url}   (already running)")
-                if "--no-open" not in args:
-                    webbrowser.open(url)
+                write_launch_config(candidate)
+                announce(f"http://localhost:{candidate}/", "already running")
                 return
             # Another checkout holds it. Keep looking.
     if srv is None:
@@ -977,9 +1062,8 @@ def main():
     url = f"http://localhost:{port}/"
     with srv:
         claim_file(port).write_text(json.dumps({"root": str(ROOT)}))
-        print(f"harness dashboard → {url}   (ctrl-c to stop)")
-        if "--no-open" not in args:
-            webbrowser.open(url)
+        write_launch_config(port)
+        announce(url, "ctrl-c to stop")
         try:
             srv.serve_forever()
         except KeyboardInterrupt:

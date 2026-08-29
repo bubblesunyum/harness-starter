@@ -134,6 +134,18 @@ else
   echo "  wired the commit-msg hook"
 fi
 
+# The dashboard rewrites .claude/launch.json with whatever port it bound, so it
+# is machine-local by nature — tracked, it would show up as a diff at the end of
+# every session in every checkout. Appended rather than created wholesale: the
+# target's .gitignore is the target's.
+ignore="$target/.gitignore"
+if [ -e "$ignore" ] && grep -qxF '.claude/launch.json' "$ignore"; then
+  echo "  .claude/launch.json already ignored"
+else
+  printf '\n# The live dashboard port, rewritten on every bind — machine-local.\n.claude/launch.json\n' >> "$ignore"
+  echo "  ignored .claude/launch.json"
+fi
+
 if command -v bd >/dev/null 2>&1; then
   # Keyed on whether a prefix came back above, not on `.beads` existing: the
   # directory can be there with no database behind it, and reporting that as an
@@ -180,6 +192,8 @@ Do these now, in this order. They are the parts no script can infer.
    recurring bugs. Generic ones are already there; the specific ones are worth
    ten of those, so add them as you find them.
 
-Then run scripts/verify.sh, and open the dashboard it points you at.
+Then run scripts/verify.sh, and open the dashboard it points you at — in
+Claude Code's browser pane (preview_start harness-dashboard), not a system
+browser.
 Read .claude/HARNESS.md before rearranging any of it.
 EOF

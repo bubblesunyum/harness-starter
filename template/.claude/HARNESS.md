@@ -40,6 +40,11 @@ how the pieces fit together.
 - **Gate:** `scripts/verify.sh` — build, tests, optional smoke, plus doc
   staleness. Tiny output on purpose.
 - **Dashboard:** `scripts/dashboard.py` serves a live diagram at localhost:7391.
+  It never opens a browser itself. It publishes the live port to
+  `.claude/launch.json` and prints the link with the instruction to open it in
+  Claude Code's browser pane — the one browser the agent can read back and
+  screenshot, and the one that doesn't land behind whatever window the human was
+  already in.
 
 ## Why it's shaped this way
 

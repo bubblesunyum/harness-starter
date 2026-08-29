@@ -6,3 +6,6 @@ __pycache__/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# The live dashboard port, rewritten on every bind — machine-local.
+.claude/launch.json

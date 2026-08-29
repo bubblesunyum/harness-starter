@@ -56,7 +56,10 @@ does and get an answer, and it's how the staging lane knows what's sitting
 unpushed. Nothing filed yet? `bd q "…"` takes one line and hands back an id.
 
 The board at `scripts/dashboard.py` (localhost:7391) shows all of this live, and
-its buttons run the gate and the push.
+its buttons run the gate and the push. It opens in Claude Code's browser pane
+and nowhere else — `preview_start harness-dashboard`, or navigate to the URL the
+hook printed. The pane is the only browser you can read back, so a board you
+opened is a board you can check your own work against.
 
 ## Capture — the step that pays for the next session
 
