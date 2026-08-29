@@ -668,19 +668,36 @@ def commit(message, amend):
 
 # The loops a human still triggers by hand. Kept as a fixed table rather than
 # anything the page can name, so the only commands this server will ever run are
-# the ones written here.
+# the ones written here. It is also the only place a run button is described:
+# label, the label while it's going, and where on the page it belongs. The page
+# draws slots from this and names no task of its own.
+#
+#   where = "header"       the strip at the top right
+#           "gate"         inside the gate popover, next to the word it proves
+#           "lane:<key>"   in a board lane's header, e.g. lane:staging
 #
 # ── FILL THIS IN ──────────────────────────────────────────────────────────
-# Add the ones that put the app in front of you — installing it, launching it
-# on a device — and give each a matching entry in TASKS in dashboard/index.html,
-# which is what draws the buttons. Both lists start empty of them on purpose: a
-# button for a script that doesn't exist is worse than no button.
+# Add the ones that put the app in front of you — installing it, launching it on
+# a device — with where="header". Nothing else to edit: a new entry here is a new
+# button. Start empty of them on purpose; a button for a script that doesn't
+# exist is worse than no button.
 TASKS = {
-    "verify": ["scripts/verify.sh"],
+    "verify": {
+        "command": ["scripts/verify.sh"],
+        "label": "run",
+        "busy": "running…",
+        "where": "gate",
+    },
     # The only one that leaves this machine. It stays a plain `git push` with no
     # arguments so it can only ever do what the branch is already tracking.
-    "push": ["git", "push"],
+    "push": {
+        "command": ["git", "push"],
+        "label": "push",
+        "busy": "pushing…",
+        "where": "lane:staging",
+    },
 }
+
 _runs = {}
 
 
@@ -697,7 +714,7 @@ def start_task(name):
 
     def work():
         try:
-            r = subprocess.run(TASKS[name], capture_output=True, text=True,
+            r = subprocess.run(TASKS[name]["command"], capture_output=True, text=True,
                                cwd=ROOT, timeout=900)
             tail = (r.stdout + r.stderr).strip().splitlines()
             _runs[name] = {
@@ -721,14 +738,18 @@ def start_task(name):
 
 
 def runs_state():
+    """Every task's last result, plus the label and placement the page draws it
+    with. Presentation travels with the state so that TASKS above stays the one
+    description of a run button."""
     out = {}
-    for name in TASKS:
+    for name, task in TASKS.items():
         r = _runs.get(name, {"state": "idle", "output": "", "at": 0})
         ago = ""
         if r["at"]:
             mins = int((time.time() - r["at"]) / 60)
             ago = "just now" if mins < 1 else f"{mins}m ago"
-        out[name] = {**r, "ago": ago}
+        out[name] = {**r, "ago": ago, "label": task["label"],
+                     "busy": task["busy"], "where": task["where"]}
     return out
 
 

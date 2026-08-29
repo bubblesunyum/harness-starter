@@ -1639,8 +1639,27 @@
       const laneLimits = {}
       const LANE_PAGE = 8
 
+      /* Run buttons are described once, in TASKS in scripts/dashboard.py, and
+         arrive here inside the state with their label and their placement. The
+         page draws slots; it never names a task. */
       let runStates = {}
-      const runState = (task) => (runStates[task] || {}).state || 'idle'
+
+      function runButton(key) {
+        const r = runStates[key]
+        if (!r) return ''
+        const busy = r.state === 'running'
+        // The header strip styles its own buttons and shows a status dot; the
+        // gate and the lanes borrow .mini from everything else on that row.
+        const header = r.where === 'header'
+        return `<button data-task="${esc(key)}" class="${header ? '' : 'mini '}${r.state}"
+          ${busy ? 'disabled' : ''}>${header ? '<i></i>' : ''}${esc(busy ? r.busy : r.label)}</button>`
+      }
+
+      const runSlot = (where) =>
+        Object.keys(runStates)
+          .filter((k) => runStates[k].where === where)
+          .map(runButton)
+          .join('')
 
       /* Everything the board and the sheet both need to know about the ledger. */
       let ledger = {byId: {}, epicName: () => ''}
@@ -1684,7 +1703,6 @@
 
       function drawBoard(d) {
         lastLedger = d
-        runStates = d.runs || {}
         const all = d.ledger.issues
         ledger.byId = Object.fromEntries(all.map((i) => [i.id, i]))
         ledger.epicName = (id) => (ledger.byId[id] || {}).title || ''
@@ -1723,7 +1741,10 @@
             label,
             count: items.length,
             hover: tip,
-            action: key === 'staging' && (d.git.unpushed || []).length ? 'push' : '',
+            // Whether the lane offers a button at all is the lane's business —
+            // nothing to push, nothing to press. Which button, and what it says,
+            // is the server's.
+            slot: key === 'staging' && (d.git.unpushed || []).length ? 'lane:staging' : '',
             note: key === 'staging' && !items.length ? stagingNote(d) : '',
             items,
           }
@@ -1731,7 +1752,7 @@
         // The raw working copy sits next to staging — the two lanes together are
         // the whole story of what a commit right now would take. Spliced in
         // rather than added to BEAD_LANES: it's not a bead lane, it carries no
-        // `items`/`action` shape the rest of that pipeline understands.
+        // `items`/`slot` shape the rest of that pipeline understands.
         beadLanes.splice(beadLanes.findIndex((l) => l.key === 'staging'), 0, {key: 'worktree', worktree: true})
 
         // The sheet's own lookup table, kept current whether or not the board
@@ -1745,7 +1766,7 @@
           // An empty lane says nothing worth the room it takes. Staging is the
           // exception: with commits to push it carries the button that pushes them,
           // and that has to stay reachable whether or not a bead sits under it.
-        ].filter((l) => (l.worktree ? (d.worktree || []).length : l.items.length || l.action))
+        ].filter((l) => (l.worktree ? (d.worktree || []).length : l.items.length || l.slot))
 
         // Rebuilt only when something changed: two lanes carry hover popovers, and
         // replacing one under the pointer would close it mid-read.
@@ -1797,14 +1818,7 @@
                 ${esc(l.label)}
                 ${l.hover ? `<span class="tip" id="${l.hover}"></span>` : ''}
               </h2>
-              ${
-                l.action
-                  ? `<button class="mini ${runState(l.action)}" data-task="${l.action}"
-                  ${runState(l.action) === 'running' ? 'disabled' : ''}>${
-                    runState(l.action) === 'running' ? 'pushing…' : 'push'
-                  }</button>`
-                  : ''
-              }
+              ${l.slot ? runSlot(l.slot) : ''}
               ${l.count !== undefined ? `<span class="n">${l.count}</span>` : ''}
             </summary>
             <div class="lane-cards">
@@ -2544,35 +2558,26 @@
       })
 
       /* ---- run controls ----------------------------------------------------- */
-      /* The header carries the ones that put the app in front of you. Running the gate
-         belongs with the word that reports it, so it lives in the gate's own pane.
-
-         FILL THIS IN: add [key, label] pairs here for whatever launches your app,
-         with a matching entry in TASKS in scripts/dashboard.py — that table is the
-         only place a command can come from. Empty until you do, which is correct:
-         a button for a script that doesn't exist is worse than no button. */
-      const TASKS = []
-      const RUN_LABEL = {verify: 'verify'}
+      /* The header carries the ones that put the app in front of you — whatever
+         TASKS in scripts/dashboard.py places there. Running the gate belongs with
+         the word that reports it, so it sits in the gate's own pane instead, and
+         the gate's note is what those runs last said. */
       let runsSignature = ''
       let lastRunNote = ''
 
-      function drawRuns(d) {
-        const runs = d.runs || {}
-        const signature = TASKS.map(([k]) => (runs[k] || {}).state).join('|')
-
+      function drawRuns() {
+        const signature = Object.keys(runStates)
+          .map((k) => `${k}:${runStates[k].state}`)
+          .join('|')
         if (signature !== runsSignature) {
           runsSignature = signature
-          $('runs').innerHTML = TASKS.map(([key, label]) => {
-            const r = runs[key] || {state: 'idle'}
-            const busy = r.state === 'running'
-            return `<button data-task="${key}" class="${r.state}" ${busy ? 'disabled' : ''}>
-              <i></i>${esc(busy ? label + '…' : label)}</button>`
-          }).join('')
+          $('runs').innerHTML = runSlot('header')
         }
 
-        const last = Object.entries(RUN_LABEL)
-          .map(([k, label]) => [label, runs[k]])
-          .filter(([, r]) => r && r.state !== 'idle' && r.output)
+        // Named by key rather than by label: the button in the gate says "run",
+        // but a note under it has to say which run it is reporting.
+        const last = Object.entries(runStates)
+          .filter(([, r]) => r.where === 'gate' && r.state !== 'idle' && r.output)
           .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0]
         lastRunNote = last ? `${last[0]}: ${last[1].output} · ${last[1].ago}` : ''
       }
@@ -2596,14 +2601,12 @@
         const cls = v.status === 'passed' ? 'ok' : v.status === 'failed' ? 'bad' : ''
         // The pane holds a button now, so it can't be rebuilt on every poll — the
         // press would land on an element that had already been replaced under it.
-        const signature = JSON.stringify([v, lastRunNote, runState('verify'), d.git.branch])
+        const button = runSlot('gate')
+        const signature = JSON.stringify([v, lastRunNote, button, d.git.branch])
         if (signature === verifySignature) return
         verifySignature = signature
         tip.innerHTML =
-          `<h3>the gate<button class="mini ${runState('verify')}" data-task="verify"
-            ${runState('verify') === 'running' ? 'disabled' : ''}>${
-              runState('verify') === 'running' ? 'running…' : 'run'
-            }</button></h3>` +
+          `<h3>the gate${button}</h3>` +
           (lastRunNote ? `<div class="run-note">${esc(lastRunNote)}</div>` : '') +
           row('last run', v.status + (v.when ? ' · ' + v.when : ''), cls) +
           v.steps.map((s) => row(s.name, s.ok ? 'ok' : 'failed', s.ok ? 'ok' : 'bad')).join('') +
@@ -2693,7 +2696,9 @@
       async function tick() {
         try {
           const d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
-          drawRuns(d)
+          // Before anything draws: every run button on the page reads this.
+          runStates = d.runs || {}
+          drawRuns()
           drawBoard(d)
           drawBacklog(d)
           drawHarness(d)
@@ -2757,9 +2762,13 @@
         // `push` sits in a lane's summary, where a plain click would also fold the
         // lane out from under the reader.
         e.preventDefault()
-        button.disabled = true
-        button.classList.add('running')
-        fetch('run/' + button.dataset.task, {method: 'POST'}).then(tick)
+        // Answer the press on this frame rather than waiting out the poll: mark it
+        // running in the state every run button is drawn from, then redraw this one
+        // from it, so it picks up the table's own busy label and loses its old one.
+        const key = button.dataset.task
+        runStates[key].state = 'running'
+        button.outerHTML = runButton(key)
+        fetch('run/' + key, {method: 'POST'}).then(tick)
       })
 
       tick()
