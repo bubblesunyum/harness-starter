@@ -64,8 +64,33 @@ how the pieces fit together.
 One account, not a team of thirteen agents, so the whole design is
 token-budgeted: progressive disclosure over always-loaded context, cheap models
 for bulk reading, diff-scoped review. The stock beads SessionStart hook
-(`bd prime`, ~1600 tokens every session) is replaced by `scripts/brief.sh`
-(~100).
+(`bd prime`, ~1900 tokens every session) is replaced by `scripts/brief.sh`
+(~200) — see below, because that replacement does not stay done on its own.
+
+## The brief overrides `bd setup claude`, and has to be re-applied
+
+`bd setup claude` installs a `bd prime --hook-json` SessionStart hook. The
+harness deliberately does not want it: `bd prime` is a command reference and a
+session-close protocol, which is what the `beads` skill holds and loads on
+demand. Always-loading it is the exact instinct progressive disclosure exists to
+resist, and it is not small — measured at 7,949 bytes against the brief's 1,072.
+What a session actually needs at wake-up is ledger *state*, and `brief.sh`
+already prints it: the seat, the last note, the ready list, the memory keys.
+
+The hook is additive, so it does not replace the brief — it runs beside it and
+both are paid for. It shipped that way in this starter and in the first project
+installed from it, undetected, because the always-loaded cost line counts docs
+and cannot see a hook.
+
+**So: after any `bd setup claude`, remove the `bd prime` entry from
+`.claude/settings.json` again.** The gate now catches it — `context.py` fails on
+any SessionStart hook that isn't the brief or the dashboard — but the gate runs
+after the session that already paid for it.
+
+It checks all three files whose hooks fire here: `~/.claude/settings.json`,
+`.claude/settings.json`, and `.claude/settings.local.json`. `bd setup claude
+--global` writes to the first, and a check that read only the project file would
+report a clean session while the hook ran from the user's home directory.
 
 New procedures become skills, new work becomes beads — the instinct to add one
 more paragraph to CLAUDE.md is the thing this design exists to resist.

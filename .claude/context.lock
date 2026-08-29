@@ -5,17 +5,17 @@
     ".claude/agents/reviewer-design.md": "37c85b605d41ad0a",
     ".claude/agents/reviewer-taste.md": "44b609dd1c241b4a",
     ".claude/skills/workflow/SKILL.md": "7897296475bca636",
-    "doc": "762277cfd2c2227c",
+    "doc": "a6c91f2b02439251",
     "scripts/brief.sh": "0915195c1bc945e5",
-    "scripts/context.py": "7cb2a0287ff5433e",
-    "scripts/review.sh": "97d2871db1270655",
+    "scripts/context.py": "b33f42a6f9b963ad",
+    "scripts/review.sh": "0e8e93cc41907785",
     "scripts/verify.sh": "44d9364e03360cb2"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "90952a828b39b6e6",
     ".claude/agents/reviewer-taste.md": "44b609dd1c241b4a",
-    "doc": "0c79367f5c3363f8",
-    "scripts/review.sh": "97d2871db1270655"
+    "doc": "2b3cc644c8dbb984",
+    "scripts/review.sh": "0e8e93cc41907785"
   },
   ".claude/skills/handoff/SKILL.md": {
     "doc": "2057ccf0d1825327",

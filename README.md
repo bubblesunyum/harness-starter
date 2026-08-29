@@ -43,8 +43,14 @@ added later.
 
 **Everything is token-budgeted.** One account means progressive disclosure over
 always-loaded context, cheap models for bulk reading, and review scoped to the
-diff rather than the tree. The brief replaces `bd prime` (~1600 tokens every
-session, whether or not the ledger gets touched) with ~100.
+diff rather than the tree. The brief replaces `bd prime` (~1900 tokens every
+session, whether or not the ledger gets touched) with ~200.
+
+That replacement is an override, not a default, and it does not stay done:
+`bd setup claude` reinstalls the `bd prime` hook every time it runs, beside the
+brief rather than instead of it. Remove it again afterwards — `scripts/context.py`
+fails the gate on any SessionStart hook that isn't the brief or the dashboard.
+`.claude/HARNESS.md` has the reasoning.
 
 **A reviewer that reads pixels.** Two diff-reading reviewers will both pass a
 card that clips every value it exists to show, because nothing in the diff is

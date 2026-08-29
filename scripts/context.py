@@ -38,6 +38,52 @@ MEMORY_INDEX = (Path.home() / ".claude/projects"
                 / str(ROOT).replace("/", "-") / "memory/MEMORY.md")
 
 
+# Every settings file whose SessionStart hooks fire in a session here — Claude
+# Code merges all three. `bd setup claude --global` writes to the first, so a
+# check that read only the project file would vouch for a clean session while
+# the hook ran from the user's home directory.
+SETTINGS = [Path.home() / ".claude/settings.json",
+            ROOT / ".claude/settings.json",
+            ROOT / ".claude/settings.local.json"]
+
+# What the harness installs. Anything else there is always-loaded context nobody
+# is counting — and generators put it there: `bd setup claude` writes a
+# `bd prime` hook (~1900 tokens) beside the brief that exists to replace it,
+# every time it runs. Matched by name rather than executed; a checker that ran
+# whatever it found configured would be a worse idea than the drift it catches.
+OWN_HOOKS = ("scripts/brief.sh", "scripts/dashboard.py")
+
+
+def foreign_hooks():
+    """(settings file, command) for every SessionStart hook the harness didn't
+    install. A file that won't parse is reported rather than skipped: this check
+    exists to fail loud, and failing open on a broken settings file is the one
+    outcome it can't afford."""
+    found = []
+    for path in SETTINGS:
+        if not path.exists():
+            continue
+        try:
+            settings = json.loads(path.read_text())
+        except (OSError, ValueError) as broken:
+            found.append((path, f"unreadable: {broken}"))
+            continue
+        for entry in settings.get("hooks", {}).get("SessionStart", []):
+            for hook in entry.get("hooks", []):
+                command = hook.get("command", "").strip()
+                if not any(own in command for own in OWN_HOOKS):
+                    found.append((path, command or "(entry with no command)"))
+    return found
+
+
+def where(path):
+    """Settings files live both inside the checkout and in the user's home."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path).replace(str(Path.home()), "~", 1)
+
+
 def tokens(text):
     return round(len(text) / 4)
 
@@ -149,6 +195,12 @@ def report(strict):
         names = ", ".join(str(s.relative_to(ROOT)) for s in moved)
         print(f"  STALE {doc.relative_to(ROOT)}")
         print(f"        {names} changed; the doc did not")
+    for path, command in foreign_hooks():
+        failed = True
+        print(f"  HOOK  unaccounted SessionStart hook: {command}")
+        print(f"        in {where(path)} — its hooks run in every session here")
+        print("        and the cost line below can't see them; see .claude/HARNESS.md")
+
     for doc in unblessed:
         print(f"  new   {doc.relative_to(ROOT)} — run 'scripts/context.py bless'")
 
