@@ -38,6 +38,7 @@ added later.
 | **Librarian** | audits the knowledge layer from a digest, on a cadence, and proposes what to delete |
 | **Dashboard** | `scripts/dashboard.py` — a live diagram of all of it at localhost:7391, backgrounded, opened in Claude Code's browser pane |
 | **Skills** | `workflow` (the hub), `agentic-review`, `beads`, `handoff` — each costs a description line until invoked |
+| **Contract** | `AGENTS.md` — how work is found, proved and left behind, written for any agent in any tool; `CLAUDE.md` imports it and keeps only what's project-specific |
 
 ## The four ideas worth keeping
 
@@ -78,9 +79,11 @@ things are left, because no script can infer them.
 1. **`harness/seat.md`** — the agent names the seat and writes what it's for.
    The Name field ships blank on purpose: until it's filled in the brief greets
    you as "unnamed", which is the file saying it isn't done.
-2. **`CLAUDE.snippet.md`** — paste its three sections into `CLAUDE.md`, then
-   delete it. They have to be always-loaded; everything else about the harness
-   lives behind the `workflow` skill, and should stay there.
+2. **`CLAUDE.md`** — this project's own standards: architecture, naming,
+   testing, the traps this codebase keeps hitting. The harness contract is
+   already installed as `AGENTS.md` and `CLAUDE.md` imports it, so don't repeat
+   any of it here — everything else about the harness lives behind the
+   `workflow` skill, and should stay there.
 3. **`scripts/verify.sh`** — the `PROJECT STEPS` block. Everything around it is
    scaffolding that works as-is.
 4. **The reviewers** — each of `.claude/agents/reviewer-*.md` has a `FILL THIS

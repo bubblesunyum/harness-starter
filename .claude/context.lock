@@ -7,7 +7,7 @@
     ".claude/skills/workflow/SKILL.md": "7897296475bca636",
     "doc": "a6c91f2b02439251",
     "scripts/brief.sh": "0915195c1bc945e5",
-    "scripts/context.py": "b33f42a6f9b963ad",
+    "scripts/context.py": "fc59580f472b1492",
     "scripts/review.sh": "0e8e93cc41907785",
     "scripts/verify.sh": "44d9364e03360cb2"
   },
@@ -24,5 +24,11 @@
   ".claude/skills/workflow/SKILL.md": {
     "doc": "7897296475bca636",
     "\u2026": ""
+  },
+  "AGENTS.md": {
+    "doc": "95b57e63ac6f8698",
+    "scripts/brief.sh": "0915195c1bc945e5",
+    "scripts/review.sh": "0e8e93cc41907785",
+    "scripts/verify.sh": "44d9364e03360cb2"
   }
 }

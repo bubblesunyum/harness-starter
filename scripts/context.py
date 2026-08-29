@@ -28,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = ROOT / ".claude/context.lock"
 
-DOCS = [ROOT / "CLAUDE.md", ROOT / ".claude/HARNESS.md",
+DOCS = [ROOT / "CLAUDE.md", ROOT / "AGENTS.md", ROOT / ".claude/HARNESS.md",
         *sorted((ROOT / ".claude/skills").glob("*/SKILL.md"))]
 
 # The memory index loads every session too, but it lives outside the repo, under
@@ -74,6 +74,21 @@ def foreign_hooks():
                 if not any(own in command for own in OWN_HOOKS):
                     found.append((path, command or "(entry with no command)"))
     return found
+
+
+def stray_beads_blocks():
+    """bd writes its managed guidance into every agent-instructions file it
+    finds, so a plain install ends up with the same text three times. One copy
+    survives, in AGENTS.md, because that is the file every agent reads."""
+    strays = []
+    for doc in (ROOT / "CLAUDE.md", ROOT / "AGENTS.md"):
+        if not doc.exists():
+            continue
+        blocks = doc.read_text().count("<!-- BEGIN BEADS")
+        allowed = 1 if doc.name == "AGENTS.md" else 0
+        if blocks > allowed:
+            strays.append((doc, blocks))
+    return strays
 
 
 def where(path):
@@ -128,8 +143,13 @@ def staleness():
 def budget():
     brief = subprocess.run(["bash", str(ROOT / "scripts/brief.sh")],
                            capture_output=True, text=True).stdout
-    parts = [("CLAUDE.md", tokens((ROOT / "CLAUDE.md").read_text())),
-             ("session brief", tokens(brief))]
+    # Both instruction files, because both are always-loaded — CLAUDE.md by
+    # Claude Code and AGENTS.md by opencode, and CLAUDE.md imports AGENTS.md so
+    # Claude Code pays for both too. Counting only CLAUDE.md would let a session
+    # move text into AGENTS.md and watch the number fall while nothing changed.
+    parts = [(doc.name, tokens(doc.read_text()))
+             for doc in (ROOT / "CLAUDE.md", ROOT / "AGENTS.md") if doc.exists()]
+    parts.append(("session brief", tokens(brief)))
     if MEMORY_INDEX.exists():
         parts.append(("MEMORY.md", tokens(MEMORY_INDEX.read_text())))
     descriptions = 0
@@ -200,6 +220,11 @@ def report(strict):
         print(f"  HOOK  unaccounted SessionStart hook: {command}")
         print(f"        in {where(path)} — its hooks run in every session here")
         print("        and the cost line below can't see them; see .claude/HARNESS.md")
+
+    for doc, blocks in stray_beads_blocks():
+        failed = True
+        print(f"  BEADS {doc.relative_to(ROOT)} carries {blocks} bd managed block(s)")
+        print("        one copy, in AGENTS.md — see .claude/HARNESS.md")
 
     for doc in unblessed:
         print(f"  new   {doc.relative_to(ROOT)} — run 'scripts/context.py bless'")

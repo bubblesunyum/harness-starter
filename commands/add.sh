@@ -179,6 +179,23 @@ else
   echo "  ignored .claude/launch.json"
 fi
 
+# Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
+# AGENTS.md. The import is what makes the contract always-loaded in both, rather
+# than a line of prose in one file politely suggesting the other — which is a
+# suggestion a model is free to skip, on the two rules it can least afford to.
+claude_md="$target/CLAUDE.md"
+if [ -e "$claude_md" ] && grep -qF '@AGENTS.md' "$claude_md"; then
+  echo "  CLAUDE.md already imports AGENTS.md"
+elif [ -e "$claude_md" ]; then
+  { printf '@AGENTS.md\n\n'; cat "$claude_md"; } > "$claude_md.tmp" &&
+    mv -f "$claude_md.tmp" "$claude_md"
+  echo "  CLAUDE.md now imports AGENTS.md"
+else
+  printf '@AGENTS.md\n\n# %s\n\nProject-specific standards: architecture, naming, testing, the traps\nthis codebase keeps hitting. The harness contract is in AGENTS.md.\n' \
+    "$name" > "$claude_md"
+  echo "  created CLAUDE.md"
+fi
+
 if command -v bd >/dev/null 2>&1; then
   # Keyed on whether a prefix came back above, not on `.beads` existing: the
   # directory can be there with no database behind it, and reporting that as an
@@ -193,6 +210,80 @@ if command -v bd >/dev/null 2>&1; then
 else
   echo "  ! bd is not installed — the ledger, the brief, and the commit hook all need it."
   echo "    See https://github.com/steveyegge/beads"
+fi
+
+# bd writes its managed guidance into every agent-instructions file it finds:
+# `bd init` puts a block in CLAUDE.md *and* in AGENTS.md, and `bd setup codex`
+# adds a second, shorter one to AGENTS.md. Three always-loaded copies of the
+# same text. One survives, in AGENTS.md, because that is the file every agent
+# reads. `bd init` also registers a `bd prime` SessionStart hook — ~1900 tokens
+# of command reference beside the brief that exists to replace it — so a fresh
+# install would otherwise start out paying for both. .claude/HARNESS.md has the
+# reasoning; the gate catches any of it coming back.
+if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  (cd "$target" && bd setup codex >/dev/null 2>&1) &&
+    echo "  beads guidance installed in AGENTS.md"
+  if python3 - "$target" <<'PYEOF'
+import json
+import re
+import sys
+from pathlib import Path
+
+# Requires the closing marker, so a file that somehow carries an unclosed BEGIN
+# is left alone rather than truncated from that line to the end.
+BLOCK = re.compile(r"<!-- BEGIN BEADS.*?<!-- END BEADS[^>]*-->\n*", re.S)
+target = Path(sys.argv[1])
+did = []
+
+
+def rewrite(path, text):
+    path.write_text(text)
+
+
+claude = target / "CLAUDE.md"
+if claude.exists() and BLOCK.search(claude.read_text()):
+    rewrite(claude, BLOCK.sub("", claude.read_text()).rstrip() + "\n")
+    did.append("removed the duplicate beads block from CLAUDE.md")
+
+# Of the copies bd leaves in AGENTS.md, keep the last — `bd setup codex` appends
+# its block after `bd init`'s, and the codex one is both shorter and the one
+# that recipe will keep up to date.
+agents = target / "AGENTS.md"
+if agents.exists():
+    blocks = BLOCK.findall(agents.read_text())
+    if len(blocks) > 1:
+        rewrite(agents, BLOCK.sub("", agents.read_text()).rstrip()
+                + "\n\n" + blocks[-1].rstrip() + "\n")
+        did.append(f"collapsed {len(blocks)} beads blocks in AGENTS.md into one")
+
+settings = target / ".claude/settings.json"
+if settings.exists():
+    config = json.loads(settings.read_text())
+    starts = config.get("hooks", {}).get("SessionStart", [])
+    kept = []
+    for entry in starts:
+        hooks = [h for h in entry.get("hooks", [])
+                 if "bd prime" not in h.get("command", "")]
+        if hooks:
+            entry["hooks"] = hooks
+            kept.append(entry)
+    if kept != starts:
+        config.setdefault("hooks", {})["SessionStart"] = kept
+        settings.write_text(json.dumps(config, indent=2) + "\n")
+        did.append("dropped the bd prime SessionStart hook")
+
+if did:
+    print("\n".join("  " + line for line in did))
+PYEOF
+  then :; else
+    echo "  ! couldn't tidy what bd installed — check CLAUDE.md, AGENTS.md" >&2
+    echo "    and .claude/settings.json against .claude/HARNESS.md." >&2
+  fi
+elif command -v python3 >/dev/null 2>&1; then
+  :
+else
+  echo "  ! python3 not found — CLAUDE.md and AGENTS.md may carry duplicate"
+  echo "    beads blocks, and .claude/settings.json a bd prime hook."
 fi
 
 (cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true
@@ -213,9 +304,9 @@ Do these now, in this order. They are the parts no script can infer.
    specifically. Fill in the Name field or the brief will greet you as
    "unnamed", which is the file telling you it isn't done.
 
-2. CLAUDE.snippet.md — paste its three sections into CLAUDE.md, delete the file.
-   They have to be always-loaded; everything else about the harness lives
-   behind the `workflow` skill and should stay there.
+2. CLAUDE.md — fill in this project's own standards: architecture, naming,
+   testing, the traps this codebase keeps hitting. AGENTS.md already holds the
+   harness contract and CLAUDE.md imports it, so don't repeat any of it here.
 
 3. scripts/verify.sh — the PROJECT STEPS block, with this project's real build
    and test commands. Everything around it works as-is.
