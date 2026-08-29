@@ -34,10 +34,11 @@ how the pieces fit together.
   diff, because a diff can't show you clipping. The packet carries untracked
   files too, and stages nothing to do it; its captures are dated from the
   working tree's first edit, so an unrelated session's screenshots stay out.
-  Its scope carries the docs and lists `bin/*` and `commands/*` by path: the two
-  most important files here have no extension, and a suffix-only scope left the
-  dispatcher unreviewable long enough for it to keep a path-traversal bug
-  through a full pass.
+  Its scope carries the docs, `*.html` for the dashboard page, and `bin/*` and
+  `commands/*` by path: the two most important files here have no extension, and
+  a suffix-only scope left the dispatcher unreviewable long enough for it to keep
+  a path-traversal bug through a full pass — then did the same to the dashboard
+  page, the largest file in the project, until `*.html` was added.
 - **Librarian:** `.claude/agents/librarian` (sonnet) audits the knowledge layer
   from a digest, on a cadence, never on the hot path. It proposes; the calling
   session decides.

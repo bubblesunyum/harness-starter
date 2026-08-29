@@ -56,7 +56,9 @@ nobody looked at is the defect.
 ## Why it's shaped like this
 
 - **Diff-scoped.** Reviewers see the change, not the repo. A review that reads
-  the whole tree costs more than writing the feature did.
+  the whole tree costs more than writing the feature did. The cost of that is a
+  `SCOPE` list in `scripts/review.sh` that has to earn every suffix it carries:
+  a file type missing from it is a file no reviewer has ever read.
 - **One packet, many readers.** `scripts/review.sh` writes the diff to a file
   once; each reviewer reads that file instead of running its own git commands.
   Three agents, one diff-assembly cost.

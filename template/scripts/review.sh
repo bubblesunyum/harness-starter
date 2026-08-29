@@ -44,7 +44,7 @@ fi
 # CLAUDE.md or a skill that quietly stopped being true is a defect the reviewers
 # should see, and a suffix-only scope is also how a file with no extension at all
 # stays unreviewable — list such files by path.
-SCOPE=('*.py' '*.sh' '*.md' 'scripts/hooks/*'
+SCOPE=('*.py' '*.sh' '*.md' '*.html' 'scripts/hooks/*'
        ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
 
 # Screenshots the design reviewer looks at. Whatever drives your app should
