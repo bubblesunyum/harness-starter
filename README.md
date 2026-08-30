@@ -115,6 +115,20 @@ what you just wrote. Nothing automates that yet — deleting the root copy and
 re-running `harness add` picks up the new version, but it will not touch a file
 that already exists, which is the whole reason it's safe everywhere else.
 
+`harness update` names the files this has already happened to:
+
+```bash
+harness update            # which files here differ from template/
+harness update --diff     # and how
+```
+
+It reports and never writes. Files carrying the contract — `AGENTS.md`,
+`opencode.json`, the skills, the scripts behind them — make it exit non-zero,
+because the project has no reason to edit them and a difference means a fix
+never arrived. Files with a `FILL THIS IN` block are meant to diverge, so those
+are listed quietly. `harness add` runs the same check on what it skips, so a
+re-run says which of those skips were the install failing.
+
 ## Adding a command
 
 `harness` is a dispatcher over `commands/`. A new command is a new file — no
@@ -122,6 +136,7 @@ case statement to edit, nothing to register:
 
 ```bash
 commands/<name>.sh        # harness <name>
+commands/lib/*.sh         # sourced helpers, not commands
 ```
 
 Line 2 of the file is its one-line description, and that's what the command

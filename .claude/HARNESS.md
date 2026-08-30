@@ -64,6 +64,38 @@ how the pieces fit together.
   also prints the alias, matched on the launch directory too so a stale map
   can't name the board after someone else's server.
 
+## Delivering fixes to installs that already exist
+
+`harness add` never overwrites. That is what makes re-running it safe, and it is
+also how a fix stops travelling: a project that already has `AGENTS.md` gets
+`skip (already there)`, the line scrolls past among thirty other skips, and the
+broken copy stays. The failure is silent, and silence on a broken install is the
+worst outcome this starter has.
+
+So the skip is split in two. Files the project is meant to edit — anything whose
+template carries a `FILL THIS IN` block, plus the data files it accumulates —
+skip quietly, because them differing is the harness working. Everything else is
+a **contract file**: `AGENTS.md`, `opencode.json`, the skills, the scripts behind
+them. Those the project has no reason to touch, so a difference means a starter
+fix never arrived, and `add` says so by name instead of skipping. `harness
+update` is the same check standing alone, with `--diff` for what actually
+changed.
+
+Which set a file is in is read off the template's own content rather than kept as
+a list. A list goes stale in the direction that produces false alarms, and a
+warning nobody believes is worth less than no warning.
+
+Nothing is ever overwritten, here or there. Half these files have local edits in
+them by design, so merging is a judgment call — and a command that overwrote
+them would be a command nobody could afford to run.
+
+The comparison has to allow for the installer's own post-copy edits, or every
+fresh install reads as stale: `bd setup codex` appends a block to `AGENTS.md`,
+and the tidier rewrites `.claude/settings.json` through `json.dumps`, reordering
+every key. Both are normalised away on both sides. The gate has a step that
+installs into a throwaway repo and asserts the result reads as current, because
+that particular false alarm is invisible in the diff that causes it.
+
 ## Why it's shaped this way
 
 One account, not a team of thirteen agents, so the whole design is

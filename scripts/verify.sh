@@ -81,7 +81,7 @@ fi
 
 step "shell parses" bash -c '
   set -e
-  for f in bin/harness commands/*.sh scripts/*.sh scripts/hooks/* \
+  for f in bin/harness commands/*.sh commands/lib/*.sh scripts/*.sh scripts/hooks/* \
            template/scripts/*.sh template/scripts/hooks/*; do
     [ -f "$f" ] || continue
     bash -n "$f" || { echo "error: $f"; exit 1; }
@@ -111,6 +111,19 @@ step "placeholders substitute" bash -c '
   left=$(grep -rl "{{" "$probe" --include="*.sh" --include="*.py" --include="*.md" \
                 --include="*.html" --include="*.json" 2>/dev/null || true)
   [ -z "$left" ] || { echo "error: placeholders survived in: $left"; exit 1; }'
+
+# A fresh install has to come out clean, or the drift warning cries wolf on every
+# project that ever ran `harness add` — and a warning nobody believes is worse
+# than no warning. This caught it once already: the installer's own post-copy
+# edits to AGENTS.md and .claude/settings.json read as drift until the comparison
+# learned to normalise them away.
+step "a fresh install reads as current" bash -c '
+  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$probe\"" EXIT
+  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) || {
+    echo "error: update called a fresh install stale"; echo "$out"; exit 1; }'
 
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
