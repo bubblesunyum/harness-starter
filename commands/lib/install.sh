@@ -225,3 +225,23 @@ harness_current() {
   rm -f "$rendered"
   return "$result"
 }
+
+# The Dolt remote URL for a git origin. bd speaks its own dialect: a `git+`
+# scheme prefix, and no scp-style shorthand — `bd dolt remote add` rejects
+# `git@github.com:org/repo.git` outright ("first path segment in URL cannot
+# contain colon"), so the form every `git clone` prints has to be rewritten into
+# a real ssh:// URL before bd will take it.
+#
+# Empty for anything unrecognised rather than a guess. A wrong remote pushes the
+# ledger somewhere nobody will look for it, and reports success doing it.
+harness_dolt_remote_url() {
+  local url="$1"
+  case "$url" in
+    git+*)                        printf '%s\n' "$url" ;;
+    https://*|http://*|ssh://*|file://*)
+                                  printf 'git+%s\n' "$url" ;;
+    *@*:*)                        printf 'git+ssh://%s/%s\n' "${url%%:*}" "${url#*:}" ;;
+    /*)                           printf 'git+file://%s\n' "$url" ;;
+    *)                            printf '\n' ;;
+  esac
+}

@@ -162,14 +162,57 @@ if command -v bd >/dev/null 2>&1; then
   # initialised ledger is how you find out later, one failing `bd` at a time.
   if [ -n "$existing_prefix" ]; then
     echo "  ledger already initialised ($prefix-)"
+    ledger=1
   elif (cd "$target" && bd init --prefix "$prefix" >/dev/null 2>&1); then
     echo "  initialised the ledger ($prefix-)"
+    ledger=1
   else
     echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
   fi
 else
   echo "  ! bd is not installed — the ledger, the brief, and the commit hook all need it."
   echo "    See https://github.com/steveyegge/beads"
+fi
+
+# The ledger's issues live in .beads/embeddeddolt/, which is gitignored, so a
+# normal `git push` carries nothing of it. bd keeps it on its own ref instead,
+# and reaching that ref needs a Dolt remote. `bd init` writes one itself — but
+# only when the target already had an origin at that moment, and it says nothing
+# when it doesn't. A repo whose remote arrived later, or whose ledger predates
+# this step, ends up with every bead it has ever filed living on one disk.
+#
+# Gated on `$ledger` rather than on `.beads` existing, for the reason the block
+# above spells out: against a directory with no database behind it every `bd`
+# here fails for that one reason, and this would report it as a remote that
+# wouldn't register — sending whoever reads it after the wrong bug.
+if [ -n "${ledger:-}" ]; then
+  origin_url="$(git -C "$target" remote get-url origin 2>/dev/null || true)"
+  dolt_url="$(harness_dolt_remote_url "$origin_url")"
+  # Compared against the URL origin resolves to *now*, not merely checked for
+  # existence. A project that moves host, renames its org, or is re-pointed at a
+  # fork keeps the remote it was first installed with, and a check for the name
+  # alone would call that healthy while the ledger went on being pushed
+  # somewhere nobody is looking — the same silence this whole block exists to end.
+  current="$( (cd "$target" && bd dolt remote list 2>/dev/null) | awk '$1 == "origin" { print $2 }' )"
+  if [ -z "$origin_url" ]; then
+    echo "  ! no git origin — the ledger has nowhere to push and stays on this machine."
+    echo "    Once the repo has one: bd dolt remote add origin git+<the origin URL>"
+  elif [ -z "$dolt_url" ]; then
+    echo "  ! don't know how to reach '$origin_url' as a Dolt remote — the ledger"
+    echo "    stays on this machine. bd takes git+https://, git+ssh:// and git+file:// URLs."
+  elif [ "$current" = "$dolt_url" ]; then
+    echo "  ledger already pushes to origin"
+  elif (cd "$target" && bd dolt remote add origin "$dolt_url" >/dev/null 2>&1); then
+    if [ -n "$current" ]; then
+      echo "  ledger now pushes to origin (was $current)"
+    else
+      echo "  ledger pushes to origin"
+    fi
+  else
+    echo "  ! couldn't register the Dolt remote. Run this yourself and read the error:" >&2
+    echo "      bd dolt remote add origin $dolt_url" >&2
+    echo "    Until it succeeds the ledger stays on this machine." >&2
+  fi
 fi
 
 # bd writes its managed guidance into every agent-instructions file it finds:

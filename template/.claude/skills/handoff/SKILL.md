@@ -19,8 +19,11 @@ and finish the piece first.
    open with `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
    Anything that surprised you written with `bd remember`.
 2. **Prove the tree.** `scripts/verify.sh` passes and the work is committed.
-3. **Write the note.** Below.
-4. **Say what you'd pick up next**, in the note. The next session's brief shows
+3. **Push the ledger.** `scripts/ledger-push.sh`. The beads are not in the commit
+   you just made — they ride their own git ref, and nothing moves it for you. A
+   session that skips this leaves the whole ledger on one disk.
+4. **Write the note.** Below.
+5. **Say what you'd pick up next**, in the note. The next session's brief shows
    this before it shows the ready list.
 
 ## The note
