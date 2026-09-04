@@ -64,6 +64,28 @@ how the pieces fit together.
   also prints the alias, matched on the launch directory too so a stale map
   can't name the board after someone else's server.
 
+  It costs nothing when nobody is looking, and that took deliberate work.
+  Rebuilding state means three `bd` spawns — each opening the embedded Dolt
+  engine cold — plus git and a read of every skill and gate log. Doing that
+  every two seconds for an empty room measured at roughly two thirds of a core
+  across three projects' dashboards, and it was the largest single consumer of
+  idle CPU on the machine. So the refresher watches for polls: a browser that
+  asked for state in the last 30s gets the `REFRESH` cadence, nobody gets
+  `IDLE_REFRESH`, and a poll after a quiet spell wakes the thread rather than
+  waiting out the rest. Past `EXIT_AFTER` with no poll at all the server stops
+  itself, and the `SessionEnd` hook calls `dashboard.py down` to stop it
+  properly first — the timeout is the backstop for a session that dies without
+  running its hooks. Three of these were found running with no session open,
+  which is what the pair exists to prevent.
+
+`harness add` also turns bd's telemetry off (`metrics.disabled`). Every `bd`
+invocation otherwise forks a detached `bd send-metrics` that POSTs to a
+third-party endpoint, and the dashboard runs `bd` several times a poll — on one
+machine that came to roughly 150k requests a day. Network wakeups are weighted
+heavily in macOS's energy accounting, which is why `bd` and not `python` was
+what showed up at the top of Activity Monitor. The setting is global to the
+user, so turning it off once covers every project.
+
 ## Delivering fixes to installs that already exist
 
 `harness add` never overwrites. That is what makes re-running it safe, and it is

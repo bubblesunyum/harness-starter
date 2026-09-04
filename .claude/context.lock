@@ -5,7 +5,7 @@
     ".claude/agents/reviewer-design.md": "37c85b605d41ad0a",
     ".claude/agents/reviewer-taste.md": "44b609dd1c241b4a",
     ".claude/skills/workflow/SKILL.md": "7897296475bca636",
-    "doc": "9a8295391b2967c9",
+    "doc": "700300dd13cccb52",
     "scripts/brief.sh": "0915195c1bc945e5",
     "scripts/context.py": "fc59580f472b1492",
     "scripts/opencode-agents.py": "5e28af95787ef261",
@@ -19,7 +19,7 @@
     "scripts/review.sh": "eb9e430d37f0fdc8"
   },
   ".claude/skills/handoff/SKILL.md": {
-    "doc": "2057ccf0d1825327",
+    "doc": "8581c822fc87cc9e",
     "scripts/brief.sh": "0915195c1bc945e5"
   },
   ".claude/skills/workflow/SKILL.md": {

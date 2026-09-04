@@ -30,6 +30,19 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/dashboard.py down",
+            "statusMessage": "stopping the harness dashboard",
+            "timeout": 15,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
     ]
   }
 }

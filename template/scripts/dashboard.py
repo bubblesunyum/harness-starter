@@ -26,6 +26,7 @@ import http.server
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -76,15 +77,26 @@ def bd_json(*args):
 
 def git_state():
     dirty = [l for l in run("git", "status", "--porcelain").splitlines() if l.strip()]
-    log = run("git", "log", "-1", "--format=%h\x1f%s\x1f%cr")
-    sha, subject, when = (log.split("\x1f") + ["", "", ""])[:3]
+    # One `git log` for both the last commit and today's count: the newest entry
+    # is the first line, and the rest are what "today" means. Two invocations
+    # here cost as much as the whole rest of the build, and the refresher pays
+    # them on every cycle.
     since = time.strftime("%Y-%m-%dT00:00:00")
-    today = run("git", "log", "--since", since, "--oneline")
+    today = run("git", "log", "--since", since, "--format=%h\x1f%s\x1f%cr")
+    lines = [l for l in today.splitlines() if l.strip()]
+    if lines:
+        sha, subject, when = (lines[0].split("\x1f") + ["", "", ""])[:3]
+    else:
+        # Nothing today, so the last commit is older than the window and needs
+        # its own read.
+        log = run("git", "log", "-1", "--format=%h\x1f%s\x1f%cr")
+        sha, subject, when = (log.split("\x1f") + ["", "", ""])[:3]
 
     # Landed locally but not shared yet. A bead named in one of these commits is
     # done in the working copy and invisible to anywhere else, which is its own
     # state worth seeing.
     upstream = run("git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    branch = run("git", "rev-parse", "--abbrev-ref", "HEAD")
     unpushed, mentioned = [], {}
     if upstream:
         raw = run("git", "log", f"{upstream}..HEAD", "--format=%h\x1f%s\x1f%b\x1f%ct\x1e")
@@ -102,10 +114,10 @@ def git_state():
                                      "subject": unpushed[-1]["subject"]})
 
     return {
-        "branch": run("git", "rev-parse", "--abbrev-ref", "HEAD"),
+        "branch": branch,
         "upstream": upstream,
         "dirty": len(dirty),
-        "commits_today": len([l for l in today.splitlines() if l.strip()]),
+        "commits_today": len(lines),
         "last": {"sha": sha, "subject": subject, "when": when},
         "unpushed": unpushed,
         "unpushed_beads": sorted(mentioned),
@@ -304,8 +316,21 @@ def ledger_state():
 
     # Yegge's Beadle watches for work that's simply stuck or dropped. With one
     # person there's no agent to nudge, so the number just has to be visible.
-    stale = len(bd_json("stale", "--days", "14"))
-    return {"counts": counts, "issues": issues, "stale": stale}
+    # It is a count over a fortnight and cannot change between two builds a few
+    # seconds apart, so it does not deserve a `bd` spawn on every one.
+    return {"counts": counts, "issues": issues, "stale": cached_stale()}
+
+
+# How long a stale count is reused before another `bd stale` is spawned.
+STALE_TTL = 300.0
+_stale = {"n": 0, "at": 0.0}
+
+
+def cached_stale():
+    if time.time() - _stale["at"] > STALE_TTL:
+        _stale["n"] = len(bd_json("stale", "--days", "14"))
+        _stale["at"] = time.time()
+    return _stale["n"]
 
 
 # ── FILL THIS IN ──────────────────────────────────────────────────────────
@@ -317,14 +342,29 @@ def ledger_state():
 VERDICT = r"(?!)"
 
 
-def verify_state():
-    """Read the last gate run off its logs rather than running it — the dashboard
-    reports on the system, it doesn't drive it."""
-    logs = Path("/tmp/{{PREFIX}}-verify")
-    if not logs.is_dir():
-        return {"status": "never run", "when": "", "tests": "", "steps": [],
-                "unverified": 0, "took": "", "at": 0}
+def ago_for(at):
+    """How long ago, in the board's words. Empty for something that never ran."""
+    if not at:
+        return ""
+    mins = int((time.time() - at) / 60)
+    return "just now" if mins < 1 else (f"{mins}m ago" if mins < 90 else f"{mins // 60}h ago")
 
+
+# Reading the gate's logs is the expensive half of `verify_state` — tens of
+# thousands of lines — and they change only when the gate runs, which is not
+# every few seconds. Keyed on what every log's mtime and size add up to, so a
+# finished run invalidates it and a quiet minute costs no reads at all.
+#
+# Only what is *derived from the logs* may live here. `unverified` is a live
+# `git log` against the working copy and goes out of date the moment a commit
+# lands, with the logs untouched — caching it alongside these froze the one
+# number on the board whose whole job is to notice work the gate hasn't seen.
+_verify = {"key": None, "read": None}
+
+
+def read_logs(logs):
+    """What the gate's own logs say: its steps, when they were written, the test
+    line, and the verdict over all of them."""
     steps, newest = [], 0
     for log in sorted(logs.glob("*.log")):
         text = log.read_text(errors="ignore")
@@ -348,10 +388,24 @@ def verify_state():
             tests = f"{m[-1][0]} tests, {m[-1][1]} failing"
 
     status = "passed" if steps and all(s["ok"] for s in steps) else ("failed" if steps else "never run")
-    ago = ""
-    if newest:
-        mins = int((time.time() - newest) / 60)
-        ago = "just now" if mins < 1 else (f"{mins}m ago" if mins < 90 else f"{mins // 60}h ago")
+    return steps, newest, tests, status
+
+
+def verify_state():
+    """Read the last gate run off its logs rather than running it — the dashboard
+    reports on the system, it doesn't drive it."""
+    logs = Path("/tmp/{{PREFIX}}-verify")
+    if not logs.is_dir():
+        return {"status": "never run", "when": "", "tests": "", "steps": [],
+                "unverified": 0, "took": "", "at": 0}
+
+    key = tuple(sorted((f.name, f.stat().st_mtime, f.stat().st_size)
+                       for f in logs.glob("*.log")))
+    if _verify["key"] == key:
+        steps, newest, tests, status = _verify["read"]
+    else:
+        steps, newest, tests, status = read_logs(logs)
+        _verify["key"], _verify["read"] = key, (steps, newest, tests, status)
 
     # What's landed since the gate last ran. Yegge watches commit rate against
     # build time because that gap is where unproven code accumulates; the same
@@ -375,7 +429,7 @@ def verify_state():
         if secs.isdigit():
             took = f"{int(secs)}s" if int(secs) < 90 else f"{int(secs) // 60}m {int(secs) % 60}s"
 
-    return {"status": status, "when": ago, "tests": tests, "steps": steps,
+    return {"status": status, "when": ago_for(newest), "tests": tests, "steps": steps,
             "unverified": unverified, "took": took, "at": newest}
 
 
@@ -391,12 +445,33 @@ def frontmatter(text):
     return meta, m.group(2)
 
 
+# Parsed skill and agent files, keyed by path and invalidated on mtime. These
+# change when someone edits a skill, which is not something that happens between
+# two builds seconds apart — and re-reading and re-tokenising every one of them
+# on every cycle was pure disk traffic.
+_catalog = {}
+
+
+def parsed(f):
+    """`frontmatter` for a file, re-reading only when it has actually changed."""
+    try:
+        stamp = f.stat().st_mtime
+    except OSError:
+        return {}, ""
+    hit = _catalog.get(f)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    got = frontmatter(f.read_text(errors="ignore"))
+    _catalog[f] = (stamp, got)
+    return got
+
+
 def catalog():
     """Skills and agents, with what each costs when idle versus when used. This
     is the whole argument for progressive disclosure, made visible."""
     skills, agents = [], []
     for f in sorted((ROOT / ".claude/skills").glob("*/SKILL.md")):
-        meta, body = frontmatter(f.read_text(errors="ignore"))
+        meta, body = parsed(f)
         skills.append({
             "name": meta.get("name", f.parent.name),
             "description": meta.get("description", ""),
@@ -404,7 +479,7 @@ def catalog():
             "loaded": tokens(body),
         })
     for f in sorted((ROOT / ".claude/agents").glob("*.md")):
-        meta, body = frontmatter(f.read_text(errors="ignore"))
+        meta, body = parsed(f)
         agents.append({
             "name": meta.get("name", f.stem),
             "model": meta.get("model", "inherit"),
@@ -784,19 +859,64 @@ _snapshot = {"data": None}
 _built = threading.Event()
 _wake = threading.Event()
 
-# How long the refresher rests between builds, not how long a build takes — a
-# build is a second or two here and will be longer on a big ledger, so the real
-# cycle is that plus this. Nothing downstream depends on the number: the page
-# shows when the snapshot it is drawing was generated, so a slow machine reads
-# as an honest timestamp rather than a board that lies about being current.
-REFRESH = 2.0
+# How long the refresher rests between builds while someone is watching, not how
+# long a build takes — a build is a second or two here and will be longer on a
+# big ledger, so the real cycle is that plus this. Nothing downstream depends on
+# the number: the page shows when the snapshot it is drawing was generated, so a
+# slow machine reads as an honest timestamp rather than a board that lies about
+# being current. 5s rather than something tighter because the ledger does not
+# change faster than that and every build is three `bd` spawns.
+REFRESH = 5.0
+# What it rests instead once nobody has polled in a while. A build is not free —
+# three `bd` invocations, each opening the embedded Dolt engine cold, plus git —
+# and paying it every few seconds for an empty room is what made `bd` the top
+# entry in Activity Monitor's Energy tab with no session open.
+IDLE_REFRESH = 60.0
+# No poll in this long means no browser is attached. Comfortably longer than the
+# page's own poll interval, so a viewer never trips it.
+IDLE_AFTER = 30.0
 # Long enough to cover a cold bd on a big ledger. Past it, something is wrong in
 # a way that silence would hide.
 FIRST_BUILD_TIMEOUT = 60.0
+# No poll in this long means the session that started this server is gone.
+# Serving a board nobody has looked at for an hour is what left three of these
+# running across three projects. 0 disables the exit.
+EXIT_AFTER = float(os.environ.get("DASHBOARD_EXIT_AFTER", 3600))
+
+# When the page last asked for state. Seeded to launch so the first build still
+# happens promptly for the browser `up` is about to open.
+#
+# `monotonic`, not `time()`: a laptop that sleeps for two hours with the board
+# open wakes with a wall-clock gap longer than EXIT_AFTER, and the refresher —
+# which resumes a moment before the page's own timer does — would read that as
+# an abandoned dashboard and exit in the second before the user's next poll
+# arrived. `monotonic` does not tick across system sleep, so a suspend reads as
+# what it is: no time passed for anybody.
+_last_poll = {"at": time.monotonic()}
+
+# The port this process serves, once it has bound one. Every exit that isn't
+# ctrl-c happens away from the `serve` block's `finally`, and a claim file left
+# behind after the process is gone makes the next `up` report a dashboard that
+# isn't there.
+_bound_port = {"port": None}
+
+
+def shutdown(reason, code=0):
+    """Leave, releasing the port claim on the way out."""
+    port = _bound_port["port"]
+    if port is not None:
+        claim_file(port).unlink(missing_ok=True)
+    print(f"! {reason}", flush=True)
+    os._exit(code)
+
+
+def watched():
+    """Whether a browser has polled recently enough to be worth building for."""
+    return time.monotonic() - _last_poll["at"] < IDLE_AFTER
 
 
 def refresher():
-    """Rebuild the state forever, resting REFRESH between builds."""
+    """Rebuild the state forever, resting longer once nobody is watching."""
     while True:
         try:
             data = state()
@@ -810,10 +930,14 @@ def refresher():
             # serving a frozen picture is the failure this file is arranged
             # against.
             print(f"! state build failed: {e}", flush=True)
-        # Woken early by anything that changes the answer — a run finishing, a
-        # file staged — so those land on the next poll instead of waiting out
-        # the rest.
-        _wake.wait(REFRESH)
+        idle = time.monotonic() - _last_poll["at"]
+        if EXIT_AFTER and idle > EXIT_AFTER:
+            since = f"{idle / 60:.0f}m" if idle >= 60 else f"{idle:.0f}s"
+            shutdown(f"nobody polled in {since} — exiting")
+        # An unwatched board costs a build a minute instead of one every few
+        # seconds. The next poll wakes the thread through `touch()`, so the
+        # first thing a returning viewer sees is at most one build old.
+        _wake.wait(REFRESH if watched() else IDLE_REFRESH)
         _wake.clear()
 
 
@@ -880,6 +1004,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/state.json"):
+            # A poll is the only evidence anyone is watching. Recording it before
+            # the wake means the refresher re-reads a fresh `_last_poll`, so the
+            # build it starts is already on the watched cadence.
+            was_idle = not watched()
+            _last_poll["at"] = time.monotonic()
+            if was_idle:
+                touch()
             return self.send_json(cached_state())
         if self.path.startswith("/diff"):
             wanted = unquote(parse_qs(urlparse(self.path).query).get("path", [""])[0])
@@ -941,6 +1072,37 @@ def holder(port):
         return json.loads(claim_file(port).read_text()).get("root")
     except Exception:
         return "unknown"
+
+
+def held_pid(port):
+    """The pid serving this checkout's port, or None. Only ever this checkout's
+    own — signalling another project's dashboard is not `down`'s business."""
+    try:
+        claim = json.loads(claim_file(port).read_text())
+    except Exception:
+        return None
+    if claim.get("root") != str(ROOT):
+        return None
+    pid = claim.get("pid")
+    return pid if isinstance(pid, int) else None
+
+
+def stop_serving():
+    """Stop this checkout's dashboard, if it has one. Idempotent: a session that
+    ends with no server running is the normal case, not an error."""
+    for port in range(PORT, PORT + 20):
+        pid = held_pid(port)
+        if pid is None or not is_serving(port):
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            # Already gone, and the claim file outlived it. Clear the stale
+            # claim so the next `up` does not read the port as taken.
+            claim_file(port).unlink(missing_ok=True)
+            continue
+        return f"stopped the dashboard on {port}"
+    return "no dashboard running"
 
 
 def free_port(start):
@@ -1110,7 +1272,7 @@ def shot(path, port, width=900, height=1400):
     return path if Path(path).exists() else "chrome wrote nothing"
 
 
-COMMANDS = ("up", "serve", "snapshot", "shot")
+COMMANDS = ("up", "down", "serve", "snapshot", "shot")
 
 
 def main():
@@ -1125,6 +1287,15 @@ def main():
 
     if command == "snapshot":
         print(write_snapshot())
+        return
+
+    # What the SessionEnd hook calls. A dashboard exists to be looked at during
+    # a session; one left running afterwards polls `bd` forever for an empty
+    # room, and across a few projects that was the whole of this machine's
+    # idle CPU. The server also times itself out (EXIT_AFTER) — this is the
+    # tidy path, that is the backstop.
+    if command == "down":
+        print(stop_serving())
         return
 
     explicit_port = "--port" in args
@@ -1206,7 +1377,11 @@ def main():
 
     url = f"http://localhost:{port}/"
     with srv:
-        claim_file(port).write_text(json.dumps({"root": str(ROOT)}))
+        _bound_port["port"] = port
+        claim_file(port).write_text(json.dumps({"root": str(ROOT), "pid": os.getpid()}))
+        # `down` sends SIGTERM, whose default disposition kills the process
+        # outright — past the `finally` below, leaving the claim file behind.
+        signal.signal(signal.SIGTERM, lambda *_: shutdown("stopped"))
         write_launch_config(port)
         announce(url, "ctrl-c to stop")
         # Started before the first request, so the opening poll usually finds a

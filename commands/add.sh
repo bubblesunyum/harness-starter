@@ -169,6 +169,15 @@ if command -v bd >/dev/null 2>&1; then
   else
     echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
   fi
+  # Every `bd` invocation forks a detached `bd send-metrics` that POSTs to a
+  # third-party endpoint. The dashboard runs `bd` several times a poll, so this
+  # is not a handful of events a day — it was measured at ~150k POSTs a day on
+  # one machine, and network wakeups are what put `bd` at the top of Activity
+  # Monitor's Energy tab with no session open. The setting is global rather than
+  # per-repo, so this is idempotent across projects.
+  (bd config set metrics.disabled true >/dev/null 2>&1) &&
+    echo "  bd telemetry off" ||
+    echo "  ! could not turn bd telemetry off — run 'bd config set metrics.disabled true'."
 else
   echo "  ! bd is not installed — the ledger, the brief, and the commit hook all need it."
   echo "    See https://github.com/steveyegge/beads"
