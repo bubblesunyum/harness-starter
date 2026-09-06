@@ -318,7 +318,14 @@ def ledger_state():
     # person there's no agent to nudge, so the number just has to be visible.
     # It is a count over a fortnight and cannot change between two builds a few
     # seconds apart, so it does not deserve a `bd` spawn on every one.
-    return {"counts": counts, "issues": issues, "stale": cached_stale()}
+    #
+    # The quick-add row suggests labels while typing. The page could derive them
+    # from the issues it already has, but a ledger whose labels all sit on
+    # closed beads would then suggest nothing — so the full set rides along.
+    # Computed before the closed-bead trim below, which is what would hide them.
+    all_labels = sorted({l for i in issues for l in (i.get("labels") or [])})
+    return {"counts": counts, "issues": issues, "stale": cached_stale(),
+            "all_labels": all_labels}
 
 
 # How long a stale count is reused before another `bd stale` is spawned.
@@ -760,6 +767,125 @@ def commit(message, amend):
     return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[:300]}
 
 
+# The board's own writes: filing a bead and dragging one between lanes. Like
+# TASKS and the work-tree actions, these run fixed `bd` invocations — nothing
+# in a request reaches a shell, and the id, lane and labels are validated
+# before they get near one.
+BEAD_ID = re.compile(r"^{{PREFIX}}-[a-z0-9]+(?:\.\d+)?$")
+# The lanes a card can be dropped on. Kept in step with DROP_LANES and the
+# backlog strip's data-drop in dashboard/index.html by hand — the page can't
+# read this table, so a lane added here needs adding there too.
+MOVE_LANES = ("ready", "blocked", "in_progress", "review", "done", "backlog")
+LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def bd_run(*args):
+    """A `bd` write, with its verdict kept. Reads use bd_json and run(), which
+    swallow failures into empty output; a write has to say whether it landed."""
+    try:
+        r = subprocess.run(["bd", *args], capture_output=True, text=True,
+                           timeout=25, cwd=ROOT)
+        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
+    except Exception as e:
+        return 1, "", str(e)[:200]
+
+
+def create_bead(payload):
+    # read_json returns whatever the body parsed as — a list or a number is a
+    # 400-shaped problem, not an AttributeError that drops the connection.
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "bad request"}
+    title = payload.get("title")
+    title = title.strip() if isinstance(title, str) else ""
+    if not title:
+        return {"ok": False, "error": "title is empty"}
+    if len(title) > 300:
+        return {"ok": False, "error": "title is too long (300 characters)"}
+    description = payload.get("description")
+    description = description.strip() if isinstance(description, str) else ""
+    # Rejected rather than sliced: a silent trim files something the reader
+    # didn't write, and the composer can't tell it happened.
+    if len(description) > 5000:
+        return {"ok": False, "error": "description is too long (5000 characters)"}
+    try:
+        priority = int(payload.get("priority", 2))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "priority must be 0–4"}
+    if priority not in (0, 1, 2, 3, 4):
+        return {"ok": False, "error": "priority must be 0–4"}
+    labels = payload.get("labels") or []
+    if isinstance(labels, str):
+        labels = [s.strip() for s in labels.split(",")]
+    if not isinstance(labels, (list, tuple)):
+        return {"ok": False, "error": "labels must be an array"}
+    if len([l for l in labels if str(l).strip()]) > 10:
+        return {"ok": False, "error": "at most 10 labels"}
+    clean = []
+    for label in labels[:10]:
+        label = str(label).strip()
+        if not label:
+            continue
+        if not LABEL_RE.match(label) or len(label) > 40:
+            return {"ok": False, "error": f"bad label: {label}"}
+        if label not in clean:
+            clean.append(label)
+    args = ["create", "--title", title, "--priority", str(priority), "--json"]
+    if description:
+        args += ["--description", description]
+    if clean:
+        args += ["--labels", ",".join(clean)]
+    code, out, err = bd_run(*args)
+    if code != 0:
+        return {"ok": False, "error": (err or out or "bd create failed")[:300]}
+    try:
+        created = json.loads(out) if out else {}
+    except json.JSONDecodeError:
+        created = {}
+    return {"ok": True, "id": created.get("id", "")}
+
+
+def move_bead(payload):
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "bad request"}
+    bead = payload.get("id")
+    bead = bead.strip() if isinstance(bead, str) else ""
+    lane = payload.get("lane")
+    lane = lane.strip() if isinstance(lane, str) else ""
+    if not BEAD_ID.match(bead):
+        return {"ok": False, "error": "not a bead id"}
+    if lane not in MOVE_LANES:
+        return {"ok": False, "error": "not a bead lane"}
+    # A drag lands a bead in a lane, whatever it was before. Reopening
+    # something already open says so and exits 0, so there is no need to ask
+    # what it is first — every target but done starts from open.
+    if lane == "done":
+        code, out, err = bd_run("close", bead)
+        if code != 0:
+            return {"ok": False, "error": f"close failed: {(err or out or 'bd close failed')}"[:300]}
+        return {"ok": True}
+    if lane == "review":
+        action, cleanup = ("label", "add", bead, "review"), ("backlog",)
+    elif lane == "backlog":
+        action, cleanup = ("label", "add", bead, "backlog"), ()
+    else:
+        status = {"ready": "open", "blocked": "blocked",
+                  "in_progress": "in_progress"}[lane]
+        action = ("update", bead, "--status", status)
+        # Review outranks every open lane on the board: a bead that keeps the
+        # label lands in review, not where it was dropped. Backlog keeps it
+        # off the board altogether, for the same reason.
+        cleanup = ("review", "backlog")
+    bd_run("reopen", bead)
+    code, out, err = bd_run(*action)
+    if code != 0:
+        return {"ok": False, "error": (err or out or "bd failed")[:300]}
+    stuck = [label for label in cleanup if bd_run("label", "remove", bead, label)[0] != 0]
+    if stuck:
+        return {"ok": False,
+                "error": f"moved, but {', '.join(stuck)} still attached — drop it again"}
+    return {"ok": True}
+
+
 # The loops a human still triggers by hand. Kept as a fixed table rather than
 # anything the page can name, so the only commands this server will ever run are
 # the ones written here. It is also the only place a run button is described:
@@ -970,6 +1096,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(body)
             # A run changes what the page should show, so don't make it wait out
             # the cache before it finds out.
+            touch()
+            return
+        # The board's own writes. The id and lane are validated inside, the
+        # same way a work-tree path is checked against git status below.
+        if self.path.startswith("/beads/"):
+            action = self.path[len("/beads/"):].split("?")[0]
+            data = read_json(self)
+            if action == "create":
+                result = create_bead(data)
+            elif action == "move":
+                result = move_bead(data)
+            else:
+                return self.send_error(404)
+            self.send_json(result)
             touch()
             return
         if self.path.startswith("/worktree/"):

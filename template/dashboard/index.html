@@ -816,10 +816,22 @@
         color: var(--ok);
       }
       /* Sits ahead of the title in the card's own flex row, so it needs its own
-     width protected — the title is the flexible side, not this. */
+      width protected — the title is the flexible side, not this. */
       .chip.prio {
         flex-shrink: 0;
         background: color-mix(in srgb, var(--ink) 8%, transparent);
+        color: var(--dim);
+      }
+      /* The bead's last three characters, so a card can be named out loud.
+      Monospace and un-uppercased: it reads as an id, not a status. */
+      .chip.id {
+        flex-shrink: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: 0;
+        background: none;
+        border: 1px solid var(--line);
         color: var(--dim);
       }
       .waits {
@@ -830,6 +842,189 @@
         font-size: 11.5px;
         font-style: italic;
         padding: 6px 2px;
+      }
+
+      /* ---- board writes: quick-add, drag-and-drop ---------------------------- */
+      /* The plus files the next bead. It sits at the lane's far edge, ahead of
+      the count, and reads pressed while the composer it opens is showing. */
+      .add-bead {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        color: var(--dim);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        cursor: pointer;
+        transition:
+          border-color 0.15s,
+          color 0.15s;
+      }
+      .add-bead:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .add-bead[aria-expanded='true'] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--panel);
+      }
+      .lane > summary .add-bead {
+        margin-left: auto;
+      }
+      .lane > summary .add-bead ~ .n {
+        margin-left: 0;
+      }
+      /* The composer is a row like any other, so it holds the lane's top spot
+      rather than floating above it — but it isn't a button, so it doesn't
+      hover or open a sheet. */
+      .composer {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      .composer input[type='text'],
+      .composer textarea {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        font-size: 12.5px;
+        color: var(--ink);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 10px;
+      }
+      .composer input[type='text']:focus,
+      .composer textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .composer textarea {
+        resize: vertical;
+        min-height: 52px;
+        line-height: 1.5;
+      }
+      .composer-row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .composer-row.actions {
+        align-items: center;
+        justify-content: flex-end;
+      }
+      .composer .form-error {
+        margin-right: auto;
+        font-size: 11px;
+        color: var(--fail);
+      }
+      /* A native radio group would read as a form; this reads as a setting —
+      one press picks the priority, and the pressed segment fills like .mini's. */
+      .seg {
+        display: inline-flex;
+        flex: none;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .seg button {
+        font: inherit;
+        font-size: 11px;
+        font-weight: 620;
+        color: var(--dim);
+        background: none;
+        border: 0;
+        border-left: 1px solid var(--line);
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+      .seg button:first-child {
+        border-left: 0;
+      }
+      .seg button:hover {
+        color: var(--accent);
+      }
+      .seg button[aria-pressed='true'] {
+        background: var(--accent);
+        color: var(--panel);
+      }
+      /* The label field owns its suggestions: the dropdown hangs off the field
+      rather than the row, so a narrow lane doesn't squeeze it. */
+      .labels-wrap {
+        position: relative;
+        flex: 1;
+        min-width: 160px;
+      }
+      .suggest {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        z-index: 30;
+        max-height: 152px;
+        overflow-y: auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        padding: 4px;
+      }
+      .suggest button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        font: inherit;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: inherit;
+        background: none;
+        border: 0;
+        border-radius: 6px;
+        padding: 5px 8px;
+        cursor: pointer;
+      }
+      .suggest button:hover {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: var(--accent);
+      }
+      /* A card mid-drag goes pale; a lane that will take it draws a dashed
+      outline around its cards, not its header, so the eye lands where the
+      bead would. */
+      .card.dragging {
+        opacity: 0.4;
+      }
+      .lane.drop-hint .lane-cards,
+      .strip.drop-hint {
+        outline: 2px dashed var(--accent);
+        outline-offset: -2px;
+      }
+      /* A failed write says so and leaves. The board snaps back to the
+      server's state on the next poll; the toast is the only trace. */
+      .toast {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 80;
+        max-width: min(480px, calc(100vw - 32px));
+        font-size: 12.5px;
+        color: var(--fail);
+        background: var(--panel);
+        border: 1px solid var(--fail);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+        padding: 9px 14px;
       }
 
       .row {
@@ -1558,7 +1753,7 @@
         <h2>backlog</h2>
         <span class="n" id="backlogCount"></span>
       </summary>
-      <div class="strip" id="backlogStrip"></div>
+      <div class="strip" id="backlogStrip" data-drop="backlog"></div>
     </details>
 
     <div class="board" id="board"></div>
@@ -1600,6 +1795,7 @@
     </details>
 
     <div class="scrim" id="scrim"></div>
+    <div class="toast" id="toast" hidden role="status"></div>
     <aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
       <button class="close" id="sheetClose" aria-label="Close detail">✕</button>
       <div id="sheetBody"></div>
@@ -1681,8 +1877,12 @@
         })
         const kids = i.children || []
         const parent = ledger.epicName(i.parent)
-        return `<button class="card" data-bead="${esc(i.id)}">
+        // Draggable: a card can be dropped on another lane's cards to move it
+        // there. The drop zones live on the lanes; the click handler knows to
+        // ignore the press that ends a drag rather than opening the sheet.
+        return `<button class="card" data-bead="${esc(i.id)}" draggable="true">
           <span class="chip prio">P${esc(i.priority)}</span>
+          <span class="chip id" title="${esc(i.id)}">${esc(i.id.slice(-3))}</span>
           <b>${esc(i.title)}</b>
           <div class="meta">
             ${i.type !== 'task' ? `<span class="chip">${esc(i.type)}</span>` : ''}
@@ -1700,8 +1900,17 @@
       function redrawBoard() {
         if (lastLedger) drawBoard(lastLedger)
       }
+      /* The deliberate kind of repaint: a press the reader made (opening the
+         composer, finishing a drag) paints at once, while a poll arriving
+         mid-draft or mid-drag only refreshes the lookup tables and leaves the
+         DOM — typed text, focus, the lane under the pointer — alone. */
+      function paintNow() {
+        if (!lastLedger) return
+        drawBoard(lastLedger, true)
+        drawBacklog(lastLedger, true)
+      }
 
-      function drawBoard(d) {
+      function drawBoard(d, force = false) {
         lastLedger = d
         const all = d.ledger.issues
         ledger.byId = Object.fromEntries(all.map((i) => [i.id, i]))
@@ -1760,13 +1969,21 @@
         // staged/unstaged flip even on a poll where no bead moved lanes.
         worktree.byPath = Object.fromEntries((d.worktree || []).map((e) => [e.path, e]))
 
+        // A composer holds typed text and a drag holds a bead: a poll that
+        // repaints now would wipe the draft mid-word or move the lane under
+        // the pointer. The tables above stay current; the paint waits for an
+        // explicit press (paintNow) or the end of the gesture.
+        if (!force && (composerOpen || draggedId)) return
+
         const lanes = [
           ...beadLanes,
           {key: 'done', label: 'done', count: d.ledger.counts.closed, items: cards.filter((i) => lane(i) === 'done')},
           // An empty lane says nothing worth the room it takes. Staging is the
           // exception: with commits to push it carries the button that pushes them,
           // and that has to stay reachable whether or not a bead sits under it.
-        ].filter((l) => (l.worktree ? (d.worktree || []).length : l.items.length || l.slot))
+          // Ready is the other: the plus that files the next bead lives in its
+          // header, and an empty worklist is news rather than nothing.
+        ].filter((l) => l.key === 'ready' || (l.worktree ? (d.worktree || []).length : l.items.length || l.slot))
 
         // Rebuilt only when something changed: two lanes carry hover popovers, and
         // replacing one under the pointer would close it mid-read.
@@ -1805,12 +2022,247 @@
         setTimeout(paint, 220)
       }
 
+      /* ---- board writes: quick-add composer --------------------------------- */
+      /* The composer's text lives here, not in the DOM: the board repaints from
+         polls every few seconds, and inputs that only existed in the DOM would
+         lose a half-typed title to the next one. Every keystroke writes through
+         to `draft`, so a repaint rebuilds the same words — and while the
+         composer is open polls don't repaint at all (see drawBoard), so focus
+         survives too. */
+      let composerOpen = false
+      let composerSaving = false
+      let composerError = ''
+      let draft = {title: '', description: '', labels: '', priority: 2}
+
+      /* Lanes a card can be dropped on. Staging and the work tree report
+         derived state — unpushed commits, the raw working copy — so there is
+         nothing to drop onto; everything else is a real place a bead can be.
+         Backlog's zone is the strip's own data-drop below rather than a lane
+         card, and the server's MOVE_LANES is the third copy — a lane added in
+         one place needs adding in all three. */
+      const DROP_LANES = new Set(['ready', 'blocked', 'in_progress', 'review', 'done', 'backlog'])
+
+      function composerHtml() {
+        const segs = [0, 1, 2, 3, 4]
+          .map(
+            (p) =>
+              `<button type="button" data-prio="${p}" aria-pressed="${draft.priority === p}" title="P${p}">P${p}</button>`,
+          )
+          .join('')
+        return `
+          <div class="composer" id="composer">
+            <input id="composerTitle" type="text" placeholder="bead title…" value="${esc(draft.title)}"
+              maxlength="300" aria-label="Title" ${composerSaving ? 'disabled' : ''} />
+            <textarea id="composerDesc" placeholder="description (optional)" aria-label="Description"
+              ${composerSaving ? 'disabled' : ''}>${esc(draft.description)}</textarea>
+            <div class="composer-row">
+              <div class="labels-wrap">
+                <input id="composerLabels" type="text" placeholder="labels, comma-separated" value="${esc(draft.labels)}"
+                  aria-label="Labels" autocomplete="off" aria-expanded="false" aria-controls="composerSuggest"
+                  ${composerSaving ? 'disabled' : ''} />
+                <div class="suggest" id="composerSuggest" role="listbox" aria-label="Label suggestions" hidden></div>
+              </div>
+              <div class="seg" role="group" aria-label="Priority">${segs}</div>
+            </div>
+            <div class="composer-row actions">
+              <span class="form-error">${esc(composerError)}</span>
+              <button class="mini" type="button" data-composer-cancel ${composerSaving ? 'disabled' : ''}>cancel</button>
+              <button class="mini" type="button" data-composer-save ${composerSaving ? 'disabled' : ''}>
+                ${composerSaving ? 'saving…' : 'save'}</button>
+            </div>
+          </div>`
+      }
+
+      /* What the label field suggests. The server sends every label in the
+         ledger, so a ledger whose labels all sit on closed beads still
+         suggests them; the fallback derives them for a server from before. */
+      function allLabels() {
+        if (lastLedger?.ledger?.all_labels?.length) return lastLedger.ledger.all_labels
+        const seen = new Set()
+        for (const i of lastLedger?.ledger?.issues || []) for (const l of i.labels || []) seen.add(l)
+        return [...seen].sort()
+      }
+
+      function renderSuggestions(input) {
+        const box = $('composerSuggest')
+        if (!input || !box) return
+        const parts = input.value.split(',')
+        const token = (parts.pop() || '').trim().toLowerCase()
+        const used = new Set(parts.map((s) => s.trim().toLowerCase()).filter(Boolean))
+        const matches = allLabels()
+          .filter((l) => !used.has(l.toLowerCase()) && (!token || l.toLowerCase().includes(token)))
+          .slice(0, 8)
+        if (!matches.length) {
+          box.hidden = true
+          box.innerHTML = ''
+          input.setAttribute('aria-expanded', 'false')
+          return
+        }
+        box.innerHTML = matches
+          .map((m) => `<button type="button" role="option" data-suggest="${esc(m)}">${esc(m)}</button>`)
+          .join('')
+        box.hidden = false
+        input.setAttribute('aria-expanded', 'true')
+      }
+
+      function hideSuggestions() {
+        const box = $('composerSuggest')
+        if (box) {
+          box.hidden = true
+          box.innerHTML = ''
+        }
+        $('composerLabels')?.setAttribute('aria-expanded', 'false')
+      }
+
+      function openComposer() {
+        composerOpen = true
+        composerError = ''
+        // The composer renders at the top of ready's cards, which a folded
+        // lane would hide — opening it unfolds the lane it lives in.
+        foldedLanes.delete('ready')
+        paintNow()
+        requestAnimationFrame(() => $('composerTitle')?.focus())
+      }
+
+      function cancelComposer() {
+        composerOpen = false
+        composerSaving = false
+        composerError = ''
+        draft = {title: '', description: '', labels: '', priority: 2}
+        paintNow()
+      }
+
+      async function saveComposer() {
+        const title = draft.title.trim()
+        const errEl = document.querySelector('#composer .form-error')
+        if (!title) {
+          if (errEl) errEl.textContent = 'a bead needs a title'
+          $('composerTitle')?.focus()
+          return
+        }
+        composerSaving = true
+        if (errEl) errEl.textContent = ''
+        const btn = document.querySelector('[data-composer-save]')
+        if (btn) btn.disabled = true
+        const labels = draft.labels
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        try {
+          const r = await (
+            await fetch('beads/create', {
+              method: 'POST',
+              body: JSON.stringify({title, description: draft.description.trim(), labels, priority: draft.priority}),
+            })
+          ).json()
+          if (r.ok) {
+            cancelComposer()
+            tick()
+          } else {
+            composerSaving = false
+            if (errEl) errEl.textContent = r.error || 'create failed'
+            if (btn) btn.disabled = false
+          }
+        } catch {
+          composerSaving = false
+          if (errEl) errEl.textContent = "nothing is serving this page, so the bead wasn't filed"
+          if (btn) btn.disabled = false
+        }
+      }
+
+      /* A failed write says so and leaves. The board snaps back to the
+         server's state on the next poll; the toast is the only trace. */
+      let toastTimer = 0
+      function toast(msg) {
+        const t = $('toast')
+        if (!t) return
+        t.textContent = msg
+        t.hidden = false
+        clearTimeout(toastTimer)
+        toastTimer = setTimeout(() => (t.hidden = true), 4500)
+      }
+
+      /* ---- board writes: drag-and-drop ------------------------------------ */
+      /* Native HTML5 drag, not a library: five lanes, one gesture, no touch
+         story needed for a page that lives in a desktop browser pane. The
+         lanes don't repaint mid-drag (see drawBoard), so the drop zone can't
+         move under the pointer. */
+      let draggedId = null
+      // A timestamp, not a flag: the click that ends a drag must be ignored,
+      // and only just after the drag — compared against Date.now(), below.
+      let lastDragEnd = 0
+
+      function clearDropState() {
+        document.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'))
+        document.querySelectorAll('.drop-hint').forEach((el) => el.classList.remove('drop-hint'))
+      }
+
+      function dragSourceLane(id) {
+        // Read off the DOM rather than recomputing the lane from the model: the
+        // dragged card is necessarily rendered, and held repaints mean no poll
+        // can destroy it mid-gesture. A second copy of lane() here would just
+        // be a second place for it to drift.
+        const card = [...document.querySelectorAll('.card')].find((c) => c.dataset.bead === id)
+        if (!card) return ''
+        return card.closest('[data-lane]')?.dataset.lane || (card.closest('#backlogStrip') ? 'backlog' : '')
+      }
+
+      document.addEventListener('dragstart', (e) => {
+        const card = e.target.closest?.('.card[data-bead]')
+        if (!card) return
+        draggedId = card.dataset.bead
+        e.dataTransfer.setData('text/plain', draggedId)
+        e.dataTransfer.effectAllowed = 'move'
+        card.classList.add('dragging')
+      })
+      document.addEventListener('dragend', () => {
+        if (!draggedId) return
+        draggedId = null
+        clearDropState()
+        lastDragEnd = Date.now()
+        // A poll may have arrived mid-drag and been held; repaint now that
+        // the pointer is gone so nothing stays stale.
+        paintNow()
+      })
+      document.addEventListener('dragover', (e) => {
+        const zone = e.target.closest?.('[data-drop]')
+        if (!zone || !draggedId) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        zone.classList.add('drop-hint')
+      })
+      document.addEventListener('dragleave', (e) => {
+        const zone = e.target.closest?.('[data-drop]')
+        if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('drop-hint')
+      })
+      document.addEventListener('drop', (e) => {
+        const zone = e.target.closest?.('[data-drop]')
+        if (!zone || !draggedId) return
+        e.preventDefault()
+        const id = draggedId
+        const to = zone.dataset.drop
+        draggedId = null
+        clearDropState()
+        // dragend fires next and would repaint twice; claiming the gesture
+        // here makes it a no-op there.
+        lastDragEnd = Date.now()
+        if (!to || dragSourceLane(id) === to) return paintNow()
+        fetch('beads/move', {method: 'POST', body: JSON.stringify({id, lane: to})})
+          .then((r) => r.json())
+          .then((r) => {
+            if (!r.ok) toast(r.error || 'move failed')
+            tick()
+          })
+          .catch(() => toast("nothing is serving this page, so the move didn't go through"))
+      })
+
       function laneCard(l) {
         const limit = laneLimits[l.key] ?? LANE_PAGE
         const shown = l.items.slice(0, limit)
         const rest = l.items.length - shown.length
+        const droppable = DROP_LANES.has(l.key)
         return `
-          <details class="panel lane ${l.key}" data-lane="${esc(l.key)}" ${foldedLanes.has(l.key) ? '' : 'open'}>
+          <details class="panel lane ${l.key}" data-lane="${esc(l.key)}" ${droppable ? `data-drop="${esc(l.key)}"` : ''} ${foldedLanes.has(l.key) ? '' : 'open'}>
             <summary>
               <span class="chev">›</span>
               <h2 class="lane-name ${l.hover ? 'hoverable' : ''}"
@@ -1819,9 +2271,21 @@
                 ${l.hover ? `<span class="tip" id="${l.hover}"></span>` : ''}
               </h2>
               ${l.slot ? runSlot(l.slot) : ''}
+              ${
+                l.key === 'ready'
+                  ? `<button class="add-bead" type="button" data-add-bead title="File a bead"
+                      aria-label="File a bead" aria-expanded="${composerOpen}">+</button>`
+                  : ''
+              }
               ${l.count !== undefined ? `<span class="n">${l.count}</span>` : ''}
             </summary>
             <div class="lane-cards">
+              ${l.key === 'ready' && composerOpen ? composerHtml() : ''}
+              ${
+                l.key === 'ready' && !l.items.length && !composerOpen
+                  ? `<p class="lane-note">nothing ready — press + to file the next thing.</p>`
+                  : ''
+              }
               ${l.note ? `<p class="lane-note">${esc(l.note)}</p>` : ''}
               ${shown.map(beadCard).join('')}
               ${
@@ -1837,13 +2301,17 @@
       /* ---- backlog ---------------------------------------------------------- */
       /* Filed, not offered. It sits above the board because it's the shelf the board
          draws from, and collapsed because nothing here is the next thing to do. */
-      function drawBacklog(d) {
+      function drawBacklog(d, force = false) {
         const items = d.ledger.issues
           .filter((i) => i.backlog)
           // bd returns no meaningful order, so the strip reads down by priority —
           // otherwise "first" would change between polls.
           .sort((a, b) => a.priority - b.priority || String(a.created_at).localeCompare(String(b.created_at)))
-        const signature = JSON.stringify(items.map((i) => i.id + i.title + i.priority))
+        // Held like the board while a composer is open or a drag is in flight:
+        // the strip is a drop zone, and rebuilding it mid-drag destroys the
+        // source node out from under the gesture.
+        if (!force && (composerOpen || draggedId)) return
+        const signature = JSON.stringify(items.map((i) => i.id + i.title + i.priority + i.status + (i.labels || []).join(',')))
         if (signature === backlogSignature) return
         backlogSignature = signature
 
@@ -2329,14 +2797,59 @@
         if (more) {
           const key = more.dataset.more
           laneLimits[key] = (laneLimits[key] ?? LANE_PAGE) + LANE_PAGE
-          // Redrawn from the state the page already has rather than waiting for the
-          // next poll, which is up to a second away and would feel like a dead press.
-          return redrawBoard()
+          // Forced rather than redrawn: the limit carries no draft state, and
+          // a held poll must not make the press look ignored. Repaints the
+          // composer from `draft`, so typed words survive it — focus moves,
+          // which is the honest cost of pressing something else mid-draft.
+          return paintNow()
         }
+        // Lives in the ready lane's summary like the commit toggle in the work
+        // tree's, so a press has to stop the native fold the same way that one
+        // does — otherwise filing a bead also folds the lane it files into.
+        const addBead = e.target.closest('[data-add-bead]')
+        if (addBead) {
+          e.preventDefault()
+          return composerOpen ? cancelComposer() : openComposer()
+        }
+        const prio = e.target.closest('[data-prio]')
+        if (prio) {
+          draft.priority = +prio.dataset.prio
+          // Marked in place: a repaint here would drop the title's focus.
+          document
+            .querySelectorAll('#composer .seg button')
+            .forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.prio === draft.priority)))
+          return
+        }
+        const sug = e.target.closest('[data-suggest]')
+        if (sug) {
+          const input = $('composerLabels')
+          if (input) {
+            // The typed fragment is the last segment; a pick replaces it and
+            // the field keeps the comma-separated shape it already had.
+            const kept = input.value
+              .split(',')
+              .slice(0, -1)
+              .map((s) => s.trim())
+              .filter(Boolean)
+            kept.push(sug.dataset.suggest)
+            input.value = kept.join(', ')
+            draft.labels = input.value
+            renderSuggestions(input)
+            input.focus()
+          }
+          return
+        }
+        if (e.target.closest('[data-composer-save]')) return saveComposer()
+        if (e.target.closest('[data-composer-cancel]')) return cancelComposer()
         // A sub-bead in the sheet swaps the sheet's subject rather than stacking
         // another one on top — there's only ever one thing being looked at.
         const bead = e.target.closest('[data-bead]')
-        if (bead) return openSheet('bead', bead.dataset.bead)
+        if (bead) {
+          // The press that ends a drag lands as a click on the card it started
+          // from — opening the sheet for it would punish dropping.
+          if (Date.now() - lastDragEnd < 350) return
+          return openSheet('bead', bead.dataset.bead)
+        }
         const node = e.target.closest('[data-node]')
         if (node) return openSheet('node', node.dataset.node)
         // The revert button, the checkbox, and the file-menu button (in the diff
@@ -2384,12 +2897,30 @@
         true,
       )
 
+      /* The composer writes through to `draft` on every keystroke, so a repaint
+         rebuilds the same words. Suggestions update the dropdown in place — a
+         repaint here would move focus after every letter. */
+      document.addEventListener('input', (e) => {
+        if (e.target.id === 'composerTitle') draft.title = e.target.value
+        else if (e.target.id === 'composerDesc') draft.description = e.target.value
+        else if (e.target.id === 'composerLabels') {
+          draft.labels = e.target.value
+          renderSuggestions(e.target)
+        }
+      })
+      document.addEventListener('focusin', (e) => {
+        if (e.target.id === 'composerLabels') renderSuggestions(e.target)
+      })
+
       document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return
         closeTitleMenu()
         closeRevertConfirm()
         closeFileMenu()
         closeCommitCompose()
+        hideSuggestions()
+        // A sheet on top owns the press; the composer behind it stays as it was.
+        if (composerOpen && !subject) cancelComposer()
         if (subject) closeSheet()
       })
 
@@ -2526,6 +3057,9 @@
         if (!$('revertConfirm').hidden && !e.target.closest('#revertConfirm, [data-revert]')) closeRevertConfirm()
         if (!$('fileMenu').hidden && !e.target.closest('#fileMenu, [data-filemenu]')) closeFileMenu()
         if (!$('commitPop').hidden && !e.target.closest('#commitPop, [data-commit-toggle]')) closeCommitCompose()
+        // The composer stays — typed text must not evaporate on a stray press —
+        // but its suggestions are just a hint and go away like any popover.
+        if (composerOpen && !e.target.closest('#composer, [data-add-bead]')) hideSuggestions()
       })
 
       $('commitSubmit').addEventListener('click', async () => {
