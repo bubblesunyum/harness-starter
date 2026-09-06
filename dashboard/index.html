@@ -856,6 +856,8 @@
         font-size: 15px;
         line-height: 1;
         padding: 3px 7px;
+        /* Folded first: down, inviting the press that opens it. */
+        transform: rotate(90deg);
         border-radius: 6px;
         transition:
           transform 0.2s ease,
@@ -866,9 +868,10 @@
         color: var(--accent);
         background: color-mix(in srgb, var(--accent) 14%, transparent);
       }
-      /* The lanes' own convention: right when folded, down when open. */
+      /* The lanes' own chevron points right; this one previews its own press:
+      down when folded, up when open. */
       .card[aria-expanded='true'] .caret {
-        transform: rotate(90deg);
+        transform: rotate(-90deg);
       }
       .empty {
         color: var(--dim);
@@ -1914,6 +1917,8 @@
           return dep && dep.status !== 'closed'
         })
         const kids = i.children || []
+        // Inline children sit directly under their parent, so they skip the
+        // pill that would only repeat the row above.
         const parent = ledger.epicName(i.parent)
         const hasKids = kids.length > 0
         const open = hasKids && expandedEpics.has(i.id)
@@ -1927,7 +1932,7 @@
           <b>${esc(i.title)}</b>
           <div class="meta">
             ${i.type !== 'task' ? `<span class="chip">${esc(i.type)}</span>` : ''}
-            ${parent ? `<span class="chip epic">${esc(parent)}</span>` : ''}
+            ${!kid && parent ? `<span class="chip epic">${esc(parent)}</span>` : ''}
             ${kids.length ? `<span class="chip">${kids.length} sub-bead${kids.length === 1 ? '' : 's'}</span>` : ''}
             ${i.commit_count ? `<span>${i.commit_count} commit${i.commit_count === 1 ? '' : 's'}</span>` : ''}
             ${waiting.length ? `<span class="waits">waits on ${waiting.map(esc).join(', ')}</span>` : ''}
@@ -1939,15 +1944,16 @@
       /* A parent's children inline: the same rows, as flat siblings of the
       parent rather than indented ones, told apart by the darker fill.
       Depth-first, so a child that is itself a parent carries its own subtree
-      right under it. Shown wherever the parent is shown, whatever lane the
-      children would otherwise belong to — expansion is about the family, not
-      the filter. The seen set keeps a bead that is both listed and nested
+      right under it. With a lane key, only children in that same state come
+      along — without one (the backlog has no state to match) the whole family
+      does. The seen set keeps a bead that is both listed and nested
       (the backlog names children outright) to its first appearance. */
-      function renderTree(list) {
+      function renderTree(list, laneKey = '') {
         const out = []
         const seen = new Set()
         const walk = (i, kid) => {
           if (!i || seen.has(i.id)) return
+          if (kid && laneKey && ledger.laneOf(i) !== laneKey) return
           seen.add(i.id)
           out.push(beadCard(i, kid))
           if (!expandedEpics.has(i.id)) return
@@ -1999,6 +2005,11 @@
                   : i.ready
                     ? 'ready'
                     : 'blocked'
+
+        // renderTree reads this to keep an expanded family to the lane being
+        // drawn — a child in another state stays in its own lane, subtree and
+        // all, rather than trailing its parent around the board.
+        ledger.laneOf = lane
 
         // A parent stands for its children on the board — six cards that are one
         // piece of work read as six pieces of work. The children are in the parent's
@@ -2388,7 +2399,7 @@
                   : ''
               }
               ${l.note ? `<p class="lane-note">${esc(l.note)}</p>` : ''}
-              ${renderTree(shown)}
+              ${renderTree(shown, l.key)}
               ${
                 rest > 0
                   ? `<button class="load-more" data-more="${esc(l.key)}">
