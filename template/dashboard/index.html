@@ -853,9 +853,9 @@
         flex: none;
         align-self: center;
         color: var(--dim);
-        font-size: 11px;
+        font-size: 15px;
         line-height: 1;
-        padding: 3px 5px;
+        padding: 3px 7px;
         border-radius: 6px;
         transition:
           transform 0.2s ease,
@@ -866,8 +866,9 @@
         color: var(--accent);
         background: color-mix(in srgb, var(--accent) 14%, transparent);
       }
+      /* The lanes' own convention: right when folded, down when open. */
       .card[aria-expanded='true'] .caret {
-        transform: rotate(180deg);
+        transform: rotate(90deg);
       }
       .empty {
         color: var(--dim);
@@ -1931,7 +1932,7 @@
             ${i.commit_count ? `<span>${i.commit_count} commit${i.commit_count === 1 ? '' : 's'}</span>` : ''}
             ${waiting.length ? `<span class="waits">waits on ${waiting.map(esc).join(', ')}</span>` : ''}
           </div>
-          ${hasKids ? `<span class="caret" data-expand="${esc(i.id)}" aria-hidden="true" title="${open ? 'Hide' : 'Show'} sub-beads">▾</span>` : ''}
+          ${hasKids ? `<span class="caret" data-expand="${esc(i.id)}" aria-hidden="true" title="${open ? 'Hide' : 'Show'} sub-beads">›</span>` : ''}
         </button>`
       }
 
