@@ -849,26 +849,20 @@
       inside the card's own button is invalid HTML. The click handler claims a
       press on it before the sheet ever sees it, and arrows toggle it from the
       keyboard, so it needs no tab stop of its own. */
-      /* Out of flow, so it never sets the row's height: an in-flow box taller
-      than the title line stretched every parent row. Only parent rows pay the
-      padding that keeps text clear of it. The svg stays symmetric about its
+      /* In flow, and stretch-filled: the row's title sets the height and this
+      takes all of it, so it can never stretch a parent row the way a fixed
+      box taller than the title line did. The svg stays symmetric about its
       own centre, so down and up share one and the toggle spins in place. */
-      .card[data-has-kids] {
-        position: relative;
-        padding-right: 36px;
-      }
       .card .caret {
-        position: absolute;
-        right: 8px;
-        top: 50%;
+        align-self: stretch;
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex: none;
         width: 24px;
-        height: 24px;
         color: var(--dim);
         /* Folded first: down, inviting the press that opens it. */
-        transform: translateY(-50%) rotate(90deg);
+        transform: rotate(90deg);
         border-radius: 6px;
         transition:
           transform 0.2s ease,
@@ -887,7 +881,7 @@
       /* The lanes' own chevron points right; this one previews its own press:
       down when folded, up when open. */
       .card[aria-expanded='true'] .caret {
-        transform: translateY(-50%) rotate(-90deg);
+        transform: rotate(-90deg);
       }
       .empty {
         color: var(--dim);
