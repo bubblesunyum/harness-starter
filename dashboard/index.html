@@ -831,11 +831,43 @@
         text-transform: none;
         letter-spacing: 0;
         background: none;
-        border: 1px solid var(--line);
         color: var(--dim);
       }
       .waits {
         color: var(--fail);
+      }
+      /* A parent's inline children: the same rows, told apart by a darker
+      fill rather than an indent. */
+      .card.kid {
+        background: var(--bg);
+      }
+      .card.kid:hover {
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+      /* The expander lives last in the card's flex row, so it sits at the far
+      edge whatever the title and the meta do. A span, not a button: a button
+      inside the card's own button is invalid HTML. The click handler claims a
+      press on it before the sheet ever sees it, and arrows toggle it from the
+      keyboard, so it needs no tab stop of its own. */
+      .card .caret {
+        flex: none;
+        align-self: center;
+        color: var(--dim);
+        font-size: 11px;
+        line-height: 1;
+        padding: 3px 5px;
+        border-radius: 6px;
+        transition:
+          transform 0.2s ease,
+          color 0.15s,
+          background 0.15s;
+      }
+      .card .caret:hover {
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+      }
+      .card[aria-expanded='true'] .caret {
+        transform: rotate(180deg);
       }
       .empty {
         color: var(--dim);
@@ -1835,6 +1867,11 @@
       const laneLimits = {}
       const LANE_PAGE = 8
 
+      /* Which parents are expanded inline by the caret on their row. In memory
+      beside the folds above, so a polling repaint keeps them open; everything
+      starts collapsed on load. */
+      const expandedEpics = new Set()
+
       /* Run buttons are described once, in TASKS in scripts/dashboard.py, and
          arrive here inside the state with their label and their placement. The
          page draws slots; it never names a task. */
@@ -1870,19 +1907,22 @@
         return `In-progress beads with commits ready to push: ${open.join(', ')}`
       }
 
-      function beadCard(i) {
+      function beadCard(i, kid = false) {
         const waiting = (i.deps || []).filter((x) => {
           const dep = ledger.byId[x]
           return dep && dep.status !== 'closed'
         })
         const kids = i.children || []
         const parent = ledger.epicName(i.parent)
+        const hasKids = kids.length > 0
+        const open = hasKids && expandedEpics.has(i.id)
         // Draggable: a card can be dropped on another lane's cards to move it
         // there. The drop zones live on the lanes; the click handler knows to
         // ignore the press that ends a drag rather than opening the sheet.
-        return `<button class="card" data-bead="${esc(i.id)}" draggable="true">
-          <span class="chip prio">P${esc(i.priority)}</span>
+        return `<button class="card${kid ? ' kid' : ''}" data-bead="${esc(i.id)}" draggable="true"
+          ${hasKids ? `data-has-kids aria-expanded="${open}"` : ''}>
           <span class="chip id" title="${esc(i.id)}">${esc(i.id.slice(-3))}</span>
+          <span class="chip prio">P${esc(i.priority)}</span>
           <b>${esc(i.title)}</b>
           <div class="meta">
             ${i.type !== 'task' ? `<span class="chip">${esc(i.type)}</span>` : ''}
@@ -1891,7 +1931,33 @@
             ${i.commit_count ? `<span>${i.commit_count} commit${i.commit_count === 1 ? '' : 's'}</span>` : ''}
             ${waiting.length ? `<span class="waits">waits on ${waiting.map(esc).join(', ')}</span>` : ''}
           </div>
+          ${hasKids ? `<span class="caret" data-expand="${esc(i.id)}" aria-hidden="true" title="${open ? 'Hide' : 'Show'} sub-beads">▾</span>` : ''}
         </button>`
+      }
+
+      /* A parent's children inline: the same rows, as flat siblings of the
+      parent rather than indented ones, told apart by the darker fill.
+      Depth-first, so a child that is itself a parent carries its own subtree
+      right under it. Shown wherever the parent is shown, whatever lane the
+      children would otherwise belong to — expansion is about the family, not
+      the filter. The seen set keeps a bead that is both listed and nested
+      (the backlog names children outright) to its first appearance. */
+      function renderTree(list) {
+        const out = []
+        const seen = new Set()
+        const walk = (i, kid) => {
+          if (!i || seen.has(i.id)) return
+          seen.add(i.id)
+          out.push(beadCard(i, kid))
+          if (!expandedEpics.has(i.id)) return
+          ;(i.children || [])
+            .map((id) => ledger.byId[id])
+            .filter(Boolean)
+            .sort((a, b) => a.priority - b.priority)
+            .forEach((k) => walk(k, true))
+        }
+        list.forEach((i) => walk(i, false))
+        return out.join('')
       }
 
       /* The last ledger the board was drawn from, so a press that only changes how
@@ -2188,9 +2254,18 @@
          lanes don't repaint mid-drag (see drawBoard), so the drop zone can't
          move under the pointer. */
       let draggedId = null
+      let draggedNode = null
       // A timestamp, not a flag: the click that ends a drag must be ignored,
       // and only just after the drag — compared against Date.now(), below.
       let lastDragEnd = 0
+      /* A press that begins on a caret is an expansion, not the start of a
+      move — but dragstart fires on the draggable card, and `closest` only
+      walks up, so the handler can't see the caret from there. The mousedown
+      below remembers where the press began; dragstart reads that instead. A
+      suppressed press that still travels counts as a drag attempt, and the
+      click ending it is swallowed rather than toggling. */
+      let caretDown = null
+      let caretSwallowed = false
 
       function clearDropState() {
         document.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'))
@@ -2198,19 +2273,39 @@
       }
 
       function dragSourceLane(id) {
-        // Read off the DOM rather than recomputing the lane from the model: the
-        // dragged card is necessarily rendered, and held repaints mean no poll
-        // can destroy it mid-gesture. A second copy of lane() here would just
-        // be a second place for it to drift.
-        const card = [...document.querySelectorAll('.card')].find((c) => c.dataset.bead === id)
+        // The node the drag started from, not the first match in the document:
+        // a bead shown twice (a backlog child under its expanded board parent)
+        // must report the lane it was actually picked up from. Falls back to
+        // the lookup for presses that never passed through dragstart.
+        const card =
+          draggedNode && draggedNode.dataset.bead === id
+            ? draggedNode
+            : [...document.querySelectorAll('.card')].find((c) => c.dataset.bead === id)
         if (!card) return ''
         return card.closest('[data-lane]')?.dataset.lane || (card.closest('#backlogStrip') ? 'backlog' : '')
       }
 
+      document.addEventListener('mousedown', (e) => {
+        caretDown = e.target.closest?.('[data-expand]')
+          ? {x: e.clientX, y: e.clientY}
+          : null
+        caretSwallowed = false
+      })
+      document.addEventListener('mousemove', (e) => {
+        if (caretDown && Math.hypot(e.clientX - caretDown.x, e.clientY - caretDown.y) > 6) {
+          caretSwallowed = true
+        }
+      })
+      document.addEventListener('mouseup', () => (caretDown = null))
+
       document.addEventListener('dragstart', (e) => {
+        // The press began on the caret (see caretDown above) — suppress the
+        // move the card would otherwise start under it.
+        if (caretDown) return e.preventDefault()
         const card = e.target.closest?.('.card[data-bead]')
         if (!card) return
         draggedId = card.dataset.bead
+        draggedNode = card
         e.dataTransfer.setData('text/plain', draggedId)
         e.dataTransfer.effectAllowed = 'move'
         card.classList.add('dragging')
@@ -2218,6 +2313,7 @@
       document.addEventListener('dragend', () => {
         if (!draggedId) return
         draggedId = null
+        draggedNode = null
         clearDropState()
         lastDragEnd = Date.now()
         // A poll may have arrived mid-drag and been held; repaint now that
@@ -2241,12 +2337,16 @@
         e.preventDefault()
         const id = draggedId
         const to = zone.dataset.drop
+        // Read before clearing: dragSourceLane prefers the node the drag
+        // started from, and it is gone below.
+        const from = dragSourceLane(id)
         draggedId = null
+        draggedNode = null
         clearDropState()
         // dragend fires next and would repaint twice; claiming the gesture
         // here makes it a no-op there.
         lastDragEnd = Date.now()
-        if (!to || dragSourceLane(id) === to) return paintNow()
+        if (!to || from === to) return paintNow()
         fetch('beads/move', {method: 'POST', body: JSON.stringify({id, lane: to})})
           .then((r) => r.json())
           .then((r) => {
@@ -2287,7 +2387,7 @@
                   : ''
               }
               ${l.note ? `<p class="lane-note">${esc(l.note)}</p>` : ''}
-              ${shown.map(beadCard).join('')}
+              ${renderTree(shown)}
               ${
                 rest > 0
                   ? `<button class="load-more" data-more="${esc(l.key)}">
@@ -2311,13 +2411,19 @@
         // the strip is a drop zone, and rebuilding it mid-drag destroys the
         // source node out from under the gesture.
         if (!force && (composerOpen || draggedId)) return
-        const signature = JSON.stringify(items.map((i) => i.id + i.title + i.priority + i.status + (i.labels || []).join(',')))
+        // The fingerprint is the markup, so expansion is in it for free: a
+        // toggled caret repaints, and a poll that moves no bead changes nothing.
+        const signature = JSON.stringify([items.map((i) => [i.id, i.title, i.priority, i.status,
+          (i.labels || []).join(','), (i.children || []).join(',')]), [...expandedEpics].sort()])
         if (signature === backlogSignature) return
         backlogSignature = signature
 
         $('backlog').hidden = !items.length
         $('backlogCount').textContent = items.length
-        $('backlogStrip').innerHTML = items.map(beadCard).join('')
+        // Children are named outright here, so only roots seed the trees —
+        // renderTree keeps the first appearance either way.
+        const inBacklog = new Set(items.map((i) => i.id))
+        $('backlogStrip').innerHTML = renderTree(items.filter((i) => !inBacklog.has(i.parent)))
       }
 
       /* ---- work tree ---------------------------------------------------------- */
@@ -2841,6 +2947,27 @@
         }
         if (e.target.closest('[data-composer-save]')) return saveComposer()
         if (e.target.closest('[data-composer-cancel]')) return cancelComposer()
+        // The caret sits inside its card's button, so it claims its press before
+        // the card-level handler below ever sees it — expanding must not also
+        // open the sheet. Forced: a repaint has to answer the press at once,
+        // not wait out the next poll. Focus is handed back to the rebuilt row,
+        // since repainting from innerHTML drops whatever had it.
+        const expander = e.target.closest('[data-expand]')
+        if (expander) {
+          // The click ending a drag, or a suppressed caret-drag, is the end of
+          // that gesture — not a toggle.
+          if (caretSwallowed) {
+            caretSwallowed = false
+            return
+          }
+          if (Date.now() - lastDragEnd < 350) return
+          const id = expander.dataset.expand
+          if (expandedEpics.has(id)) expandedEpics.delete(id)
+          else expandedEpics.add(id)
+          paintNow()
+          requestAnimationFrame(() => refocusCard(id))
+          return
+        }
         // A sub-bead in the sheet swaps the sheet's subject rather than stacking
         // another one on top — there's only ever one thing being looked at.
         const bead = e.target.closest('[data-bead]')
@@ -2882,6 +3009,27 @@
         if (!row || row !== e.target) return
         e.preventDefault()
         openSheet('diff', row.dataset.diff)
+      })
+
+      /* A repaint rebuilds the board from innerHTML, which drops the focused
+      node — so a toggle hands focus back to the row it just rebuilt. */
+      function refocusCard(id) {
+        document.querySelector(`.card[data-bead="${CSS.escape(id)}"]`)?.focus({preventScroll: true})
+      }
+
+      /* A focused parent expands with → and folds with ←. The caret is a span
+      rather than a second tab stop, so the card toggles its own subtree
+      without the focus ever leaving the row. */
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+        const card = e.target.closest?.('.card[data-has-kids]')
+        if (!card || card !== e.target) return
+        e.preventDefault()
+        const id = card.dataset.bead
+        if (e.key === 'ArrowRight') expandedEpics.add(id)
+        else expandedEpics.delete(id)
+        paintNow()
+        requestAnimationFrame(() => refocusCard(id))
       })
 
       /* `toggle` doesn't bubble, so it's caught on the way down. Folding is the
