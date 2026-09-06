@@ -849,13 +849,21 @@
       inside the card's own button is invalid HTML. The click handler claims a
       press on it before the sheet ever sees it, and arrows toggle it from the
       keyboard, so it needs no tab stop of its own. */
+      /* A fixed square, so the toggle below spins the glyph in place instead
+      of walking it across the row: a text chevron carries uneven side
+      bearings, and rotating that around a shrink-to-fit box moved the paint
+      between open and closed. The svg is symmetric about its own centre, so
+      down and up share one. */
       .card .caret {
         flex: none;
         align-self: center;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
         color: var(--dim);
-        font-size: 15px;
-        line-height: 1;
-        padding: 3px 7px;
         /* Folded first: down, inviting the press that opens it. */
         transform: rotate(90deg);
         border-radius: 6px;
@@ -863,6 +871,11 @@
           transform 0.2s ease,
           color 0.15s,
           background 0.15s;
+      }
+      .card .caret svg {
+        display: block;
+        width: 14px;
+        height: 14px;
       }
       .card .caret:hover {
         color: var(--accent);
@@ -891,9 +904,6 @@
         width: 22px;
         height: 22px;
         padding: 0;
-        font: inherit;
-        font-size: 15px;
-        line-height: 1;
         color: var(--dim);
         background: var(--bg);
         border: 1px solid var(--line);
@@ -911,6 +921,13 @@
         background: var(--accent);
         border-color: var(--accent);
         color: var(--panel);
+      }
+      /* Symmetric strokes, so the plus sits dead centre — a text "+" never
+      does, its bearings lifting it off the middle. */
+      .add-bead svg {
+        display: block;
+        width: 12px;
+        height: 12px;
       }
       .lane > summary .add-bead {
         margin-left: auto;
@@ -1937,7 +1954,7 @@
             ${i.commit_count ? `<span>${i.commit_count} commit${i.commit_count === 1 ? '' : 's'}</span>` : ''}
             ${waiting.length ? `<span class="waits">waits on ${waiting.map(esc).join(', ')}</span>` : ''}
           </div>
-          ${hasKids ? `<span class="caret" data-expand="${esc(i.id)}" aria-hidden="true" title="${open ? 'Hide' : 'Show'} sub-beads">›</span>` : ''}
+          ${hasKids ? `<span class="caret" data-expand="${esc(i.id)}" aria-hidden="true" title="${open ? 'Hide' : 'Show'} sub-beads"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3l6 5-6 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : ''}
         </button>`
       }
 
@@ -2386,7 +2403,7 @@
               ${
                 l.key === 'ready'
                   ? `<button class="add-bead" type="button" data-add-bead title="File a bead"
-                      aria-label="File a bead" aria-expanded="${composerOpen}">+</button>`
+                      aria-label="File a bead" aria-expanded="${composerOpen}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>`
                   : ''
               }
               ${l.count !== undefined ? `<span class="n">${l.count}</span>` : ''}
