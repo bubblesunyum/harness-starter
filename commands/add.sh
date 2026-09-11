@@ -157,6 +157,12 @@ else
   printf '\n# The live dashboard port, rewritten on every bind — machine-local.\n.claude/launch.json\n' >> "$ignore"
   echo "  ignored .claude/launch.json"
 fi
+if [ -e "$ignore" ] && grep -qxF 'dashboard/state.json' "$ignore"; then
+  echo "  dashboard/state.json already ignored"
+else
+  printf '\n# The dashboard snapshot, rewritten on every poll — machine-local.\ndashboard/state.json\n' >> "$ignore"
+  echo "  ignored dashboard/state.json"
+fi
 
 # Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
 # AGENTS.md. The import is what makes the contract always-loaded in both, rather
