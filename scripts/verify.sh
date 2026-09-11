@@ -46,7 +46,11 @@ step() {
   local name="$1"; shift
   local log="$LOGS/${name// /-}.log"
   "$@" > "$log" 2>&1
-  report "$name" "$log" $?
+  local status=$?
+  # The exit code alongside the log, so readers need not guess the verdict
+  # from the text: a passing step often logs nothing at all.
+  echo "$status" > "$log.status"
+  report "$name" "$log" $status
 }
 
 echo "verify: $ROOT"

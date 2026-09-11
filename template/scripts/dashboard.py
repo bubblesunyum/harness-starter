@@ -369,21 +369,37 @@ def ago_for(at):
 _verify = {"key": None, "read": None}
 
 
+def log_ok(text):
+    """The text fallback for a step with no status file beside its log. A build
+    tool's own verdict wins where it prints one. Counting "error:" lines does
+    not work on its own: a passing test run logs dozens from the app's output,
+    and reading those as failures marks a green suite red. Add your toolchain's
+    verdict line to VERDICT. Empty still fails: a step that never ran must not
+    read green."""
+    verdict = re.findall(VERDICT, text)
+    if verdict:
+        return verdict[-1].upper() in ("SUCCEEDED", "PASSED", "OK")
+    return bool(text.strip()) and not re.search(r"\berror:", text)
+
+
 def read_logs(logs):
     """What the gate's own logs say: its steps, when they were written, the test
     line, and the verdict over all of them."""
     steps, newest = [], 0
+    # A "*.log.status" sibling never matches "*.log", so no filtering needed.
     for log in sorted(logs.glob("*.log")):
         text = log.read_text(errors="ignore")
-        # A build tool's own verdict wins where it prints one. Counting
-        # "error:" lines does not work on its own: a passing test run logs
-        # dozens from the app's output, and reading those as failures marks a
-        # green suite red. Add your toolchain's verdict line to VERDICT.
-        verdict = re.findall(VERDICT, text)
-        if verdict:
-            ok = verdict[-1].upper() in ("SUCCEEDED", "PASSED", "OK")
+        # The gate records each step's exit status beside its log, which is
+        # ground truth — a passing step usually logs nothing, and no text
+        # pattern can tell that apart from a step that never ran.
+        status_file = log.with_name(log.name + ".status")
+        if status_file.is_file():
+            try:
+                ok = int(status_file.read_text(errors="ignore").strip()) == 0
+            except ValueError:
+                ok = log_ok(text)
         else:
-            ok = bool(text.strip()) and not re.search(r"\berror:", text)
+            ok = log_ok(text)
         steps.append({"name": log.stem.replace("-", " "), "ok": ok})
         newest = max(newest, log.stat().st_mtime)
 
@@ -407,7 +423,7 @@ def verify_state():
                 "unverified": 0, "took": "", "at": 0}
 
     key = tuple(sorted((f.name, f.stat().st_mtime, f.stat().st_size)
-                       for f in logs.glob("*.log")))
+                       for f in list(logs.glob("*.log")) + list(logs.glob("*.log.status"))))
     if _verify["key"] == key:
         steps, newest, tests, status = _verify["read"]
     else:
