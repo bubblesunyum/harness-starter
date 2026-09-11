@@ -110,21 +110,40 @@ if [ "$stale" -gt 0 ]; then
 fi
 echo
 
-# The hook lives in scripts/ and is pointed at, rather than copied into
-# .git/hooks — beads rewrites that directory on upgrade and would eat it.
-hook="$target/.git/hooks/commit-msg"
+# The hook logic lives in scripts/ and is pointed at, rather than copied into
+# a hooks directory — beads rewrites .beads/hooks on upgrade and would eat it.
+# Git runs hooks from core.hooksPath when set and ignores .git/hooks entirely,
+# and `bd hooks install` sets it to .beads/hooks. Wiring only .git/hooks would
+# silently stop enforcing the moment someone installs bd's hooks.
 delegate='exec "$(git rev-parse --show-toplevel)"/scripts/hooks/commit-msg "$@"'
-if [ -e "$hook" ] && grep -qF "$delegate" "$hook"; then
-  echo "  commit-msg hook already wired"
-elif [ -e "$hook" ]; then
-  # Someone else's hook. Left alone rather than merged into: it is the one file
-  # here that can block every commit in the repo if it is got wrong.
-  echo "  ! .git/hooks/commit-msg exists — add this line to it yourself:"
-  echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
-else
-  printf '#!/bin/bash\n%s\n' "$delegate" > "$hook"
-  chmod +x "$hook"
-  echo "  wired the commit-msg hook"
+wire_hook() {
+  local hook="$1"
+  mkdir -p "$(dirname "$hook")"
+  if [ -e "$hook" ] && grep -qF "$delegate" "$hook"; then
+    echo "  commit-msg hook already wired ($hook)"
+  elif [ -e "$hook" ]; then
+    # Someone else's hook. Left alone rather than merged into: it is the one file
+    # here that can block every commit in the repo if it is got wrong.
+    echo "  ! $hook exists — add this line to it yourself:"
+    echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
+  else
+    printf '#!/bin/bash\n%s\n' "$delegate" > "$hook"
+    chmod +x "$hook"
+    echo "  wired the commit-msg hook ($hook)"
+  fi
+}
+hooks_path="$(git -C "$target" config core.hooksPath 2>/dev/null || true)"
+case "$hooks_path" in
+  "") hooks_dir="$target/.git/hooks" ;;
+  /*) hooks_dir="$hooks_path" ;;
+  *) hooks_dir="$target/$hooks_path" ;;
+esac
+wire_hook "$hooks_dir/commit-msg"
+# Cover the other install order too: add ran before `bd hooks install` leaves
+# .git/hooks wired and .beads/hooks empty, and the later install silences the
+# first. Wiring both when .beads/hooks exists costs one small file.
+if [ -d "$target/.beads/hooks" ] && [ "$target/.beads/hooks" != "$hooks_dir" ]; then
+  wire_hook "$target/.beads/hooks/commit-msg"
 fi
 
 # The dashboard rewrites .claude/launch.json with whatever port it bound, so it
