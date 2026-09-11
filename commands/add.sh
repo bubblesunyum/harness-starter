@@ -118,7 +118,13 @@ echo
 delegate='exec "$(git rev-parse --show-toplevel)"/scripts/hooks/commit-msg "$@"'
 wire_hook() {
   local hook="$1"
-  mkdir -p "$(dirname "$hook")"
+  # Best effort: a hook that cannot be wired must never veto the install —
+  # the ledger, the gitignore lines and the CLAUDE.md import matter more.
+  if ! mkdir -p "$(dirname "$hook")" 2>/dev/null; then
+    echo "  ! cannot write $(dirname "$hook") — add this line to its commit-msg yourself:"
+    echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
+    return 0
+  fi
   if [ -e "$hook" ] && grep -qF "$delegate" "$hook"; then
     echo "  commit-msg hook already wired ($hook)"
   elif [ -e "$hook" ]; then
@@ -126,19 +132,43 @@ wire_hook() {
     # here that can block every commit in the repo if it is got wrong.
     echo "  ! $hook exists — add this line to it yourself:"
     echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
+  elif ! printf '#!/bin/bash\n%s\n' "$delegate" > "$hook" 2>/dev/null; then
+    echo "  ! cannot write $hook — add this line to it yourself:"
+    echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
   else
-    printf '#!/bin/bash\n%s\n' "$delegate" > "$hook"
     chmod +x "$hook"
     echo "  wired the commit-msg hook ($hook)"
   fi
 }
-hooks_path="$(git -C "$target" config core.hooksPath 2>/dev/null || true)"
+# Local only: a global core.hooksPath belongs to every repo on the machine,
+# and a delegate pointing at this project's scripts/ would break commits in
+# all of them.
+hooks_path="$(git -C "$target" config --local core.hooksPath 2>/dev/null || true)"
 case "$hooks_path" in
   "") hooks_dir="$target/.git/hooks" ;;
+  "~"/*) hooks_dir="$HOME/${hooks_path:2}" ;;
   /*) hooks_dir="$hooks_path" ;;
   *) hooks_dir="$target/$hooks_path" ;;
 esac
-wire_hook "$hooks_dir/commit-msg"
+case "$hooks_dir" in
+  "$target"/*)
+    wire_hook "$hooks_dir/commit-msg"
+    ;;
+  *)
+    # Outside the project: writing there is a liberty an installer should not
+    # take. Say so loudly rather than wiring nothing silently.
+    echo "  ! core.hooksPath points outside this project ($hooks_dir)"
+    echo "    add this line to $hooks_dir/commit-msg yourself:"
+    echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
+    ;;
+esac
+if [ -z "$hooks_path" ]; then
+  global_hooks="$(git config --global core.hooksPath 2>/dev/null || true)"
+  if [ -n "$global_hooks" ]; then
+    echo "  ! global core.hooksPath is set ($global_hooks) — git ignores .git/hooks,"
+    echo "    so the hook above only takes effect once hooks run from this project."
+  fi
+fi
 # Cover the other install order too: add ran before `bd hooks install` leaves
 # .git/hooks wired and .beads/hooks empty, and the later install silences the
 # first. Wiring both when .beads/hooks exists costs one small file.
