@@ -38,8 +38,6 @@ if [ -z "$ids" ]; then
 
     Then put the id in the message: "Closes {{PREFIX}}-abc", or just {{PREFIX}}-abc in the body.
 
-    Genuinely unfilable? git commit --no-verify
-
 EOF
   exit 1
 fi
