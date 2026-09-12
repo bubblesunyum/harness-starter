@@ -161,8 +161,8 @@ is invisible to `bd ready` and will still be there in a year.
 
 The whole harness is shaped by having one account. The rules that follow from that:
 
-- **The session brief is capped.** `scripts/brief.sh` prints ~90 tokens: the
-  ready list and the memory keys. It replaced `bd prime`, which prints ~1750
+- **The session brief is capped.** `scripts/brief.sh` prints ~500 tokens: the
+  seat and what it's for, the ready list and the memory keys. It replaced `bd prime`, which prints ~1750
   every session — the whole command reference plus every memory in full —
   whether or not the ledger gets touched. For the full `bd` surface, the `beads`
   skill has it, on demand.

@@ -19,8 +19,8 @@ standards and taste. Read it too. Neither file repeats the other.
 scripts/brief.sh
 ```
 
-The seat, the last session's note, the ready work, the known traps, in about 200
-tokens. Claude Code runs it as a SessionStart hook and opencode loads this file
+The seat and what it's for, the last session's note, the ready work, the known
+traps, in about 500 tokens. Claude Code runs it as a SessionStart hook and opencode loads this file
 through `opencode.json`, but the brief is *state* rather than a static file, so
 if your tool didn't hand it to you, run it yourself. Starting cold is how a
 session spends its first ten minutes rediscovering what the ledger already knew.

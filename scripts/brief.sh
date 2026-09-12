@@ -16,7 +16,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 # Budget: the brief is capped so it can't quietly grow into another `bd prime`.
-# A long ready list is a planning problem, not a reason to print more.
+# A long ready list is a planning problem, not a reason to print more. The one
+# deliberate exception is the seat's identity below it — ~120 tokens, once per
+# session, for the file whose header promises exactly that.
 READY_SHOWN=4
 
 brief() {
@@ -29,7 +31,7 @@ brief() {
     2>/dev/null > /tmp/.har-ready.json || return 0
 
   python3 - "$READY_SHOWN" "$ROOT" <<'PY'
-import json, os, subprocess, sys, glob, datetime
+import json, os, re, subprocess, sys, glob, datetime
 
 shown = int(sys.argv[1])
 root = sys.argv[2]
@@ -76,20 +78,77 @@ def clip(s, n):
 # model upgrades. What the seat has shipped is derived here rather than read
 # from the file: a self-written accomplishment log is a scoreboard the scored
 # party holds the pen for, and the ledger already knows the truth.
-def seat():
-    path = os.path.join(root, "harness", "seat.md")
+#
+# The rest of the identity — role, pronouns, and the paragraphs the installer
+# asked for — is carried on the line below the seat. seat.md's header calls
+# itself the part a session is told about itself at wake-up, and for a while
+# nothing read past the Name line, which made edits there a belief without an
+# effect. The paragraphs cost ~120 tokens once per session, against a brief of
+# ~100; that is the header's claim being true rather than the brief growing.
+def seat_text():
+    # Exception, not OSError: one bad byte in a user-edited file must cost the
+    # seat line, not the whole brief.
     try:
-        text = open(path).read()
-    except OSError:
+        return open(os.path.join(root, "harness", "seat.md"),
+                    errors="replace").read()
+    except Exception:
+        return ""
+
+def field(text, key):
+    for l in text.splitlines():
+        s = l.lstrip()
+        if s.startswith("**%s:**" % key):
+            return s.split(":", 1)[1].strip("* ").strip()
+    return ""
+
+def seat():
+    text = seat_text()
+    if not text:
         return None
-    name = next((l.split(":", 1)[1] for l in text.splitlines()
-                 if l.startswith("**Name:**")), "")
-    name = name.split("—")[0].strip("* ").strip() or "unnamed"
+    # Loud when the format moved rather than the name being blank: a blank Name
+    # is the file saying it isn't finished, but a missing Name line means this
+    # parser no longer reads the file and every brief would say "unnamed" with
+    # nothing failing.
+    if not any(l.lstrip().startswith("**Name:**") for l in text.splitlines()):
+        return "seat: (unparseable harness/seat.md — expected a **Name:** line)"
+    name = field(text, "Name").split("—")[0].strip() or "unnamed"
     shipped = counts.get("closed_issues", 0)
     since = run("git", "-C", root, "log", "--reverse",
                 "--format=%ad", "--date=format:%Y-%m").split("\n", 1)[0].strip()
     tail = f", since {since}" if since else ""
     return f"seat: {name} — {shipped} beads shipped{tail}"
+
+def identity():
+    # Only what comes after the Name/Role/Pronouns block: the header
+    # paragraphs above it explain the file, they are not the identity, and the
+    # closing line is procedure, not who the seat is.
+    text = seat_text()
+    if not text:
+        return None
+    body = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    lines = body.splitlines()
+    meta = ("**Name:**", "**Role:**", "**Pronouns:**")
+    idx = max((i for i, l in enumerate(lines)
+               if l.lstrip().startswith(meta)), default=-1)
+    paras, cur = [], []
+    for l in lines[idx + 1:] + [""]:
+        s = l.strip()
+        if not s or s.startswith("#"):
+            if cur:
+                paras.append(" ".join(cur))
+                cur = []
+            continue
+        cur.append(s)
+    # At paragraph level, so the wrapped closing sentence goes as one: it is
+    # procedure ("write things down"), not identity, and seat.md says so.
+    paras = [p for p in paras
+             if not p.startswith("You are not the first session")]
+    role = field(text, "Role")
+    pronouns = field(text, "Pronouns")
+    prose = clip(" ".join(paras), 400)
+    bits = " ".join(b for b in (
+        role, ("(%s)" % pronouns) if pronouns else "", prose) if b)
+    return ("identity: %s" % bits) if bits else None
 
 # --- laurels --------------------------------------------------------------
 # Praise the user offered on their own, replayed one at a time. It carries no
@@ -148,9 +207,23 @@ def escalation():
         return None
     return f"waiting on you: {len(waiting)} — bd list --label needs-human"
 
-out = [s for s in (seat(), laurel(), handoff()) if s]
+# --- whether the beads are reaching git ------------------------------------
+# The ledger rides its own ref (refs/dolt/data), which moves only when
+# something runs `bd dolt push` — a normal `git push` carries none of it. This
+# is one line when the beads need a push and silence otherwise. Local only, no
+# fetch and no push: the brief may not take outward-facing actions, and a
+# SessionStart hook that pushed would do it every session.
+def ledger_push():
+    out = run("bash", os.path.join(root, "scripts", "ledger-push.sh"),
+              "--check")
+    return out.strip() or None
+
+out = [s for s in (seat(), identity(), laurel(), handoff()) if s]
 out.append(f"ledger: {counts.get('open_issues', 0)} open, "
            f"{len(ready)} ready, {len(active)} in progress")
+push = ledger_push()
+if push:
+    out.extend(push.splitlines())
 if active:
     out.append("in progress:")
     out += [line(i) for i in active]

@@ -32,7 +32,7 @@ added later.
 | | |
 |---|---|
 | **Ledger** | beads in `.beads/` — work and discoveries survive the session that found them |
-| **Brief** | `scripts/brief.sh`, a SessionStart hook: the seat, the last note, the ready list, the memory keys, in ~100 tokens |
+| **Brief** | `scripts/brief.sh`, a SessionStart hook: the seat and what it's for, the last note, the ready list, the memory keys, in ~500 tokens |
 | **Gate** | `scripts/verify.sh` — build, tests, and doc staleness behind one exit code and about six lines of output |
 | **Review** | `scripts/review.sh` builds one packet; three subagents read it — taste on Haiku, correctness on Sonnet, design on Sonnet reading screenshots |
 | **Librarian** | audits the knowledge layer from a digest, on a cadence, and proposes what to delete |
@@ -45,7 +45,7 @@ added later.
 **Everything is token-budgeted.** One account means progressive disclosure over
 always-loaded context, cheap models for bulk reading, and review scoped to the
 diff rather than the tree. The brief replaces `bd prime` (~1900 tokens every
-session, whether or not the ledger gets touched) with ~200.
+session, whether or not the ledger gets touched) with ~500.
 
 That replacement is an override, not a default, and it does not stay done:
 `bd setup claude` reinstalls the `bd prime` hook every time it runs, beside the

@@ -124,7 +124,7 @@ One account, not a team of thirteen agents, so the whole design is
 token-budgeted: progressive disclosure over always-loaded context, cheap models
 for bulk reading, diff-scoped review. The stock beads SessionStart hook
 (`bd prime`, ~1900 tokens every session) is replaced by `scripts/brief.sh`
-(~200) — see below, because that replacement does not stay done on its own.
+(~500) — see below, because that replacement does not stay done on its own.
 
 ## The brief overrides `bd setup claude`, and has to be re-applied
 
@@ -132,9 +132,10 @@ for bulk reading, diff-scoped review. The stock beads SessionStart hook
 harness deliberately does not want it: `bd prime` is a command reference and a
 session-close protocol, which is what the `beads` skill holds and loads on
 demand. Always-loading it is the exact instinct progressive disclosure exists to
-resist, and it is not small — measured at 7,949 bytes against the brief's 1,072.
+resist, and it is not small — measured at 7,949 bytes against the brief's 2,122.
 What a session actually needs at wake-up is ledger *state*, and `brief.sh`
-already prints it: the seat, the last note, the ready list, the memory keys.
+already prints it: the seat and what it's for, the last note, the ready list,
+the memory keys.
 
 The hook is additive, so it does not replace the brief — it runs beside it and
 both are paid for. It shipped that way in this starter and in the first project

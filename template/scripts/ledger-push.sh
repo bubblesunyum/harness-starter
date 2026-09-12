@@ -1,8 +1,14 @@
 #!/bin/bash
 # push the ledger to git, so the beads outlive this machine
 #
-#   scripts/ledger-push.sh
+#   scripts/ledger-push.sh          # push now
+#   scripts/ledger-push.sh --check  # one line when a push is needed, silence otherwise
 #
+# --check is what the brief and the gate run: a session cannot end with an
+# unpushed ledger without being told, and pushing on its behalf stays opt-in.
+# It never fails and never touches the network — it compares against the
+# last-known remote tracking, which always shows an unpushed local ledger (the
+# failure this exists for). A remote that moved elsewhere is caught on fetch.
 # The issue graph lives in .beads/embeddeddolt/, which is gitignored — a normal
 # `git push` carries no part of it. bd keeps it on its own ref on the same
 # remote (refs/dolt/data), and that ref moves only when something runs
@@ -11,6 +17,56 @@
 # from every close reason, every dependency and every memory being gone, and it
 # looks perfectly healthy right up until it isn't.
 set -euo pipefail
+
+# The Dolt data directory holding this repo's ledger, or nothing when there is
+# no ledger here to push.
+ledger_datadir() {
+  for d in "$PWD/.beads/embeddeddolt/"*/.dolt; do
+    [ -d "$d" ] && { printf '%s\n' "$(dirname "$d")"; return 0; }
+  done
+  return 1
+}
+
+ledger_check() {
+  cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || return 0
+  command -v bd >/dev/null 2>&1 || return 0
+  [ -d .beads/embeddeddolt ] || return 0
+  if ! bd dolt remote list 2>/dev/null | grep -q '^origin'; then
+    if [ -z "$(git remote get-url origin 2>/dev/null)" ]; then
+      echo "push the ledger: no git origin, so no Dolt remote — the beads have never left this machine. Once the repo has an origin, wire it (bd dolt remote add origin git+<the origin URL>), then run scripts/ledger-push.sh."
+    else
+      echo "push the ledger: no Dolt remote — the beads have never left this machine. Wire it to the repo's origin (bd dolt remote add origin git+<the origin URL>), then run scripts/ledger-push.sh."
+    fi
+    return 0
+  fi
+  # Ahead needs the dolt CLI; bd alone cannot say it. Quiet without it rather
+  # than wrong — the no-remote line above is the one that must always fire.
+  command -v dolt >/dev/null 2>&1 || return 0
+  dir="$(ledger_datadir)" || return 0
+  if ! dolt --data-dir "$dir" status 2>/dev/null | grep -q "nothing to commit, working tree clean"; then
+    echo "push the ledger: uncommitted bead changes — run bd dolt commit, then scripts/ledger-push.sh."
+  fi
+  branch="$(dolt --data-dir "$dir" branch 2>/dev/null | awk '/^\*/ { print $2 }')"
+  [ -n "${branch:-}" ] || return 0
+  # Exact match on the last field: a substring test calls origin/main present
+  # when only origin/main2 exists, and the ledger that was never pushed reads
+  # as silent — the one outcome this check exists to prevent.
+  if ! dolt --data-dir "$dir" branch -a 2>/dev/null | awk '{ print $NF }' | grep -q -x -F "remotes/origin/$branch"; then
+    echo "push the ledger: never pushed to origin — the beads are still only on this machine. Run scripts/ledger-push.sh."
+    return 0
+  fi
+  ahead="$(dolt --data-dir "$dir" log "origin/$branch..$branch" --oneline 2>/dev/null | wc -l | tr -d ' ')"
+  if [ -n "$ahead" ] && [ "$ahead" -gt 0 ] 2>/dev/null; then
+    echo "push the ledger: $ahead commit(s) ahead of origin — run scripts/ledger-push.sh."
+  fi
+}
+
+if [ "${1:-}" = "--check" ]; then
+  # Never fails: the brief and the gate print whatever comes back, and neither
+  # may change its own verdict over a ledger it couldn't read.
+  ledger_check || true
+  exit 0
+fi
 
 cd "$(git rev-parse --show-toplevel)"
 
