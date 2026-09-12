@@ -5,6 +5,7 @@
     scripts/context.py check      # exit 1 if a doc is stale or the budget is blown
     scripts/context.py bless      # re-record hashes after updating a doc
     scripts/context.py digest     # everything the librarian pass needs to read
+    scripts/context.py spend      # what recent sessions actually cost, per session
 
 Two failures this catches, both of which shipped before it existed:
 
@@ -36,6 +37,14 @@ DOCS = [ROOT / "CLAUDE.md", ROOT / "AGENTS.md", ROOT / ".claude/HARNESS.md",
 # is why it's counted only when it's there rather than assumed.
 MEMORY_INDEX = (Path.home() / ".claude/projects"
                 / str(ROOT).replace("/", "-") / "memory/MEMORY.md")
+
+# Claude Code's own session transcripts, beside that memory directory. They
+# record what each turn actually cost, which is the only place the *whole*
+# session floor is visible: the docs below are a measurable 4k, and a real
+# session opens at ~54k. The other 50k is Claude Code's system prompt, its tool
+# schemas and whatever MCP connectors the app has enabled — none of it in this
+# repo, none of it countable by reading files, and all of it re-sent every turn.
+TRANSCRIPTS = MEMORY_INDEX.parent.parent
 
 
 # Every settings file whose SessionStart hooks fire in a session here — Claude
@@ -140,6 +149,43 @@ def staleness():
     return stale, unblessed
 
 
+def turn_costs(transcript):
+    """Every turn's full input size, in order. A resumed session replays its
+    history with no usage recorded, so zero-cost turns are dropped rather than
+    counted as a free session floor."""
+    costs = []
+    for line in transcript.read_text(errors="replace").splitlines():
+        try:
+            usage = (json.loads(line).get("message") or {}).get("usage")
+        except ValueError:
+            continue
+        if usage:
+            total = (usage.get("input_tokens", 0)
+                     + usage.get("cache_creation_input_tokens", 0)
+                     + usage.get("cache_read_input_tokens", 0))
+            if total:
+                costs.append(total)
+    return costs
+
+
+def sessions(limit=12):
+    """Recent transcripts, newest last. Bounded because the floor drifts with
+    Claude Code releases and connector changes, and a year-old session says
+    nothing about what the next one will cost."""
+    if not TRANSCRIPTS.is_dir():
+        return []
+    found = sorted(TRANSCRIPTS.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
+    return [(p, turn_costs(p)) for p in found[-limit:]]
+
+
+def floor():
+    """The median opening context across recent sessions: what a session pays
+    before it has done anything. Median rather than mean because one resumed or
+    aborted session shouldn't move the number the budget is read against."""
+    opens = sorted(c[0] for _, c in sessions() if c)
+    return (opens[len(opens) // 2], len(opens)) if opens else (0, 0)
+
+
 def budget():
     brief = subprocess.run(["bash", str(ROOT / "scripts/brief.sh")],
                            capture_output=True, text=True).stdout
@@ -205,6 +251,24 @@ def digest():
     print(packet)
 
 
+def spend():
+    """Where a session's tokens went. The floor is fixed and the conversation
+    is not, so the two numbers argue for different fixes: a smaller floor, or a
+    shorter session. Printed per session because the shape only shows up there
+    — the same harness produces a 60k session and a 300k one."""
+    print(f"{'session':12}{'turns':>7}{'open':>10}{'peak':>10}{'total in':>12}"
+          f"{'floor share':>13}")
+    for path, costs in sessions(limit=20):
+        if not costs:
+            continue
+        total = sum(costs)
+        print(f"{path.stem[:8]:12}{len(costs):>7}{costs[0]:>10,}{max(costs):>10,}"
+              f"{total:>12,}{100 * costs[0] * len(costs) / total:>12.0f}%")
+    print("\n  floor share is what the opening context alone costs across the"
+          "\n  session — spend above it is conversation, and the fix for each"
+          "\n  is different. See .claude/HARNESS.md.")
+
+
 def report(strict):
     stale, unblessed = staleness()
     parts, total = budget()
@@ -234,6 +298,12 @@ def report(strict):
     # better — so this is a trend line for it to read, not a gate to pass.
     print(f"  cost  {total} tokens every session"
           + " (" + ", ".join(f"{name} {n}" for name, n in parts) + ")")
+    measured, seen = floor()
+    if measured:
+        print(f"  floor {measured:,} tokens before a session does anything"
+              f" — {total} of it this repo, {measured - total:,} Claude Code's own")
+        print(f"        (median of {seen} recent sessions; re-sent every turn,"
+              " so it sets the slope of the whole session)")
     if not stale:
         print(f"  ok    {len(DOCS)} docs match the sources they describe")
 
@@ -246,5 +316,7 @@ if __name__ == "__main__":
         bless()
     elif command == "digest":
         digest()
+    elif command == "spend":
+        spend()
     else:
         sys.exit(report(strict=(command == "check")))
