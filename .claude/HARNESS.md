@@ -112,7 +112,7 @@ them by design, so merging is a judgment call — and a command that overwrote
 them would be a command nobody could afford to run.
 
 The comparison has to allow for the installer's own post-copy edits, or every
-fresh install reads as stale: `bd setup codex` appends a block to `AGENTS.md`,
+fresh install reads as stale: `bd init` leaves managed blocks in `AGENTS.md`,
 and the tidier rewrites `.claude/settings.json` through `json.dumps`, reordering
 every key. Both are normalised away on both sides. The gate has a step that
 installs into a throwaway repo and asserts the result reads as current, because

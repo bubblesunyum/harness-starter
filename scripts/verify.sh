@@ -129,6 +129,72 @@ step "a fresh install reads as current" bash -c '
   out=$(bin/harness update "$probe" 2>&1) || {
     echo "error: update called a fresh install stale"; echo "$out"; exit 1; }'
 
+# `harness add` owns the git dependency: a fresh directory gets a repository
+# rather than an error, and says so in its own voice.
+step "add initialises a missing git repository" bash -c '
+  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$probe\"" EXIT
+  out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
+  [ -d "$probe/.git" ] || { echo "error: no .git after add"; exit 1; }
+  echo "$out" | grep -q "initialised a git repository" ||
+    { echo "error: add never said it initialised one"; echo "$out"; exit 1; }'
+
+# But never a nested one: inside another repository it refuses, naming the
+# parent, rather than leaving a repository inside a repository. Asserted on the
+# parent path itself — the target path contains it, so matching the target
+# would pass even a refusal that named nothing.
+step "add refuses a subdirectory of a repository" bash -c '
+  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$probe\"" EXIT
+  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  mkdir "$probe/sub" || { echo "error: mkdir failed"; exit 1; }
+  parent="$(cd "$probe" && pwd -P)" || { echo "error: pwd failed"; exit 1; }
+  out=$(bin/harness add "$probe/sub" 2>&1) &&
+    { echo "error: add succeeded inside a repository"; echo "$out"; exit 1; }
+  [ -d "$probe/sub/.git" ] && { echo "error: add created a nested .git"; exit 1; }
+  echo "$out" | grep -qF "at $parent" ||
+    { echo "error: the refusal never named the parent"; echo "$out"; exit 1; }'
+
+# A .git entry git itself rejects — half a `git init`, a stray file — refuses
+# rather than installing a harness onto a repository that doesn't work.
+step "add refuses a broken .git entry" bash -c '
+  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$probe\"" EXIT
+  mkdir "$probe/.git" || { echo "error: mkdir failed"; exit 1; }
+  out=$(bin/harness add "$probe" 2>&1) &&
+    { echo "error: add succeeded over a broken .git"; echo "$out"; exit 1; }
+  if [ -e "$probe/AGENTS.md" ]; then
+    echo "error: add installed files into a broken repository"; exit 1;
+  fi'
+
+# A bare repository has no working tree to install into: refuse, and leave it
+# alone. `rev-parse --show-toplevel` fails there, so without this the install
+# would sail past the nesting guard and git init a .git inside the bare repo.
+step "add refuses a bare repository" bash -c '
+  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$probe\"" EXIT
+  git init -q --bare "$probe/b.git" || { echo "error: git init --bare failed"; exit 1; }
+  out=$(bin/harness add "$probe/b.git" 2>&1) &&
+    { echo "error: add succeeded in a bare repository"; echo "$out"; exit 1; }
+  if [ -e "$probe/b.git/.git" ]; then
+    echo "error: add wrote a .git into a bare repo"; exit 1;
+  fi'
+
+# A linked worktree is a repository already — .git is a file, not a directory —
+# so it installs rather than refusing with the directory as its own parent.
+step "add accepts a linked worktree" bash -c '
+  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$probe\" \"$probe-wt\"" EXIT
+  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init) ||
+    { echo "error: empty commit failed"; exit 1; }
+  git -C "$probe" worktree add -q "$probe-wt" 2>&1 ||
+    { echo "error: worktree add failed"; exit 1; }
+  out=$(bin/harness add "$probe-wt" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "initialised a git repository"; then
+    echo "error: add claimed to initialise a worktree"; echo "$out"; exit 1;
+  fi'
+
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
 fi

@@ -50,17 +50,79 @@ harness_is_contract() {
 # Resolve and validate a target project directory, echoing the resolved path.
 # -P, so a symlink pointing at the starter can't slip past add.sh's guard by
 # comparing unequal to the path it resolves to.
+#
+# With --init (harness add only), a directory with no .git gets one rather than
+# an error: a repository is a dependency of the harness — the commit-msg hook
+# and the review packet both need one — and installing a dependency is what an
+# installer does. No commit is made; an empty repo installs fine, and the hook
+# fires on the first real commit either way. Refused when the target already
+# sits inside another repository's working tree, where a nested repository is a
+# mess nobody asked for — that refusal names the toplevel. A bare check never
+# inits: `harness update` only reports, and a command that only reports must not
+# create repositories as a side effect.
 harness_resolve_target() {
-  local target="$1"
+  local init=0
+  if [ "${1:-}" = "--init" ]; then init=1; shift; fi
+  local target="${1:-}"
+  [ -n "$target" ] || { echo "✗ no target directory given" >&2; return 1; }
   [ -e "$target" ] || { echo "✗ no such path: $target" >&2; return 1; }
   [ -d "$target" ] || { echo "✗ not a directory: $target" >&2; return 1; }
   target="$(cd "$target" && pwd -P)"
-  [ -d "$target/.git" ] || {
-    echo "✗ $target is not a git repository." >&2
-    echo "  The commit-msg hook and the review packet both need one — run 'git init' first." >&2
+  # Whether this is a repository is git's call, not the filesystem's: a
+  # directory named .git that rev-parse won't vouch for — half a `git init`, a
+  # stray file, a moved worktree's pointer — is a broken state, and trusting
+  # the name alone installs a harness onto a repository that doesn't work.
+  local toplevel
+  toplevel="$(git -C "$target" rev-parse --show-toplevel 2>/dev/null || true)"
+  # The toplevel names the target itself for a plain repository, a linked
+  # worktree, and a submodule alike — .git is a file in the latter two, which
+  # is why the check reads rev-parse rather than testing for a directory. Any
+  # of those already is a repository; installing there is fine, and calling a
+  # worktree nested would send whoever reads it after the wrong bug.
+  if [ -n "$toplevel" ] && [ "$toplevel" = "$target" ]; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+  # A .git entry git itself rejects, with no working tree above it either.
+  # Repairing that here would be guessing about a state git already calls
+  # broken — an empty .git costs nothing to recreate properly, and a strange
+  # one deserves a look before anything builds on it. Say so instead.
+  if [ -z "$toplevel" ] && [ -e "$target/.git" ]; then
+    echo "✗ $target has a .git entry but is not a git working tree." >&2
+    echo "  Remove it, or run 'git init' there yourself once it looks right." >&2
     return 1
-  }
-  printf '%s\n' "$target"
+  fi
+  if [ "$init" -eq 1 ]; then
+    # A bare repository has no working tree and no .git entry, so the checks
+    # above pass it through — and `git init` would then happily create a .git
+    # inside it and copy a working tree's files around it. Refuse first.
+    if [ "$(git -C "$target" rev-parse --is-bare-repository 2>/dev/null || true)" = "true" ]; then
+      echo "✗ $target is a bare git repository — harness add needs a working tree." >&2
+      echo "  The harness installs files, and a bare repository has nowhere to put them." >&2
+      return 1
+    fi
+    if [ -n "$toplevel" ]; then
+      echo "✗ $target is inside the git repository at $toplevel." >&2
+      echo "  harness add never creates a nested repository — pick a directory outside it." >&2
+      return 1
+    fi
+    git -C "$target" init -q >&2 || {
+      echo "✗ couldn't git init $target — run 'git init' there yourself." >&2
+      return 1
+    }
+    printf '%s\n' "$target"
+    return 0
+  fi
+  # A bare repository takes its own refusal: 'git init' is the corruption the
+  # add guard above exists to prevent, so it must not be the advice here.
+  if [ "$(git -C "$target" rev-parse --is-bare-repository 2>/dev/null || true)" = "true" ]; then
+    echo "✗ $target is a bare git repository — this needs a working tree." >&2
+    echo "  Pick a working-tree directory instead." >&2
+    return 1
+  fi
+  echo "✗ $target is not a git repository." >&2
+  echo "  The commit-msg hook and the review packet both need one — run 'git init' first." >&2
+  return 1
 }
 
 # The prefix a project's ledger already uses, or empty if it has none. Every bead
@@ -157,7 +219,7 @@ harness_render() {
 # them and would otherwise report every fresh install as stale — which is the
 # false alarm that teaches everyone to ignore the warning:
 #
-#   *.md    `bd setup codex` appends its own block to AGENTS.md. That block is
+#   *.md    `bd` leaves its managed block in AGENTS.md. That block is
 #           beads' to maintain, not the harness's, so it is ignored on both
 #           sides — the same BEGIN/END pair add.sh's tidier already knows about.
 #   *.json  the tidier rewrites .claude/settings.json through json.dumps, which

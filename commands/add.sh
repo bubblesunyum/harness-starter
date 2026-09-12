@@ -37,8 +37,8 @@ Installs the agentic development harness into a project.
   harness add <path>       into that project instead
 
 The project's name and its bead prefix are inferred from the directory, and a
-project that already has a ledger keeps the prefix it already has. Needs a git
-repository, and beads (bd) on PATH.
+project that already has a ledger keeps the prefix it already has. Needs beads
+(bd) on PATH; a missing git repository is created.
 
 Never overwrites a file that already exists, so re-running is a safe way to
 pick up pieces added to the starter since. Files carrying the harness contract
@@ -52,7 +52,14 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
 esac
 
-target="$(harness_resolve_target "${1:-$PWD}")"
+# Whether the target already is a repository, read off the raw path before
+# resolving it: --init creates one when it isn't, and the install says so below
+# in its own voice — resolve_target's stdout is the path, so the notice can't
+# come from inside it. -e rather than -d: a linked worktree's .git is a file,
+# and it is still a repository — no init happens there, so no notice either.
+had_git=0
+[ -e "${1:-$PWD}/.git" ] && had_git=1
+target="$(harness_resolve_target --init "${1:-$PWD}")"
 # Installing into the starter itself is allowed on purpose — that is how the
 # harness gets worked on with the harness. It is not free of a trap; see
 # "Working on the starter" in the README.
@@ -68,6 +75,7 @@ HARNESS_NAME="$name"
 HARNESS_PREFIX="$prefix"
 
 echo "installing the harness into $target"
+[ "$had_git" -eq 0 ] && echo "  initialised a git repository"
 echo "  project: $name"
 echo "  prefix:  $prefix-"
 echo
@@ -279,17 +287,18 @@ if [ -n "${ledger:-}" ]; then
   fi
 fi
 
-# bd writes its managed guidance into every agent-instructions file it finds:
-# `bd init` puts a block in CLAUDE.md *and* in AGENTS.md, and `bd setup codex`
-# adds a second, shorter one to AGENTS.md. Three always-loaded copies of the
-# same text. One survives, in AGENTS.md, because that is the file every agent
-# reads. `bd init` also registers a `bd prime` SessionStart hook — ~1900 tokens
-# of command reference beside the brief that exists to replace it — so a fresh
-# install would otherwise start out paying for both. .claude/HARNESS.md has the
-# reasoning; the gate catches any of it coming back.
+# `bd init` leaves blocks in CLAUDE.md and in AGENTS.md — two in the latter,
+# its INTEGRATION block and a CODEX SETUP one. Only one survives, in AGENTS.md,
+# because that is the file every agent reads. `bd init` also
+# registers a `bd prime` SessionStart hook — ~1900 tokens of command reference
+# beside the brief that exists to replace it — so a fresh install would
+# otherwise start out paying for both. .claude/HARNESS.md has the reasoning;
+# the gate catches any of it coming back.
+#
+# Deliberately no `bd setup codex`: its block restates what template/AGENTS.md
+# already says, in worse words, and every re-run would re-append it over a
+# deliberate removal. Codex hook setup stays an opt-in — run it by hand.
 if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-  (cd "$target" && bd setup codex >/dev/null 2>&1) &&
-    echo "  beads guidance installed in AGENTS.md"
   if python3 - "$target" <<'PYEOF'
 import json
 import re
@@ -312,9 +321,11 @@ if claude.exists() and BLOCK.search(claude.read_text()):
     rewrite(claude, BLOCK.sub("", claude.read_text()).rstrip() + "\n")
     did.append("removed the duplicate beads block from CLAUDE.md")
 
-# Of the copies bd leaves in AGENTS.md, keep the last — `bd setup codex` appends
-# its block after `bd init`'s, and the codex one is both shorter and the one
-# that recipe will keep up to date.
+# `bd init` leaves two blocks in AGENTS.md — INTEGRATION and CODEX SETUP —
+# and an older install may carry a third from when add ran `bd setup codex`
+# itself. Collapse to one, the last: the shorter codex block, and the one this
+# starter's own AGENTS.md carries. The drift check ignores it on both sides —
+# it sits inside bd's markers, which the harness never edits.
 agents = target / "AGENTS.md"
 if agents.exists():
     blocks = BLOCK.findall(agents.read_text())
