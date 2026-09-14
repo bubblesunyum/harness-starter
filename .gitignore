@@ -9,3 +9,6 @@ __pycache__/
 
 # The live dashboard port, rewritten on every bind — machine-local.
 .claude/launch.json
+
+# Per-role models, naming what this machine happens to have — machine-local.
+harness/models.json

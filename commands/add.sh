@@ -184,23 +184,26 @@ if [ -d "$target/.beads/hooks" ] && [ "$target/.beads/hooks" != "$hooks_dir" ]; 
   wire_hook "$target/.beads/hooks/commit-msg"
 fi
 
-# The dashboard rewrites .claude/launch.json with whatever port it bound, so it
-# is machine-local by nature — tracked, it would show up as a diff at the end of
-# every session in every checkout. Appended rather than created wholesale: the
-# target's .gitignore is the target's.
+# Machine-local files the install ignores on the target's behalf. Appended
+# rather than created wholesale: the target's .gitignore is the target's.
+# Each would otherwise show up as a diff at the end of every session in every
+# checkout.
 ignore="$target/.gitignore"
-if [ -e "$ignore" ] && grep -qxF '.claude/launch.json' "$ignore"; then
-  echo "  .claude/launch.json already ignored"
-else
-  printf '\n# The live dashboard port, rewritten on every bind — machine-local.\n.claude/launch.json\n' >> "$ignore"
-  echo "  ignored .claude/launch.json"
-fi
-if [ -e "$ignore" ] && grep -qxF 'dashboard/state.json' "$ignore"; then
-  echo "  dashboard/state.json already ignored"
-else
-  printf '\n# The dashboard snapshot, rewritten on every poll — machine-local.\ndashboard/state.json\n' >> "$ignore"
-  echo "  ignored dashboard/state.json"
-fi
+append_ignore() {
+  local path="$1" comment="$2"
+  if [ -e "$ignore" ] && grep -qxF "$path" "$ignore"; then
+    echo "  $path already ignored"
+  else
+    printf '\n# %s\n%s\n' "$comment" "$path" >> "$ignore"
+    echo "  ignored $path"
+  fi
+}
+append_ignore '.claude/launch.json' \
+  'The live dashboard port, rewritten on every bind — machine-local.'
+append_ignore 'dashboard/state.json' \
+  'The dashboard snapshot, rewritten on every poll — machine-local.'
+append_ignore 'harness/models.json' \
+  'Per-role models, naming what this machine happens to have — machine-local.'
 
 # Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
 # AGENTS.md. The import is what makes the contract always-loaded in both, rather

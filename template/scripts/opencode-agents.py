@@ -27,6 +27,11 @@ ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_AGENTS = ROOT / ".claude/agents"
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 
+# The roster reader lives in models.py and is imported, not reimplemented:
+# two tolerant parsers of one file will drift.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from models import load_roster, roster_state
+
 # Claude's `tools:` is an allowlist; opencode has no allowlist, only per-tool
 # permissions. Only the tools that write or reach outside the repo are
 # translated: those are the ones an omission actually costs something. The read
@@ -54,7 +59,7 @@ def frontmatter(text):
     return fields, match.group(2)
 
 
-def translate(source):
+def translate(source, roster):
     """The opencode agent file for one .claude/agents/*.md, as text."""
     fields, body = frontmatter(source.read_text())
     granted = {t.strip() for t in fields.get("tools", "").split(",") if t.strip()}
@@ -66,11 +71,15 @@ def translate(source):
     # frontmatter produces — puts every reviewer in opencode's primary agent
     # picker, beside build and plan, where nobody meant to put them.
     header.append("mode: subagent")
-    # No `model:`. Claude's tier names (haiku, sonnet) are aliases opencode does
-    # not have: it wants a provider-qualified id, and which provider a given
-    # install has authenticated is not knowable from here. Omitted, the agent
-    # inherits the session's model and always resolves. A real tier→model roster
-    # is its own piece of work.
+    # A real model line, from the roster — or none. Claude's tier names
+    # (haiku, sonnet) are aliases opencode does not have: it wants a
+    # provider-qualified id, and which provider a given install has
+    # authenticated isn't knowable from here. Omitted, the agent inherits the
+    # session's model and always resolves; a fresh clone stays model-free
+    # until its first review writes the roster.
+    model = roster.get(source.stem)
+    if model:
+        header.append(f"model: {model}")
     denied = [key for key, claude_tools in sorted(GUARDED.items())
               if not granted.intersection(claude_tools)]
     if denied:
@@ -86,7 +95,8 @@ def translate(source):
 
 def generated():
     """(destination, wanted text) for every agent."""
-    return [(OPENCODE_AGENTS / source.name, translate(source))
+    roster = load_roster()
+    return [(OPENCODE_AGENTS / source.name, translate(source, roster))
             for source in sorted(CLAUDE_AGENTS.glob("*.md"))]
 
 
@@ -128,6 +138,10 @@ def check():
         print(f"  AGENT {path.relative_to(ROOT)} has no source any more")
     if stale:
         print(f"        run {GENERATED_BY}")
+        if roster_state() != "ok":
+            print("        harness/models.json is missing, corrupt, or empty — "
+                  "generated agents carry no model lines until a review "
+                  "writes the roster")
         return 1
     print(f"  ok    {len(wanted)} opencode agents match their sources")
     return 0

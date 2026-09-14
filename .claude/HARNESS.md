@@ -188,12 +188,13 @@ it worked and fails at spawn. So the prompt body has one home,
 header around it into `.opencode/agent/`. The gate checks the two match, because
 nothing about editing the source makes opencode complain.
 
-The generated agents carry no `model:`. Claude's tier names are aliases opencode
-doesn't have — it wants a provider-qualified id, and which provider a given
-install has authenticated isn't knowable from the starter. Omitted, the agent
-inherits the session's model and always resolves; the cost is that
-`reviewer-taste` stops being the cheap one under opencode until there's a real
-tier→model roster.
+The generated agents carry a `model:` line from `harness/models.json` — the
+per-role roster, mapping reviewer-taste and friends to provider-qualified ids.
+The roster is machine-local and gitignored: it names models this machine
+happens to have. A fresh clone has none, so the first review prompts once per
+role and writes it; later runs are silent. With no roster the agents omit
+`model:` and inherit the session's model, which always resolves — the cost is
+that `reviewer-taste` stops being the cheap one under opencode until then.
 
 **There is no session-start hook to write.** opencode's plugin hooks are
 `event`, `chat.message`, `chat.params`, `chat.headers`, `chat.completion`,
