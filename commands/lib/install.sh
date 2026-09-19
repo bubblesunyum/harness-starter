@@ -55,7 +55,8 @@ harness_is_contract() {
 # an error: a repository is a dependency of the harness — the commit-msg hook
 # and the review packet both need one — and installing a dependency is what an
 # installer does. No commit is made; an empty repo installs fine, and the hook
-# fires on the first real commit either way. Refused when the target already
+# fires on the first real commit either way. The initial branch is main,
+# regardless of the machine's init.defaultBranch. Refused when the target already
 # sits inside another repository's working tree, where a nested repository is a
 # mess nobody asked for — that refusal names the toplevel. A bare check never
 # inits: `harness update` only reports, and a command that only reports must not
@@ -106,7 +107,14 @@ harness_resolve_target() {
       echo "  harness add never creates a nested repository — pick a directory outside it." >&2
       return 1
     fi
-    git -C "$target" init -q >&2 || {
+    # Explicit -b main rather than the machine's init.defaultBranch, which is
+    # still master on machines that never set it. Git before 2.28 has no -b:
+    # there, init with the local default and point the unborn HEAD at main
+    # before any commit can land on the wrong name.
+    (git -C "$target" init -q -b main >&2 || {
+      git -C "$target" init -q >&2 &&
+      git -C "$target" symbolic-ref HEAD refs/heads/main >&2
+    }) || {
       echo "✗ couldn't git init $target — run 'git init' there yourself." >&2
       return 1
     }
