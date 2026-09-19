@@ -118,6 +118,15 @@ every key. Both are normalised away on both sides. The gate has a step that
 installs into a throwaway repo and asserts the result reads as current, because
 that particular false alarm is invisible in the diff that causes it.
 
+## Codex context
+
+The template supplies `.codex/hooks.json` to run the existing project brief and
+`harness/codex.md` for Codex task completion guidance. The installer removes
+generated Beads instruction blocks and replaces generic Beads context hooks,
+preserving unrelated hooks. Re-running it does not restore `bd prime` policy.
+Codex hook trust remains local; run the brief manually until the hook is trusted.
+Claude and OpenCode keep their existing startup configuration.
+
 ## Why it's shaped this way
 
 One account, not a team of thirteen agents, so the whole design is

@@ -16,7 +16,8 @@ and finish the piece first.
 ## The close
 
 1. **Settle the ledger.** Claimed beads are closed with a reason, or returned to
-   open with `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
+   open with `bd update <id> --status open`, followed by
+   `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
    Anything that surprised you written with `bd remember`.
 2. **Prove the tree.** `scripts/verify.sh` passes and the work is committed.
 3. **Push the ledger.** `scripts/ledger-push.sh`. The beads are not in the commit

@@ -83,6 +83,8 @@ fi
 # every script parses, and the CLI can still list its own commands. Cheap enough
 # that there's no excuse for skipping it.
 
+step "codex install context" python3 scripts/test-codex-install.py
+
 step "shell parses" bash -c '
   set -e
   for f in bin/harness commands/*.sh commands/lib/*.sh scripts/*.sh scripts/hooks/* \

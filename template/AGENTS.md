@@ -105,3 +105,8 @@ next. The `handoff` skill has the procedure.
 
 `.claude/HARNESS.md` explains *why* the pieces are shaped this way. Read it
 before rearranging any of them.
+
+## Codex
+
+**Codex only:** read [harness/codex.md](harness/codex.md) for startup and task
+completion guidance.

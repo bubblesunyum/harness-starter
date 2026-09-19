@@ -291,8 +291,8 @@ if [ -n "${ledger:-}" ]; then
 fi
 
 # `bd init` leaves blocks in CLAUDE.md and in AGENTS.md — two in the latter,
-# its INTEGRATION block and a CODEX SETUP one. Only one survives, in AGENTS.md,
-# because that is the file every agent reads. `bd init` also
+# its INTEGRATION block and a CODEX SETUP one. Remove both: AGENTS.md already
+# carries the project workflow. `bd init` also
 # registers a `bd prime` SessionStart hook — ~1900 tokens of command reference
 # beside the brief that exists to replace it — so a fresh install would
 # otherwise start out paying for both. .claude/HARNESS.md has the reasoning;
@@ -300,7 +300,7 @@ fi
 #
 # Deliberately no `bd setup codex`: its block restates what template/AGENTS.md
 # already says, in worse words, and every re-run would re-append it over a
-# deliberate removal. Codex hook setup stays an opt-in — run it by hand.
+# deliberate removal. The template supplies the project brief hook for Codex.
 if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
   if python3 - "$target" <<'PYEOF'
 import json
@@ -324,18 +324,42 @@ if claude.exists() and BLOCK.search(claude.read_text()):
     rewrite(claude, BLOCK.sub("", claude.read_text()).rstrip() + "\n")
     did.append("removed the duplicate beads block from CLAUDE.md")
 
-# `bd init` leaves two blocks in AGENTS.md — INTEGRATION and CODEX SETUP —
-# and an older install may carry a third from when add ran `bd setup codex`
-# itself. Collapse to one, the last: the shorter codex block, and the one this
-# starter's own AGENTS.md carries. The drift check ignores it on both sides —
-# it sits inside bd's markers, which the harness never edits.
+# Keep the project contract; generated Beads instructions use a different policy.
 agents = target / "AGENTS.md"
-if agents.exists():
-    blocks = BLOCK.findall(agents.read_text())
-    if len(blocks) > 1:
-        rewrite(agents, BLOCK.sub("", agents.read_text()).rstrip()
-                + "\n\n" + blocks[-1].rstrip() + "\n")
-        did.append(f"collapsed {len(blocks)} beads blocks in AGENTS.md into one")
+if agents.exists() and BLOCK.search(agents.read_text()):
+    rewrite(agents, BLOCK.sub("", agents.read_text()).rstrip() + "\n")
+    did.append("removed generic beads blocks from AGENTS.md")
+
+# bd init can install context hooks after the template was copied. Preserve
+# unrelated hooks and replace only the generic Beads context entry points.
+codex = target / ".codex/hooks.json"
+if codex.exists():
+    config = json.loads(codex.read_text())
+    hooks = config.setdefault("hooks", {})
+    removed = False
+    for event, groups in list(hooks.items()):
+        kept = []
+        for group in groups:
+            entries = [h for h in group.get("hooks", [])
+                       if not re.search(r"\bbd\s+(?:codex-hook|prime)\b", h.get("command", ""))]
+            removed |= len(entries) != len(group.get("hooks", []))
+            if entries:
+                kept.append({**group, "hooks": entries})
+        if kept:
+            hooks[event] = kept
+        else:
+            hooks.pop(event)
+    starts = hooks.setdefault("SessionStart", [])
+    added = not any("scripts/brief.sh" in h.get("command", "")
+                    for g in starts for h in g.get("hooks", []))
+    if added:
+        starts.append({"matcher": "^(startup|resume|clear|compact)$", "hooks": [{
+            "type": "command",
+            "command": 'bash "$(git rev-parse --show-toplevel)/scripts/brief.sh" --hook',
+            "timeout": 60, "statusMessage": "Loading the harness brief"}]})
+    if removed or added:
+        rewrite(codex, json.dumps(config, indent=2) + "\n")
+        did.append("configured the Codex project brief without generic beads hooks")
 
 settings = target / ".claude/settings.json"
 if settings.exists():
