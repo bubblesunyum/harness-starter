@@ -55,6 +55,9 @@ step() {
 
 echo "verify: $ROOT"
 
+step "codex support" python3 scripts/codex-support.py check
+step "codex regression" python3 scripts/test-codex-support.py
+
 # The knowledge layer gets the same treatment as the code. A doc that quietly
 # stopped being true is worse than a missing one, and it can't be caught by
 # reviewing a diff — the stale file isn't in the diff, the thing it describes is.

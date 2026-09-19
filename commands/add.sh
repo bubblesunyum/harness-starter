@@ -60,6 +60,11 @@ esac
 had_git=0
 [ -e "${1:-$PWD}/.git" ] && had_git=1
 target="$(harness_resolve_target --init "${1:-$PWD}")"
+# Only a skill created by this install's bd init may be replaced automatically.
+had_codex_beads=0
+if [ -e "$target/.agents/skills/beads" ] || [ -L "$target/.agents/skills/beads" ]; then
+  had_codex_beads=1
+fi
 # Installing into the starter itself is allowed on purpose — that is how the
 # harness gets worked on with the harness. It is not free of a trap; see
 # "Working on the starter" in the README.
@@ -436,3 +441,16 @@ Claude Code's browser pane (preview_start harness-dashboard), not a system
 browser.
 Read .claude/HARNESS.md before rearranging any of it.
 EOF
+
+# bd init creates a generic copied Beads skill. The harness supplies its own;
+# existing project copies still require manual reconciliation.
+if [ "$had_codex_beads" -eq 0 ] && [ -d "$target/.agents/skills/beads" ] &&
+   [ ! -L "$target/.agents/skills/beads" ]; then
+  rm -rf "$target/.agents/skills/beads"
+fi
+
+# Shared sources are installed before Codex discovery links are generated.
+if ! (cd "$target" && python3 scripts/codex-support.py write); then
+  echo "  ! Codex setup needs reconciliation; shared sources were preserved." >&2
+  exit 1
+fi

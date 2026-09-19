@@ -10,7 +10,7 @@
     "scripts/context.py": "c8062ff4222befbb",
     "scripts/opencode-agents.py": "a0ac7edba54c4bf4",
     "scripts/review.sh": "2cd664c58c1017b6",
-    "scripts/verify.sh": "05963aa3be7b2b61"
+    "scripts/verify.sh": "5706da823d1f2831"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "90952a828b39b6e6",
@@ -30,6 +30,6 @@
     "doc": "074ffa6c56c79c90",
     "scripts/brief.sh": "1b6b79d306c6d78b",
     "scripts/review.sh": "2cd664c58c1017b6",
-    "scripts/verify.sh": "05963aa3be7b2b61"
+    "scripts/verify.sh": "5706da823d1f2831"
   }
 }

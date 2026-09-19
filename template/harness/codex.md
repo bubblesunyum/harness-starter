@@ -15,3 +15,21 @@ bead id, then close the bead with the outcome before reporting completion.
 This applies to ordinary task replies as well as explicit handoffs. If paused
 or blocked, return the bead to open and note the remaining work. Push code branches only when the user requests it; follow the repository’s
 existing ledger-sync policy.
+
+## Shared skills and reviewers
+
+Read shared skills through `.agents/skills/`, whose relative directory links
+point to `.claude/skills/`. Edit the shared source when changing the procedure.
+`python3 scripts/codex-support.py write` refreshes links and reviewer TOML from
+`.claude/agents/`; `check` detects drift. The writer leaves project hooks alone
+and refuses to replace a copied skill until its contents have been reconciled.
+
+For the review pass, use Codex subagents with the named reviewer roles. Inherit
+the host model; Claude model aliases in the shared instructions apply to Claude.
+If a role is unavailable in the current session, give a default subagent its
+`.claude/agents/<role>.md` prompt and the review packet. Use Codex's browser
+panel for dashboard URLs. Shared cost measurements describe Claude sessions.
+Keep the shared `.claude/memory-archive/` path. For handoffs, use Codex task tools
+only when the user requests a separate task; `claude --bg` is Claude-only.
+
+Skill links follow the [official Codex skill guidance](https://learn.chatgpt.com/docs/build-skills).
