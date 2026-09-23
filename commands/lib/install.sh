@@ -36,6 +36,14 @@ harness_is_customised() {
   grep -q "── FILL THIS IN" "$1" 2>/dev/null
 }
 
+# Whether a project file carries bd's managed block. The template never does —
+# add.sh's tidier removes it on the way in — so a block in the project's copy
+# is content the template has no counterpart for, and overwriting the file
+# deletes it. update --apply asks this before writing.
+harness_has_beads_block() {
+  grep -q "BEGIN BEADS" "$1" 2>/dev/null
+}
+
 # Everything else. These are the harness itself — the contract every agent reads
 # (AGENTS.md, opencode.json), the machinery behind the scripts, the skills. The
 # project has no reason to edit them, so a difference means the install is stale
@@ -294,6 +302,22 @@ harness_current() {
   harness_same "$rel" "$rendered" "$dst" && result=0 || result=1
   rm -f "$rendered"
   return "$result"
+}
+
+# missing | invalid | empty | ok for a target's per-role model roster, read
+# through its own models.py — one parser, not two. Anything but ok means
+# generated opencode agents carry no model lines. No python3, no models.py,
+# any error: missing, which is the direction that suggests running ensure.
+harness_roster_state() {
+  python3 - "$1" 2>/dev/null <<'PYEOF' || echo missing
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+try:
+    from models import roster_state
+    print(roster_state())
+except Exception:
+    print("missing")
+PYEOF
 }
 
 # The Dolt remote URL for a git origin. bd speaks its own dialect: a `git+`

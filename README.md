@@ -120,14 +120,20 @@ that already exists, which is the whole reason it's safe everywhere else.
 ```bash
 harness update            # which files here differ from template/
 harness update --diff     # and how
+harness update --apply    # write the template over stale contract files
 ```
 
-It reports and never writes. Files carrying the contract — `AGENTS.md`,
+It reports and never writes — unless asked with `--apply`, which writes the
+rendered template over stale contract files, never customised ones, and names
+each file it changed. A file carrying a beads block is left for a hand merge.
+Files carrying the contract — `AGENTS.md`,
 `opencode.json`, the skills, the scripts behind them — make it exit non-zero,
 because the project has no reason to edit them and a difference means a fix
 never arrived. Files with a `FILL THIS IN` block are meant to diverge, so those
-are listed quietly. `harness add` runs the same check on what it skips, so a
-re-run says which of those skips were the install failing.
+are listed quietly. When reviewer sources are among the flagged files it also
+prints the follow-ups the merge still owes — rebuilding the generated agent
+copies, re-blessing, verifying. `harness add` runs the same check on what it
+skips, so a re-run says which of those skips were the install failing.
 
 ## Adding a command
 

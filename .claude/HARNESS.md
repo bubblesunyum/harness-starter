@@ -102,15 +102,21 @@ a **contract file**: `AGENTS.md`, `opencode.json`, the skills, the scripts behin
 them. Those the project has no reason to touch, so a difference means a starter
 fix never arrived, and `add` says so by name instead of skipping. `harness
 update` is the same check standing alone, with `--diff` for what actually
-changed.
+changed, `--apply` for the asked-for overwrite, and follow-ups when reviewer
+sources are among the flagged files.
 
 Which set a file is in is read off the template's own content rather than kept as
 a list. A list goes stale in the direction that produces false alarms, and a
 warning nobody believes is worth less than no warning.
 
-Nothing is ever overwritten, here or there. Half these files have local edits in
-them by design, so merging is a judgment call — and a command that overwrote
-them would be a command nobody could afford to run.
+Nothing is overwritten unless asked. Half these files have local edits in
+them by design, so merging is a judgment call — and an overwrite-by-default
+would be a command nobody could afford to run. `harness update --apply` is the
+asked-for exception: it writes the rendered template over stale contract files,
+never customised ones, and names every file it changed. A file carrying a beads
+block is left for a hand merge, and reviewer sources come with follow-ups — the
+generated agent copies, the hashes, the gate — because the merge is half the
+job.
 
 The comparison has to allow for the installer's own post-copy edits, or every
 fresh install reads as stale: `bd init` leaves managed blocks in `AGENTS.md`,

@@ -104,6 +104,17 @@ step "python parses" bash -c '
       || { echo "error: $f"; exit 1; }
   done'
 
+# A throwaway repo for the probe steps below: `fresh_probe || exit 1`, then
+# use $probe. Called bare, never captured — inside $(...) the EXIT trap would
+# belong to the subshell and reap the probe before the caller runs. Exported
+# because each step runs in its own `bash -c` child that otherwise can't see it.
+fresh_probe() {
+  probe="$(mktemp -d)" || { echo "error: mktemp failed"; return 1; }
+  trap 'rm -rf "$probe"' EXIT
+  git init -q "$probe" || { echo "error: git init failed in $probe"; return 1; }
+}
+export -f fresh_probe
+
 # A template file that still says {{PROJECT}} after substitution is one the
 # installer missed — and the placeholder only shows up at the far end, in an
 # installed project, long after anyone would connect it to this change.
@@ -112,9 +123,7 @@ step "placeholders substitute" bash -c '
   # failed: probe would be empty, the install would never run, grep would find
   # nothing to complain about, and the gate would pass vacuously — which is the
   # silent success this project exists to avoid, in the check meant to catch it.
-  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
-  trap "rm -rf \"$probe\"" EXIT
-  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/scripts/brief.sh" ] || { echo "error: install produced no scripts/"; exit 1; }
   left=$(grep -rl "{{" "$probe" --include="*.sh" --include="*.py" --include="*.md" \
@@ -127,12 +136,92 @@ step "placeholders substitute" bash -c '
 # edits to AGENTS.md and .claude/settings.json read as drift until the comparison
 # learned to normalise them away.
 step "a fresh install reads as current" bash -c '
-  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
-  trap "rm -rf \"$probe\"" EXIT
-  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   out=$(bin/harness update "$probe" 2>&1) || {
     echo "error: update called a fresh install stale"; echo "$out"; exit 1; }'
+
+# An edited reviewer-design.md reads as customised, not contract-stale: the
+# template asks the project to name its look there, so a filled-in file is the
+# harness working. Asserted through the exit code, which is the part a project
+# would act on.
+step "an edited design file reads as customised" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -f "$probe/.claude/agents/reviewer-design.md" ] || { echo "error: install produced no design file"; exit 1; }
+  echo "# the app looks like this" >> "$probe/.claude/agents/reviewer-design.md" ||
+    { echo "error: cannot customise the design file"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) || {
+    echo "error: update called a customised file stale"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "customised" ||
+    { echo "error: update never said customised"; echo "$out"; exit 1; }'
+
+# `update --apply` converges a stale contract file back to the template and
+# leaves customised files alone. Asserted by re-running update, which is the
+# same check a project sees.
+step "update --apply converges contract files" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -f "$probe/.claude/skills/workflow/SKILL.md" ] || { echo "error: install produced no workflow skill"; exit 1; }
+  echo "# local note" >> "$probe/.claude/skills/workflow/SKILL.md" ||
+    { echo "error: cannot dirty a contract file"; exit 1; }
+  echo "# our look" >> "$probe/.claude/agents/reviewer-design.md" ||
+    { echo "error: cannot customise the design file"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) ||
+    { echo "error: update --apply failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "applied" ||
+    { echo "error: apply never said it applied"; echo "$out"; exit 1; }
+  grep -q "our look" "$probe/.claude/agents/reviewer-design.md" ||
+    { echo "error: apply touched a customised file"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) || {
+    echo "error: update still stale after apply"; echo "$out"; exit 1; }'
+
+# A contract file carrying bd's managed block plus real drift is left for a
+# hand merge: the template has no copy of that block, so overwriting would
+# delete it. The block survives and the file stays stale, loudly.
+step "update --apply keeps off files with a beads block" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -f "$probe/AGENTS.md" ] || { echo "error: install produced no AGENTS.md"; exit 1; }
+  printf "\n<!-- BEGIN BEADS -->\nmanaged\n<!-- END BEADS -->\n# real drift\n" >> "$probe/AGENTS.md" ||
+    { echo "error: cannot dirty AGENTS.md"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) &&
+    { echo "error: apply claimed success with a blocked file stale"; echo "$out"; exit 1; }
+  grep -q "BEGIN BEADS" "$probe/AGENTS.md" ||
+    { echo "error: apply deleted the beads block"; exit 1; }
+  echo "$out" | grep -q "Merge by hand" ||
+    { echo "error: apply never said whose job it is"; echo "$out"; exit 1; }'
+
+# A stale contract reviewer source comes with its follow-ups: the merge is half
+# the job, and the generated copies, the hashes, and the gate are the other
+# half. librarian.md is the contract agent — the named reviewers are customised.
+step "update names follow-ups for reviewer sources" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -f "$probe/.claude/agents/librarian.md" ] || { echo "error: install produced no librarian file"; exit 1; }
+  echo "# local note" >> "$probe/.claude/agents/librarian.md" ||
+    { echo "error: cannot dirty an agent source"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1 || true)
+  echo "$out" | grep -q "codex-support.py write" ||
+    { echo "error: no follow-ups for reviewer sources"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "context.py bless" ||
+    { echo "error: follow-ups never mention bless"; echo "$out"; exit 1; }'
+
+# A customised-only difference points at the generated-copy checks instead of
+# ordering a rebuild — that order would nag on every install that ever filled
+# its reviewers in.
+step "update points customised sources at the copy checks" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -f "$probe/.claude/agents/reviewer-taste.md" ] || { echo "error: install produced no taste file"; exit 1; }
+  echo "# local note" >> "$probe/.claude/agents/reviewer-taste.md" ||
+    { echo "error: cannot dirty an agent source"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1 || true)
+  echo "$out" | grep -q "kept up" ||
+    { echo "error: no copy-check pointer for customised sources"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "context.py bless"; then
+    echo "error: rebuild order nagging on a customised-only diff"; echo "$out"; exit 1;
+  fi'
 
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
@@ -149,9 +238,7 @@ step "add initialises a missing git repository" bash -c '
 # parent path itself — the target path contains it, so matching the target
 # would pass even a refusal that named nothing.
 step "add refuses a subdirectory of a repository" bash -c '
-  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
-  trap "rm -rf \"$probe\"" EXIT
-  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  fresh_probe || exit 1
   mkdir "$probe/sub" || { echo "error: mkdir failed"; exit 1; }
   parent="$(cd "$probe" && pwd -P)" || { echo "error: pwd failed"; exit 1; }
   out=$(bin/harness add "$probe/sub" 2>&1) &&
@@ -188,9 +275,8 @@ step "add refuses a bare repository" bash -c '
 # A linked worktree is a repository already — .git is a file, not a directory —
 # so it installs rather than refusing with the directory as its own parent.
 step "add accepts a linked worktree" bash -c '
-  probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
-  trap "rm -rf \"$probe\" \"$probe-wt\"" EXIT
-  git init -q "$probe" || { echo "error: git init failed in $probe"; exit 1; }
+  fresh_probe || exit 1
+  trap '"'"'rm -rf "$probe" "$probe-wt"'"'"' EXIT
   (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init) ||
     { echo "error: empty commit failed"; exit 1; }
   git -C "$probe" worktree add -q "$probe-wt" 2>&1 ||
