@@ -7,7 +7,8 @@
 #   scripts/review.sh master          # since a branch (use on a feature branch)
 #
 # Prints the packet path. Hand that to the reviewer agents — see the
-# agentic-review skill.
+# agentic-review skill. Refuses (non-zero) when the packet exceeds the
+# smallest reviewer budget instead — see below.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,14 +34,18 @@ packet=/tmp/har-review-packet.md
 # No base given: review what isn't committed yet, and fall back to the last
 # commit when the tree is clean — "review my work" almost never means "review
 # nothing".
+narrow_hint=""
 if [ -z "$base" ]; then
   if [ -n "$(git status --porcelain)" ]; then
     range=""; label="uncommitted working tree"
+    narrow_hint="split the change into smaller commits and review each with scripts/review.sh <commit>"
   else
     range="HEAD~1"; label="HEAD (last commit)"
+    narrow_hint="the last commit alone is too big to review whole — split it"
   fi
 else
   range="$base"; label="since $base"
+  narrow_hint="re-run with a narrower range (a nearer commit, or fewer commits)"
 fi
 
 # ── CONFIGURE ─────────────────────────────────────────────────────────────
@@ -51,6 +56,10 @@ fi
 # noise that dilutes the read. Config files are in scope: opencode.json is
 # three lines that decide what every session in the project loads, and it went
 # through a full review pass invisible because the scope had no *.json.
+# Add this project's own source globs. The docs are here from the start: a
+# CLAUDE.md or a skill that quietly stopped being true is a defect the reviewers
+# should see, and a suffix-only scope is also how a file with no extension at all
+# stays unreviewable — list such files by path.
 # bin/* and commands/* are listed by path because the two most important files
 # here carry no extension at all — a glob-by-suffix scope leaves the dispatcher
 # unreviewable, which is how it kept its path-traversal bug through a full pass.
@@ -153,10 +162,37 @@ rm -f "$marker"
 } > "$packet"
 
 lines=$(wc -l < "$packet" | tr -d ' ')
-echo "$packet ($label, $(echo "$files" | grep -c . ) files, $lines lines)"
 
-# A packet past a few thousand lines means the change is too big to review in
-# one pass — say so rather than letting a reviewer silently skim it.
-if [ "$lines" -gt 3000 ]; then
+# Refuse a packet no reviewer can read whole: a local reviewer silently
+# receives a truncated packet and reports confidently on its first pages — a
+# review that appears to run and appears to pass, which is the worst outcome
+# this script can produce. The binding budget is the smallest known one across
+# the roles that read the packet; a role with no configured model is skipped
+# rather than guessed at. Size is bytes/3 — rough, and biased toward refusing:
+# code-heavy diffs tokenize near 3 chars/token, and a false refusal costs a
+# re-run while a false pass silently truncates the review. A wrong budget is
+# fixed per role in harness/models.json ("context" in tokens), not here.
+tokens=$(($(wc -c < "$packet" | tr -d ' ') / 3))
+binding_role=""; binding_budget=0
+for role in reviewer-taste reviewer-correctness reviewer-design; do
+  budget=$(scripts/models.py budget "$role" 2>/dev/null || true)
+  case "$budget" in ''|*[!0-9]*) continue ;; esac
+  if [ -z "$binding_role" ] || [ "$budget" -lt "$binding_budget" ]; then
+    binding_role="$role"; binding_budget="$budget"
+  fi
+done
+if [ -n "$binding_role" ]; then
+  if [ "$tokens" -gt "$binding_budget" ]; then
+    echo "refusing: packet is ~$tokens tokens, over $binding_role's ${binding_budget}-token budget." >&2
+    echo "no reviewer is handed a packet it cannot read whole. $narrow_hint." >&2
+    echo "packet left at $packet for inspection — do not hand it to a reviewer whole." >&2
+    exit 1
+  fi
+elif [ "$lines" -gt 3000 ]; then
+  # No budgets known (no roster) — the old heuristic is all there is. A packet
+  # past a few thousand lines means the change is too big to review in one
+  # pass — say so rather than letting a reviewer silently skim it.
   echo "warning: packet is large; consider reviewing in stages (scripts/review.sh <earlier-commit>)" >&2
 fi
+
+echo "$packet ($label, $(echo "$files" | grep -c . ) files, $lines lines, ~$tokens tokens)"

@@ -287,6 +287,67 @@ step "harness diverge validates before acknowledging" bash -c '
   grep -qxF "scripts/review.sh" "$probe/harness/diverged.txt" ||
     { echo "error: diverge never recorded the fork"; exit 1; }'
 
+# A role's packet budget is its explicit "context", else a heuristic from the
+# model id — Claude-pattern ids read as 200000, anything else as 8192 — and an
+# unconfigured role has no budget at all rather than a guessed one.
+step "models.py budget resolves explicit, pattern, and default budgets" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  cat > "$probe/harness/models.json" <<EOF ||
+{"reviewer-taste": {"model": "ollama/qwen3:27b", "context": 12345},
+ "reviewer-correctness": "opencode/anthropic/claude-opus-5-5",
+ "reviewer-design": {"model": "ollama/qwen3:27b"}}
+EOF
+    { echo "error: cannot write test roster"; exit 1; }
+  [ "$(python3 "$probe/scripts/models.py" budget reviewer-taste)" = "12345" ] ||
+    { echo "error: explicit context not honored"; exit 1; }
+  [ "$(python3 "$probe/scripts/models.py" budget reviewer-correctness)" = "200000" ] ||
+    { echo "error: claude pattern not 200k"; exit 1; }
+  [ "$(python3 "$probe/scripts/models.py" budget reviewer-design)" = "8192" ] ||
+    { echo "error: default not conservative"; exit 1; }
+  # if-form, not trailing &&: a failed && as the last line exits the step 1.
+  if python3 "$probe/scripts/models.py" budget nobody >/dev/null 2>&1; then
+    echo "error: budget passed for an unconfigured role"; exit 1;
+  fi'
+
+# An over-budget packet refuses with the binding role and the narrower command
+# — a truncated packet reporting confidently on its first pages is the failure.
+step "review.sh refuses a packet over the smallest reviewer budget" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  cat > "$probe/harness/models.json" <<EOF ||
+{"reviewer-taste": {"model": "ollama/qwen3:27b", "context": 100},
+ "reviewer-correctness": {"model": "ollama/qwen3:27b", "context": 100},
+ "reviewer-design": {"model": "ollama/qwen3:27b", "context": 100}}
+EOF
+    { echo "error: cannot write test roster"; exit 1; }
+  echo "# change" >> "$probe/scripts/brief.sh" ||
+    { echo "error: cannot dirty a tracked file"; exit 1; }
+  out=$(bash "$probe/scripts/review.sh" 2>&1) &&
+    { echo "error: review passed an over-budget packet"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "reviewer-taste" ||
+    { echo "error: refusal never named the binding role"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "scripts/review.sh <commit>" ||
+    { echo "error: refusal never said how to narrow"; echo "$out"; exit 1; }'
+
+# A packet within budget still prints its path — the refusal must not fire on
+# ordinary changes.
+step "review.sh passes a packet within budget" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  cat > "$probe/harness/models.json" <<EOF ||
+{"reviewer-taste": {"model": "ollama/qwen3:27b", "context": 1000000},
+ "reviewer-correctness": {"model": "ollama/qwen3:27b", "context": 1000000},
+ "reviewer-design": {"model": "ollama/qwen3:27b", "context": 1000000}}
+EOF
+    { echo "error: cannot write test roster"; exit 1; }
+  echo "# change" >> "$probe/scripts/brief.sh" ||
+    { echo "error: cannot dirty a tracked file"; exit 1; }
+  out=$(bash "$probe/scripts/review.sh" 2>&1) || {
+    echo "error: review refused a fitting packet"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "review-packet" ||
+    { echo "error: review never printed the packet"; echo "$out"; exit 1; }'
+
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
 step "add initialises a missing git repository" bash -c '

@@ -4,6 +4,7 @@
     scripts/models.py ensure          # write harness/models.json if missing
     scripts/models.py ensure --again  # re-prompt even when it exists
     scripts/models.py get <role>      # print one role's model id
+    scripts/models.py budget <role>   # print one role's packet budget in tokens
 
 harness/models.json maps roles to models. It is machine-local and gitignored:
 it names models this machine happens to have, which no commit should carry.
@@ -14,6 +15,14 @@ prompting would hang a hook or a gate.
 
 Roles cover more than reviewers: the librarian audits monthly, and
 har-kli will run implement/summarize roles off this same file.
+
+A role's packet budget is its explicit "context" (tokens), else a heuristic
+from the model id — Claude-pattern ids read as 200000, anything else as 8192.
+The 8192 is deliberately conservative: a local server's allocation is
+unknowable from here (ollama defaults to 4-8k unless OLLAMA_CONTEXT_LENGTH
+says otherwise), and refusing early beats handing a reviewer a packet it can
+only read part of. A wrong budget is fixed by writing the real one into the
+roster; `budget` never prompts, so review.sh can call it from hooks and gates.
 """
 
 import json
@@ -109,6 +118,40 @@ def model_for(role):
     return load_roster().get(role, "")
 
 
+# Fallback packet budgets, in tokens, when the roster names no explicit
+# "context" for the role. Heuristic, documented as such in the docstring, and
+# always overridable per role — a table here would go stale in exactly the
+# direction that hands a reviewer a packet it can't read.
+BUDGET_CLAUDE = 200000
+BUDGET_DEFAULT = 8192
+
+
+def budget_for(role):
+    """The packet budget in tokens for a role, or 0 when the role has no
+    model configured (unknown model, unknown budget — the caller skips
+    enforcement rather than guessing). Misshapen explicit values fall through
+    to the heuristic, like the tolerant roster reader. Never prompts."""
+    data = load()
+    entry = data.get(role)
+    if isinstance(entry, dict):
+        context = entry.get("context")
+        if isinstance(context, bool):
+            pass
+        elif isinstance(context, int) and context > 0:
+            return context
+        elif isinstance(context, float) and context.is_integer() and context > 0:
+            return int(context)
+        elif isinstance(context, str) and context.isdigit() and int(context) > 0:
+            return int(context)
+    model = model_for(role)
+    if not model:
+        return 0
+    lowered = model.lower()
+    if any(k in lowered for k in ("claude", "anthropic", "sonnet", "opus")):
+        return BUDGET_CLAUDE
+    return BUDGET_DEFAULT
+
+
 def ask(role, hint, candidates, default):
     print(f"\n{role} ({hint}):")
     for i, cand in enumerate(candidates, 1):
@@ -181,10 +224,18 @@ if __name__ == "__main__":
             print(f"no model for '{args[1]}' — run scripts/models.py ensure",
                   file=sys.stderr)
             sys.exit(1)
+    elif args[:1] == ["budget"] and len(args) == 2:
+        budget = budget_for(args[1])
+        if budget:
+            print(budget)
+        else:
+            print(f"no budget for '{args[1]}' — no model configured; "
+                  f"run scripts/models.py ensure", file=sys.stderr)
+            sys.exit(1)
     elif args[:1] == ["ensure"]:
         sys.exit(ensure(again=(args[1:2] == ["--again"])))
     else:
         print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
-        print("usage: scripts/models.py ensure [--again] | get <role>",
+        print("usage: scripts/models.py ensure [--again] | get <role> | budget <role>",
               file=sys.stderr)
         sys.exit(2)
