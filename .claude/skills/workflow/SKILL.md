@@ -159,7 +159,31 @@ is invisible to `bd ready` and will still be there in a year.
 
 ## Token discipline
 
-The whole harness is shaped by having one account. The rules that follow from that:
+The whole harness is shaped by having one account. `scripts/context.py spend`
+prints what recent sessions actually cost, and the shape it shows is the reason
+for every rule below: measured on one project, a session opens at ~54k tokens
+before it has done anything, and that opening context is re-sent on every
+single turn. In a 60-turn session it *is* 80% of the bill.
+
+Only ~4k of that floor is the repo, and almost none of the rest is worth
+hunting. Deferred tool schemas already do the heavy lifting: a connector with
+~40 tools costs ~230 tokens as bare names, not the thousands a loaded schema
+would. What is left that anyone controls is about 5k — the skill listing
+(~3.4k; most of it global and plugin skills a session here never invokes), the
+agent listing (~1k), and MCP instruction blocks (~0.8k). The other ~44k is
+Claude Code's own system prompt and built-in tool schemas, and no amount of
+editing the repo touches it.
+
+So the floor is worth *measuring* and mostly not worth fighting. The lever that
+actually moves is the second half of the bill.
+
+Past a hundred turns the floor stops dominating and accumulated conversation
+takes over: measured on one project, the worst session reached 300k and paid
+roughly four times per turn what it paid at the start. Everything read into the
+main window is paid for again on every turn that follows it, so *where* a read
+lands matters more than how big it is.
+
+The rules that follow from that:
 
 - **The session brief is capped.** `scripts/brief.sh` prints ~500 tokens: the
   seat and what it's for, the ready list and the memory keys. It replaced `bd prime`, which prints ~1750
@@ -178,6 +202,14 @@ The whole harness is shaped by having one account. The rules that follow from th
   cold and re-derives context you already have. Use one when the work is a wide
   read you don't want in your own window (a review pass, a search), not to hand
   off something you could do in two calls.
+
+  The asymmetry is the whole argument. A search that opens eight files costs the
+  main window ~30k tokens *for the rest of the session*; the same search in an
+  `Explore` subagent costs its summary, once. The review pass is the proof that
+  this is affordable — measured across 16 sessions on one project, every
+  reviewer ever run returned about 15k tokens in total, roughly one percent of
+  what a single working session spends. Reviewers are the cheapest thing in the
+  harness; the expensive habit is reading the repo into your own window.
 
 ## Waking up and handing off
 

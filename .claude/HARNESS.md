@@ -183,6 +183,19 @@ better. Three things beside it *are* gates, because each is a silent regression
 rather than a judgment call — a SessionStart hook the harness didn't install, a
 bd managed block outside AGENTS.md, and a doc whose sources moved without it.
 
+That count was also, for a while, quietly reassuring about the wrong number.
+It measures what the repo adds, and — measured on one project — reported ~4k
+while every real session opened at ~54k: the missing ~50k being Claude Code's
+own system prompt, its tool schemas and whatever MCP connectors the app has
+enabled. None of that is readable from a file in the checkout, so it was
+invisible to a checker that only ever read files. It is readable from the
+session transcripts, which record what each turn actually cost, so `context.py`
+now measures the floor there and prints the repo's share inside it.
+`context.py spend` breaks the same transcripts down per session, because the
+two halves of the bill argue for different fixes: a short session is ~80%
+floor and wants fewer connectors, a long one is mostly accumulated
+conversation and wants its wide reads pushed into subagents.
+
 ## opencode gets a config and generated agents, never a symlink
 
 Three things were checked against the installed binary rather than assumed, and

@@ -4,8 +4,8 @@
     ".claude/agents/reviewer-correctness.md": "f8223ea9fac19b51",
     ".claude/agents/reviewer-design.md": "85e7eff30dfce6e1",
     ".claude/agents/reviewer-taste.md": "f1882603da660d87",
-    ".claude/skills/workflow/SKILL.md": "9e7deeff6ff4351e",
-    "doc": "38d90cabc3efed6d",
+    ".claude/skills/workflow/SKILL.md": "1f66b1eb8a904537",
+    "doc": "290c75e95669c254",
     "scripts/brief.sh": "1b6b79d306c6d78b",
     "scripts/context.py": "c8062ff4222befbb",
     "scripts/opencode-agents.py": "a0ac7edba54c4bf4",
@@ -23,7 +23,7 @@
     "scripts/brief.sh": "1b6b79d306c6d78b"
   },
   ".claude/skills/workflow/SKILL.md": {
-    "doc": "9e7deeff6ff4351e",
+    "doc": "1f66b1eb8a904537",
     "\u2026": ""
   },
   "AGENTS.md": {
