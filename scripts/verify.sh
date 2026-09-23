@@ -223,6 +223,70 @@ step "update points customised sources at the copy checks" bash -c '
     echo "error: rebuild order nagging on a customised-only diff"; echo "$out"; exit 1;
   fi'
 
+# An acknowledged fork stops failing the check but stays visible: the warning
+# nobody can clear is the one that stops being read. --apply never writes it.
+step "update respects acknowledged forks" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -f "$probe/scripts/review.sh" ] || { echo "error: install produced no review file"; exit 1; }
+  root="$PWD"
+  echo "# local fork" >> "$probe/scripts/review.sh" ||
+    { echo "error: cannot fork a contract file"; exit 1; }
+  bin/harness update "$probe" >/dev/null 2>&1 &&
+    { echo "error: update passed a forked contract file"; exit 1; }
+  (cd "$probe" && "$root/bin/harness" diverge scripts/review.sh >/dev/null 2>&1) ||
+    { echo "error: harness diverge refused a real fork"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) || {
+    echo "error: update still stale after diverge"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "diverged" ||
+    { echo "error: update never said diverged"; echo "$out"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) || {
+    echo "error: apply failed on an acknowledged fork"; echo "$out"; exit 1; }
+  grep -q "local fork" "$probe/scripts/review.sh" ||
+    { echo "error: apply wrote an acknowledged fork"; exit 1; }'
+
+# A diverged entry that acknowledges nothing — typo, removed file, or one
+# already quiet — fails loudly: the list is harness configuration, and a typo
+# there silently un-acknowledges the fork it meant.
+step "update fails loudly on diverged entries that acknowledge nothing" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  echo "nope/nothing.py" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot write the diverged list"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed a bogus diverged entry"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "acknowledge nothing" ||
+    { echo "error: update never said whose fault it is"; echo "$out"; exit 1; }'
+
+# An unreadable diverged list fails loudly rather than reading as empty: empty
+# would silently un-acknowledge every fork, which is the false alarm the list
+# exists to prevent.
+step "update fails loudly on an unreadable diverged list" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  chmod 000 "$probe/harness/diverged.txt" ||
+    { echo "error: cannot make the diverged list unreadable"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed an unreadable diverged list"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "not readable" ||
+    { echo "error: update never said the list is unreadable"; echo "$out"; exit 1; }
+  chmod 644 "$probe/harness/diverged.txt" || exit 1;'
+
+# `harness diverge` validates before writing: only a real, differing contract
+# file lands in the list. Asserted through the exit code and the list itself.
+step "harness diverge validates before acknowledging" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  root="$PWD"
+  (cd "$probe" && "$root/bin/harness" diverge scripts/review.sh >/dev/null 2>&1) &&
+    { echo "error: diverge acknowledged a current file"; exit 1; }
+  echo "# local fork" >> "$probe/scripts/review.sh" ||
+    { echo "error: cannot fork a contract file"; exit 1; }
+  (cd "$probe" && "$root/bin/harness" diverge scripts/review.sh harness/seat.md nope >/dev/null 2>&1) &&
+    { echo "error: diverge passed bad files"; exit 1; }
+  grep -qxF "scripts/review.sh" "$probe/harness/diverged.txt" ||
+    { echo "error: diverge never recorded the fork"; exit 1; }'
+
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
 step "add initialises a missing git repository" bash -c '

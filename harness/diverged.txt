@@ -1,0 +1,12 @@
+# Local forks of the harness contract, one repo-relative path per line.
+#
+# A file listed here differs from the starter's template on purpose — a
+# dashboard chip, a widened review scope, a forked generator — and `harness
+# update` takes the listing as the acknowledgment: the file is shown for the
+# record but no longer fails the check, and `update --apply` never writes it.
+# Anything after `#` is a reason, for whoever reads this in a year.
+#
+# `harness diverge <path>` appends a line with validation; deleting the line
+# un-acknowledges. An entry that matches no template file fails `update`
+# loudly (typo or removed file); an entry that matches the template again is
+# dead weight — drop it.

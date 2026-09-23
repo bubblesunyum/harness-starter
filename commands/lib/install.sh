@@ -11,9 +11,11 @@
 #   dashboard/vendor/*   third-party assets, copied whole, no substitution
 #   *.gitkeep            empty by definition
 #   harness/laurels.jsonl  a log the project appends to; the template ships it empty
+#   harness/diverged.txt   the acknowledged-fork list; the project edits it,
+#                          the template ships it empty
 harness_is_data() {
   case "$1" in
-    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl) return 0 ;;
+    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -302,6 +304,17 @@ harness_current() {
   harness_same "$rel" "$rendered" "$dst" && result=0 || result=1
   rm -f "$rendered"
   return "$result"
+}
+
+# The project's acknowledged forks, one path per line, comments and blanks
+# stripped, on stdout. Fails when the file exists but can't be read: an
+# unreadable list silently un-acknowledging every fork is the false alarm this
+# file exists to prevent. Silent on failure — the caller says whose fault it is.
+harness_diverged_want() {
+  local list="$1/harness/diverged.txt"
+  [ -e "$list" ] || return 0
+  [ -r "$list" ] || return 1
+  sed -e 's/#.*//' "$list" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true
 }
 
 # missing | invalid | empty | ok for a target's per-role model roster, read

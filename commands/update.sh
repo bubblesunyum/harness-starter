@@ -43,7 +43,8 @@ Report-only, unless --apply: that rewrites the stale contract files that
 exist — never customised ones, never missing ones — and prints each file it
 changed. A file carrying a beads block is left for a hand merge, and reviewer
 sources still need their follow-ups below. Run 'harness add' to install files
-that are missing.
+that are missing. A deliberate local fork goes in harness/diverged.txt
+('harness diverge <file>') — acknowledged forks are shown but no longer fail.
 USAGE
 }
 
@@ -84,6 +85,25 @@ trap 'rm -rf "$render_dir"' EXIT
 
 stale=""; customised=""; missing=""; missing_contract=0; diffs=""
 applied=""; skipped_beads=""
+diverged=""; diverged_clean=""; bad_diverged=""
+# Acknowledged local forks. A contract file listed in the project's
+# harness/diverged.txt differs on purpose, so it is shown for the record but
+# never fails the check and never takes an --apply write. Entries matching no
+# template file — or naming one that needs no acknowledgment — fail loudly:
+# the list is harness configuration, and a typo there silently un-acknowledges
+# the fork it meant.
+diverged_want=""
+if [ -f "$target/harness/diverged.txt" ]; then
+  diverged_want="$(harness_diverged_want "$target")" || {
+    echo "✗ harness/diverged.txt exists but is not readable — acknowledged forks can't be honored."
+    echo
+    echo "harness update: stale"
+    exit 1
+  }
+fi
+in_diverged_list() {
+  [ -n "$diverged_want" ] && printf '%s\n' "$diverged_want" | grep -qxF "$1"
+}
 # Whether a flagged file is a reviewer source, split by kind. Merging a stale
 # contract source is half the job — the generated copies, the hashes, and the
 # gate are the other half, and the report below says so. A customised source
@@ -128,7 +148,10 @@ while IFS= read -r rel; do
     diffs="$diffs$(diff -u --label "template/$rel" --label "$rel" \
                      "$render_dir/a" "$render_dir/b" || true)"$'\n\n'
   fi
-  if [ "$apply" -eq 1 ] && [ "$contract" -eq 1 ]; then
+  if [ "$contract" -eq 1 ] && in_diverged_list "$rel"; then
+    # Acknowledged: shown for the record below, never stale, never written.
+    diverged="$diverged  $rel"$'\n'
+  elif [ "$apply" -eq 1 ] && [ "$contract" -eq 1 ]; then
     # Written only now, after the diff above was taken from the pre-write
     # state — a --diff --apply run shows what the apply changed, not an empty
     # diff of each file against itself.
@@ -148,10 +171,37 @@ while IFS= read -r rel; do
   fi
 done <<< "$files"
 
+# Entries that acknowledge nothing: not a template file at all, or one already
+# quiet (data, or FILL THIS IN). Either way the acknowledgment does nothing,
+# so the list is broken and says so loudly rather than reading as done.
+while IFS= read -r want; do
+  [ -n "$want" ] || continue
+  if ! printf '%s\n' "$files" | grep -qxF "$want"; then
+    bad_diverged="$bad_diverged  $want (no such template file)"$'\n'
+  elif ! harness_is_contract "$want" "$TEMPLATE/$want"; then
+    bad_diverged="$bad_diverged  $want (already quiet — data or FILL THIS IN, nothing to acknowledge)"$'\n'
+  fi
+done <<< "$diverged_want"
+
+# Entries that match the template again: the fork converged (or never was),
+# so the line is dead weight. Quiet — hygiene, not failure.
+while IFS= read -r want; do
+  [ -n "$want" ] || continue
+  printf '%s\n' "$files" | grep -qxF "$want" || continue
+  harness_is_contract "$want" "$TEMPLATE/$want" || continue
+  [ -e "$target/$want" ] || continue
+  rendered="$render_dir/rendered-clean"
+  harness_render "$want" "$TEMPLATE/$want" "$name" "$prefix" > "$rendered"
+  if harness_same "$want" "$rendered" "$target/$want"; then
+    diverged_clean="$diverged_clean  $want"$'\n'
+  fi
+done <<< "$diverged_want"
+
 if [ -n "$stale" ]; then
   echo "⚠ $(tally "$stale") contract file(s) exist and differ from the template"
   printf '%s' "$stale"
   echo "  The harness contract is not installed here — diff and merge each one."
+  echo "  A deliberate fork belongs in harness/diverged.txt — \`harness diverge <file>\`."
   echo
 fi
 
@@ -165,6 +215,19 @@ if [ -n "$customised" ]; then
   echo "  $(tally "$customised") customised file(s) differ — expected, they carry FILL THIS IN blocks."
   echo "  Worth a look anyway when the starter has moved:"
   printf '%s' "$customised"
+  echo
+fi
+
+if [ -n "$diverged" ]; then
+  echo "  $(tally "$diverged") diverged file(s) differ — acknowledged in harness/diverged.txt, shown for the record."
+  printf '%s' "$diverged"
+  echo "  --apply never writes these; delete the line to un-acknowledge."
+  echo
+fi
+
+if [ -n "$diverged_clean" ]; then
+  echo "  $(tally "$diverged_clean") acknowledged file(s) match the template — the entry is dead weight:"
+  printf '%s' "$diverged_clean"
   echo
 fi
 
@@ -206,9 +269,16 @@ elif [ "$agents_custom" -eq 1 ] &&
   echo
 fi
 
+if [ -n "$bad_diverged" ]; then
+  echo "✗ $(tally "$bad_diverged") diverged entry(s) acknowledge nothing — typo, removed file, or a file already quiet:"
+  printf '%s' "$bad_diverged"
+  echo "  Fix harness/diverged.txt; --diff still shows the real drift."
+  echo
+fi
+
 [ -n "$diffs" ] && printf '%s' "$diffs"
 
-if [ -n "$stale" ] || [ "$missing_contract" -gt 0 ]; then
+if [ -n "$stale" ] || [ "$missing_contract" -gt 0 ] || [ -n "$bad_diverged" ]; then
   echo "harness update: stale"
   exit 1
 fi

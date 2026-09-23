@@ -87,6 +87,17 @@ block is left for a hand merge, and reviewer sources come with follow-ups — th
 generated agent copies, the hashes, the gate — because the merge is half the
 job.
 
+Some drift is a fork, not a missed fix: a dashboard chip, a widened review
+scope, a generator with project hooks. That stays stale forever under the
+check above, and a warning nobody can clear is one that stops being read.
+`harness/diverged.txt` is the acknowledgment — one path per line, committed,
+with the reason after `#`. `harness update` shows acknowledged files for the
+record but no longer fails on them, and `--apply` never writes them;
+`harness diverge <file>` appends with validation (a real, differing contract
+file only). An entry that matches no template file fails loudly instead, so a
+typo can't silently un-acknowledge the fork it meant. Delete the line to
+un-acknowledge.
+
 The comparison has to allow for the installer's own post-copy edits, or every
 fresh install reads as stale: `bd init` leaves managed blocks in `AGENTS.md`,
 and the tidier rewrites `.claude/settings.json` through `json.dumps`, reordering
