@@ -10,3 +10,6 @@
 # un-acknowledges. An entry that matches no template file fails `update`
 # loudly (typo or removed file); an entry that matches the template again is
 # dead weight — drop it.
+scripts/review.sh
+.claude/HARNESS.md
+.claude/skills/agentic-review/SKILL.md

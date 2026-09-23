@@ -41,8 +41,9 @@ bd ready → claim → build → scripts/verify.sh → review → commit → clo
    code; `--full` adds the slower checks. Don't ask the user to look at
    something you can check yourself: if the project has a way to drive the real
    app and screenshot it, that is the step, and it belongs in its own skill.
-5. **Review it.** `bd label add <id> review`, then `scripts/review.sh` runs the
-   diff past an agent that didn't write it. See the `agentic-review` skill.
+5. **Review it.** `bd label add <id> review`, then `scripts/review.sh` builds
+   the packet and the `agentic-review` skill runs it past agents that didn't
+   write it.
    `bd label remove <id> review` when the findings are dealt with.
 6. **Close it.** `bd close <id> --reason "<what actually happened>"`, and commit.
    Commit often — CLAUDE.md means it. The reason is where the outcome lives when
@@ -186,17 +187,15 @@ lands matters more than how big it is.
 The rules that follow from that:
 
 - **The session brief is capped.** `scripts/brief.sh` prints ~500 tokens: the
-  seat and what it's for, the ready list and the memory keys. It replaced `bd prime`, which prints ~1750
-  every session — the whole command reference plus every memory in full —
-  whether or not the ledger gets touched. For the full `bd` surface, the `beads`
-  skill has it, on demand.
+  seat and what it's for, the ready list and the memory keys. Don't run
+  `bd prime` — it prints the whole command reference and every memory in full.
+  For the full `bd` surface, the `beads` skill has it, on demand.
 - **Query narrowly.** `bd show <id>` for one issue beats `bd list` for forty.
   Use `--json` only when you are actually parsing it.
 - **Read the diff, not the repo.** Review and verification are scoped to what
   changed. `git diff` is the unit of work, not the file tree.
-- **Spend effort where it pays.** Review passes run through subagents — taste
-  on Sonnet 5 at high effort, correctness and design on Opus 5.5 at low
-  effort. Log triage and screenshot checks stay at low effort; reserve full
+- **Spend effort where it pays.** Review passes run through subagents, each on
+  the model and effort in its frontmatter. Log triage and screenshot checks stay at low effort; reserve full
   effort for code you actually intend to keep.
 - **Subagents are for fan-out, not for delegation theater.** A subagent starts
   cold and re-derives context you already have. Use one when the work is a wide

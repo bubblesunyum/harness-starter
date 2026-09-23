@@ -83,9 +83,28 @@ echo "installing the harness into $target"
 [ "$had_git" -eq 0 ] && echo "  initialised a git repository"
 echo "  project: $name"
 echo "  prefix:  $prefix-"
+
+# Written once, before the file list is read, because the list depends on it.
+# An existing stacks.txt is the project's call and is never re-detected over.
+if [ -e "$target/harness/stacks.txt" ]; then
+  stacks="$(harness_stacks_want "$target")" || {
+    echo "✗ harness/stacks.txt exists but is not readable — fix it and re-run." >&2; exit 1; }
+  stacks_from="harness/stacks.txt"
+else
+  stacks="$(harness_detect_stacks "$target")"
+  harness_write_stacks "$target" "$stacks"
+  stacks_from="detected — correct harness/stacks.txt if that's wrong"
+fi
+echo "  stacks:  $(printf '%s' "${stacks:-none}" | tr '\n' ' ') ($stacks_from)"
+unknown="$(harness_unknown_stacks "$HERE" "$stacks")"
+if [ -n "$unknown" ]; then
+  echo "  ! harness/stacks.txt names stacks the starter has no guidance for:"
+  printf '%s\n' "$unknown" | sed 's/^/      /'
+  echo "    Their reviewers get no platform checks. Fix the names, or remove them."
+fi
 echo
 
-files="$(harness_template_files "$HERE")"
+files="$(harness_files_for "$HERE" "$target")"
 
 copied=0; skipped=0; stale=0
 while IFS= read -r rel; do
@@ -434,7 +453,9 @@ Do these now, in this order. They are the parts no script can infer.
 4. .claude/agents/reviewer-{taste,correctness,design}.md — each has a
    FILL THIS IN block for this project's language, framework, and actual
    recurring bugs. Generic ones are already there; the specific ones are worth
-   ten of those, so add them as you find them.
+   ten of those, so add them as you find them. Checks for the project's
+   language and platform come from harness/stacks/ — check that
+   harness/stacks.txt named the right stacks above.
 
 Then run scripts/verify.sh, and open the dashboard it points you at — in
 Claude Code's browser pane (preview_start harness-dashboard), not a system

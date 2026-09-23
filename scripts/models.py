@@ -135,6 +135,7 @@ def budget_for(role):
     entry = data.get(role)
     if isinstance(entry, dict):
         context = entry.get("context")
+        # bool subclasses int, so `true` would otherwise read as a 1-token budget.
         if isinstance(context, bool):
             pass
         elif isinstance(context, int) and context > 0:

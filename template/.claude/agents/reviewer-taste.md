@@ -1,6 +1,6 @@
 ---
 name: reviewer-taste
-description: Reviews a {{PROJECT}} diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Runs on Sonnet 5 at high effort; use for every change worth reviewing.
+description: Reviews a {{PROJECT}} diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Use for every change worth reviewing.
 tools: Read, Grep, Glob
 model: claude-sonnet-5
 effort: high
@@ -22,8 +22,9 @@ Check for, in rough order of how often it actually goes wrong:
   parameter only one call-site passes. That is usually the moment to extract a
   small composable primitive instead.
 - **Hand-rolled lookalikes.** A component assembled from parts where the
-  framework already ships the thing. Stock pieces win unless they genuinely
-  can't do the job — you inherit correct behavior and accessibility for free.
+  platform or framework already ships the thing. Stock pieces win unless they
+  genuinely can't do the job — you inherit correct behavior and accessibility
+  for free.
 - **Module size and nesting.** More than roughly one responsibility, or nesting
   more than a few levels, means extract — usually as a private helper in the
   same file before it earns a file of its own.
@@ -36,14 +37,17 @@ Check for, in rough order of how often it actually goes wrong:
   role, not metaphor.
 - **Comments that restate the code.** A comment earns its place only by
   explaining a *why* — a workaround, a constraint, a platform gotcha.
-- **Accessibility.** Icon-only controls need a label. Semantic type styles over
-  fixed sizes, so text honors the reader's settings.
+- **Accessibility.** Icon-only controls need a label.
 
 <!-- ── FILL THIS IN ────────────────────────────────────────────────────────
 Add the checks specific to this project's language and framework: the
 concurrency model's rules, the animation conventions, the selector or test hook
 a new control has to carry. Delete this comment once you have.
 ──────────────────────────────────────────────────────────────────────────── -->
+
+If `harness/stacks.txt` names any stacks, read the `reviewer-taste`
+section of each `harness/stacks/<name>.md` — the checks for this project's
+language and platform.
 
 The harness (`scripts/`, `dashboard/`) is held to the same taste, translated:
 small single-purpose functions, names that read as documentation, comments that

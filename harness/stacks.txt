@@ -1,0 +1,7 @@
+# The stacks this project is built on, one per line. The reviewers read the
+# guidance in harness/stacks/<name>.md for each one listed here.
+#
+# harness add wrote this from what it found in the project, and never
+# rewrites it. If it guessed wrong, edit it; to pick up guidance for a stack
+# you added, re-run harness add. The names are the files in the starter's
+# template/harness/stacks/.

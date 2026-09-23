@@ -29,9 +29,9 @@ how the pieces fit together.
   `beads`, `handoff`. Each costs a description line until invoked; bodies are
   free until then. Add project-specific ones (how to build and drive the app,
   how to add a source file) as you learn what they are.
-- **Reviewers:** `.claude/agents/` — `reviewer-taste` (Sonnet 5 at high
-  effort), `reviewer-correctness` and `reviewer-design` (Opus 5.5 at low
-  effort), run against a
+- **Reviewers:** `.claude/agents/` — `reviewer-taste`,
+  `reviewer-correctness` and `reviewer-design`, each on the model its
+  frontmatter names, run against a
   packet from `scripts/review.sh`. Design reads screenshots rather than the
   diff, because a diff can't show you clipping. The packet carries untracked
   files too, and stages nothing to do it; its captures are dated from the
@@ -54,6 +54,8 @@ how the pieces fit together.
   commands, and a probe install into a throwaway repo leaves no `{{placeholder}}`
   behind — that last one only ever shows up at the far end, in someone else's
   project, long after anyone would connect it to the change that caused it.
+  Probe installs also check that stack guidance lands only in projects that
+  use the stack, and that a bad or missing `harness/stacks.txt` fails loudly.
 - **Dashboard:** `scripts/dashboard.py` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in
@@ -135,6 +137,24 @@ and the tidier rewrites `.claude/settings.json` through `json.dumps`, reordering
 every key. Both are normalised away on both sides. The gate has a step that
 installs into a throwaway repo and asserts the result reads as current, because
 that particular false alarm is invisible in the diff that causes it.
+
+## Stack guidance ships only where the stack is
+
+The reviewers' generic checks used to include force unwraps, retain cycles and
+`List` rows, because the starter grew up on a Swift project. In a web project
+those lines sent reviewers hunting for bugs the code couldn't have. So the
+reviewers stay platform-neutral, and the platform checks live in
+`harness/stacks/<name>.md`, one file per stack, each with a section per
+reviewer. A reviewer reads the sections for the stacks `harness/stacks.txt`
+lists.
+
+`harness add` detects the stacks once, from markers that can't mean anything
+else, and writes the list. From then on the list belongs to the project. A
+wrong guess is fixed by editing it, and `add` never detects over it again,
+so a correction stays put. The stack files are contract files: they come from
+the starter, `update` keeps them current, and a project's own recurring bugs
+go in the reviewers' FILL THIS IN blocks instead. A new stack is one file in
+`template/harness/stacks/` plus a marker in `harness_detect_stacks`.
 
 ## Codex context
 
@@ -236,8 +256,8 @@ role and writes it; later runs are silent. With no roster the agents omit
 `model:` and inherit the session's model, which always resolves — the cost is
 that `reviewer-taste` stops being the cheap one under opencode until then.
 
-Three paths, three model lines: the `.claude/agents/` frontmatter tiers
-(Sonnet 5, Opus 5.5) drive Claude Code's reviewers; the roster drives
+Three paths, three model lines: the `.claude/agents/` frontmatter drives
+Claude Code's reviewers; the roster drives
 opencode's generated agents; Codex ignores both and inherits its host model.
 A model named in one path says nothing about the others.
 

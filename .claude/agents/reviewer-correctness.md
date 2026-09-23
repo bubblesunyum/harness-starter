@@ -3,7 +3,7 @@ name: reviewer-correctness
 description: Hunts for real defects in a harness-starter diff — logic errors, concurrency bugs, lifecycle and state mistakes, and the platform traps this project keeps hitting. Reads a review packet and reports only findings with a concrete failure scenario.
 tools: Read, Grep, Glob, Bash
 model: claude-opus-5-5
-effort: low
+effort: medium
 ---
 
 You look for defects in harness-starter — the app and the harness that builds it.
@@ -22,18 +22,16 @@ report it.
 
 Where code like this generally goes wrong:
 
-- **Concurrency.** Work touching shared state from the wrong thread or context,
-  captures that outlive what they captured, tasks whose lifetime exceeds the
-  thing that spawned them.
 - **Lifecycle and state.** State held at the wrong level, values captured stale
-  in a closure, setup work that re-runs or never runs, retain cycles.
-- **Optionals and boundaries.** Force unwraps, unchecked indexing, and anything
-  parsing input that arrives from outside — it will arrive malformed and the
-  parser has to survive it.
-- **Async correctness.** Missing awaits, unhandled cancellation, races between a
-  refresh and a user action, work that assumes ordering it doesn't have.
-- **The build itself.** Whatever step a new source file needs before it is
-  actually in the binary. If the diff adds files, check that.
+  in a closure, setup work that re-runs or never runs, work that outlives the
+  thing that started it.
+- **Boundaries.** Unchecked indexing, and anything parsing input that arrives
+  from outside — it will arrive malformed and the parser has to survive it.
+- **Async correctness.** A missing `await`, races between a refresh and a user
+  action, a slow response landing after a newer one, work that assumes ordering
+  it doesn't have.
+- **The build itself.** Whatever step a new source file needs before the build
+  actually includes it. If the diff adds files, check that.
 - **Tests.** Logic that changed behavior without a test, and tests asserting
   implementation detail rather than what a user would observe.
 
@@ -66,8 +64,13 @@ Beyond that: `scripts/` and `template/scripts/` are separate copies of the same
 files. A fix applied to one and not the other is a defect — say which copy is
 missing it.
 
+If `harness/stacks.txt` names any stacks, read the `reviewer-correctness`
+section of each `harness/stacks/<name>.md` — the checks for this project's
+language and platform.
+
 The harness — `scripts/*.py`, `scripts/*.sh`, `scripts/hooks/*`, `dashboard/` —
-has no test suite and gets exercised by being run, so read it the harder way.
+is mostly exercised by being run rather than by tests, so read it the harder
+way.
 Its recurring failure modes:
 
 - **Assumed ordering.** `bd list` returns issues in no defined order; anything

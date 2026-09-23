@@ -66,7 +66,21 @@ done
 target="$(harness_resolve_target "${target:-$PWD}")"
 name="$(basename "$target")"
 prefix="$(harness_prefix_for "$target" "$name")"
-files="$(harness_template_files "$HERE")"
+# Which stacks' guidance this project should have. No stacks.txt is an install
+# from before stacks existed — the same "a fix never arrived" as a missing
+# contract file, and `add` is what writes it.
+stacks_missing=0; bad_stacks=""
+if [ ! -e "$target/harness/stacks.txt" ]; then
+  stacks_missing=1
+elif ! stacks="$(harness_stacks_want "$target")"; then
+  echo "✗ harness/stacks.txt exists but is not readable — the stack guidance can't be checked."
+  echo
+  echo "harness update: stale"
+  exit 1
+else
+  bad_stacks="$(harness_unknown_stacks "$HERE" "$stacks")"
+fi
+files="$(harness_files_for "$HERE" "$target")"
 
 # How many lines a list holds. grep -c '' rather than wc -l, which counts
 # newlines and calls a list without a trailing one empty.
@@ -205,6 +219,19 @@ if [ -n "$stale" ]; then
   echo
 fi
 
+if [ "$stacks_missing" -eq 1 ]; then
+  echo "  harness/stacks.txt missing — 'harness add $target' detects this project's"
+  echo "  stacks and installs their reviewer guidance"
+  echo
+fi
+
+if [ -n "$bad_stacks" ]; then
+  echo "✗ harness/stacks.txt names stacks the starter has no guidance for:"
+  printf '%s\n' "$bad_stacks" | sed 's/^/  /'
+  echo "  Fix the names or remove them; the names are the files in template/harness/stacks/."
+  echo
+fi
+
 if [ -n "$missing" ]; then
   echo "  $(tally "$missing") file(s) missing — 'harness add $target' installs them"
   printf '%s' "$missing"
@@ -278,7 +305,8 @@ fi
 
 [ -n "$diffs" ] && printf '%s' "$diffs"
 
-if [ -n "$stale" ] || [ "$missing_contract" -gt 0 ] || [ -n "$bad_diverged" ]; then
+if [ -n "$stale" ] || [ "$missing_contract" -gt 0 ] || [ -n "$bad_diverged" ] ||
+   [ "$stacks_missing" -eq 1 ] || [ -n "$bad_stacks" ]; then
   echo "harness update: stale"
   exit 1
 fi

@@ -219,6 +219,111 @@ harness_template_files() {
   printf '%s\n' "$files" | sed 's|^template/||'
 }
 
+# Stack guidance: template/harness/stacks/<name>.md, one file per language or
+# platform, holding the reviewer checks that only make sense there — force
+# unwraps for Swift, innerHTML for the web. Installed only into projects that
+# use the stack, because guidance for someone else's platform is worse than
+# none: a reviewer told to check for retain cycles in a JavaScript page goes
+# looking for them. Everything else in template/ ships to every project.
+#
+# Which stacks a project has is recorded in its harness/stacks.txt, not
+# re-detected on every run. `add` writes it once from harness_detect_stacks, and
+# from then on the list is the project's: a wrong guess is corrected by editing
+# it, and a correction that the next `add` quietly re-detected away would be a
+# setting nobody could make stick.
+
+# The stack a template path belongs to, or failure for a file every project gets.
+harness_stack_of() {
+  case "$1" in
+    harness/stacks/*.md) local name="${1#harness/stacks/}"; printf '%s\n' "${name%.md}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The stacks a project looks like it uses, one per line. Only markers that can't
+# mean anything else: a package.json alone is as likely a CLI as a web app, so
+# it counts only when it names a browser UI framework.
+harness_detect_stacks() {
+  local target="$1" page
+  if [ -e "$target/Package.swift" ] ||
+     [ -n "$(find "$target" -maxdepth 2 \( -name '*.xcodeproj' -o -name '*.xcworkspace' \) \
+                 -not -path '*/.build/*' -print -quit 2>/dev/null)" ]; then
+    echo swift
+  fi
+  for page in index.html public/index.html src/index.html app/index.html; do
+    [ -f "$target/$page" ] && { echo web; return 0; }
+  done
+  if [ -f "$target/package.json" ] &&
+     grep -qE '"(react|vue|svelte|@sveltejs/kit|next|nuxt|vite|astro|solid-js|preact|lit|@angular/core)"[[:space:]]*:' \
+       "$target/package.json"; then
+    echo web
+  fi
+  return 0
+}
+
+# The project's stacks from harness/stacks.txt, comments and blanks stripped, on
+# stdout. Empty when the file is absent. Fails when it exists but can't be read —
+# an unreadable list reading as "no stacks" would quietly drop every reviewer's
+# platform checks. Silent on failure; the caller says whose fault it is.
+harness_stacks_want() {
+  local list="$1/harness/stacks.txt"
+  [ -e "$list" ] || return 0
+  [ -r "$list" ] || return 1
+  sed -e 's/#.*//' "$list" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true
+}
+
+# harness/stacks.txt as `add` first writes it: what detection found, and how to
+# correct it.
+harness_write_stacks() {
+  local target="$1" found="$2"
+  mkdir -p "$target/harness"
+  {
+    echo "# The stacks this project is built on, one per line. The reviewers read the"
+    echo "# guidance in harness/stacks/<name>.md for each one listed here."
+    echo "#"
+    echo "# harness add wrote this from what it found in the project, and never"
+    echo "# rewrites it. If it guessed wrong, edit it; to pick up guidance for a stack"
+    echo "# you added, re-run harness add. The names are the files in the starter's"
+    echo "# template/harness/stacks/."
+    # An if, not `&&`: with nothing found the test would be the group's status,
+    # and add runs under set -e — a project with no stack stopped the install.
+    if [ -n "$found" ]; then printf '%s\n' "$found"; fi
+  } > "$target/harness/stacks.txt"
+}
+
+# Names in a project's stacks.txt that the template has no guidance for, one per
+# line. A typo there otherwise installs nothing and says nothing.
+#
+# Checked against the names harness_stack_of derives from the file list — the
+# same exact match harness_files_for installs by — not against the filesystem:
+# on a case-insensitive disk `Web` finds web.md, and `../codex` finds a file
+# outside stacks/, and both then install nothing while this called them known.
+harness_unknown_stacks() {
+  local here="$1" want="$2" known rel stack
+  known="$(harness_template_files "$here" | while IFS= read -r rel; do
+             harness_stack_of "$rel" || true
+           done)" || return 1
+  while IFS= read -r stack; do
+    [ -n "$stack" ] || continue
+    printf '%s\n' "$known" | grep -qxF -- "$stack" || printf '%s\n' "$stack"
+  done <<< "$want"
+}
+
+# harness_template_files narrowed to one project: every file, except stack
+# guidance for a stack the project doesn't list. What add installs, update
+# compares and diverge will acknowledge.
+harness_files_for() {
+  local here="$1" target="$2" files want rel stack
+  files="$(harness_template_files "$here")" || return 1
+  want="$(harness_stacks_want "$target")" || return 1
+  while IFS= read -r rel; do
+    if stack="$(harness_stack_of "$rel")"; then
+      printf '%s\n' "$want" | grep -qxF "$stack" || continue
+    fi
+    printf '%s\n' "$rel"
+  done <<< "$files"
+}
+
 # A template file as it would land in this project, on stdout. Binaries and
 # vendored assets are copied whole; only text gets substituted.
 harness_render() {

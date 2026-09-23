@@ -39,7 +39,12 @@ done
 target="$(harness_resolve_target "$PWD")"
 name="$(basename "$target")"
 prefix="$(harness_prefix_for "$target" "$name")"
-files="$(harness_template_files "$HERE")"
+# Fails with its own message: the template list is unreadable, or stacks.txt is.
+files="$(harness_files_for "$HERE" "$target")" || {
+  [ -e "$target/harness/stacks.txt" ] && [ ! -r "$target/harness/stacks.txt" ] &&
+    echo "✗ harness/stacks.txt exists but is not readable — fix it and re-run." >&2
+  exit 1
+}
 list="$target/harness/diverged.txt"
 
 have=""

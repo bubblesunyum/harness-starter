@@ -245,6 +245,56 @@ step "update respects acknowledged forks" bash -c '
   grep -q "local fork" "$probe/scripts/review.sh" ||
     { echo "error: apply wrote an acknowledged fork"; exit 1; }'
 
+# Stack guidance reaches only the projects that use the stack: a Swift probe
+# gets swift.md and not web.md, a bare one gets neither, and each reads as
+# current. Guidance for someone else's platform is the failure this prevents.
+step "stack guidance installs only where detected" bash -c '
+  fresh_probe || exit 1
+  touch "$probe/Package.swift" || { echo "error: cannot mark the probe as swift"; exit 1; }
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  grep -qx swift "$probe/harness/stacks.txt" ||
+    { echo "error: stacks.txt never recorded swift"; exit 1; }
+  [ -f "$probe/harness/stacks/swift.md" ] || { echo "error: no swift guidance installed"; exit 1; }
+  [ ! -e "$probe/harness/stacks/web.md" ] || { echo "error: web guidance installed into a swift project"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) || {
+    echo "error: update called a fresh stack install stale"; echo "$out"; exit 1; }
+  bare="$(mktemp -d)" && git init -q "$bare" || { echo "error: cannot make a bare probe"; exit 1; }
+  bin/harness add "$bare" >/dev/null 2>&1 || { echo "error: harness add failed on a bare probe"; rm -rf "$bare"; exit 1; }
+  [ -f "$bare/harness/stacks.txt" ] && [ ! -e "$bare/harness/stacks" ] ||
+    { echo "error: a project with no stack got stack guidance, or no stacks.txt"; rm -rf "$bare"; exit 1; }
+  rm -rf "$bare"'
+
+# stacks.txt is the project's once written: a re-run of add installs what an
+# edit added and never re-detects over it — or a wrong guess could never be
+# corrected for good.
+step "an edited stacks.txt survives a re-add" bash -c '
+  fresh_probe || exit 1
+  touch "$probe/Package.swift" || { echo "error: cannot mark the probe as swift"; exit 1; }
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  printf "web\n" > "$probe/harness/stacks.txt" || { echo "error: cannot edit stacks.txt"; exit 1; }
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: re-add failed"; exit 1; }
+  [ "$(grep -v "^#" "$probe/harness/stacks.txt")" = "web" ] ||
+    { echo "error: re-add rewrote stacks.txt"; exit 1; }
+  [ -f "$probe/harness/stacks/web.md" ] || { echo "error: re-add never installed the added stack"; exit 1; }'
+
+# A stack name with no guidance behind it, or an install from before stacks
+# existed, fails update loudly — either way reviewers are missing checks and
+# nothing else would say so.
+step "update fails loudly on unknown or unrecorded stacks" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  # Web: a case-insensitive disk finds web.md for it, yet nothing installs.
+  printf "cobol\nWeb\n" >> "$probe/harness/stacks.txt" || { echo "error: cannot edit stacks.txt"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed an unknown stack"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "no guidance for" && echo "$out" | grep -qx "  Web" ||
+    { echo "error: update never named every unknown stack"; echo "$out"; exit 1; }
+  rm "$probe/harness/stacks.txt" || { echo "error: cannot remove stacks.txt"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed an install with no stacks.txt"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "stacks.txt missing" ||
+    { echo "error: update never said stacks.txt is missing"; echo "$out"; exit 1; }'
+
 # A diverged entry that acknowledges nothing — typo, removed file, or one
 # already quiet — fails loudly: the list is harness configuration, and a typo
 # there silently un-acknowledges the fork it meant.
