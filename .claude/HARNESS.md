@@ -236,6 +236,11 @@ role and writes it; later runs are silent. With no roster the agents omit
 `model:` and inherit the session's model, which always resolves — the cost is
 that `reviewer-taste` stops being the cheap one under opencode until then.
 
+Three paths, three model lines: the `.claude/agents/` frontmatter tiers
+(Sonnet 5, Opus 5.5) drive Claude Code's reviewers; the roster drives
+opencode's generated agents; Codex ignores both and inherits its host model.
+A model named in one path says nothing about the others.
+
 **There is no session-start hook to write.** opencode's plugin hooks are
 `event`, `chat.message`, `chat.params`, `chat.headers`, `chat.completion`,
 `tool.execute.before/after`, `auth`, `config`, and `permission.*`. None of them

@@ -18,11 +18,15 @@ scripts/review.sh            # 3. build the packet, prints its path
 ```
 
 Then spawn all three reviewers **in parallel, in one message**, each pointed at
-the packet path:
+the packet path (those models are the Claude Code path — the other tools read
+below):
 
 - `reviewer-taste` — the project's own standards, on Sonnet 5 at high effort
 - `reviewer-correctness` — real defects, on Opus 5.5 at low effort
 - `reviewer-design` — what it actually renders, on Opus 5.5 at low effort
+
+`scripts/review.sh` refuses (non-zero) when the packet exceeds the smallest
+reviewer budget instead of printing a path — narrow the range and re-run.
 
 Give each one only the packet path and one line on what the change was meant to
 do. They read `CLAUDE.md` themselves. Don't paste the diff into the prompt —
@@ -68,9 +72,12 @@ nobody looked at is the defect.
   intent-to-add entry left in the index gets committed in full by the next
   `git commit -a`, which would ride an untracked scratch file into someone
   else's commit.
-- **Fit the model to the read.** Taste runs Sonnet 5 at high effort;
-  correctness and design run Opus 5.5 at low effort — enough reasoning for
-  each pass without paying full price.
+- **Fit the model to the read.** On the Claude Code path, taste runs Sonnet 5
+  at high effort; correctness and design run Opus 5.5 at low effort — enough
+  reasoning for each pass without paying full price. Under opencode each role
+  runs whatever `harness/models.json` gives it, and under Codex every role
+  inherits the host model: the Sonnet/Opus tiers live in the `.claude/agents/`
+  frontmatter and mean nothing outside Claude Code.
 - **One reviewer looks at pixels.** In the project this came from, both diff
   readers passed a card that clipped every value it existed to show — and were
   right to: nothing in the diff was wrong. The defect lived in the render, in a
@@ -106,4 +113,4 @@ that's the pass that costs the least to run and catches what nothing else can.
 thorough than this. It's user-triggered and billed separately — mention it when
 a change genuinely warrants it, but never try to launch it yourself.
 
-<!-- tracks: scripts/review.sh .claude/agents/reviewer-taste.md .claude/agents/reviewer-correctness.md -->
+<!-- tracks: scripts/review.sh .claude/agents/reviewer-taste.md .claude/agents/reviewer-correctness.md .claude/agents/reviewer-design.md -->
