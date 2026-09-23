@@ -170,9 +170,10 @@ The whole harness is shaped by having one account. The rules that follow from th
   Use `--json` only when you are actually parsing it.
 - **Read the diff, not the repo.** Review and verification are scoped to what
   changed. `git diff` is the unit of work, not the file tree.
-- **Spend low effort on bulk.** Review passes, log triage, and screenshot
-  checks run on Opus 5.5 at low effort through subagents. Reserve high effort
-  for code you actually intend to keep.
+- **Spend effort where it pays.** Review passes run through subagents — taste
+  on Sonnet 5 at high effort, correctness and design on Opus 5.5 at low
+  effort. Log triage and screenshot checks stay at low effort; reserve full
+  effort for code you actually intend to keep.
 - **Subagents are for fan-out, not for delegation theater.** A subagent starts
   cold and re-derives context you already have. Use one when the work is a wide
   read you don't want in your own window (a review pass, a search), not to hand

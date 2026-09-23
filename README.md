@@ -34,7 +34,7 @@ added later.
 | **Ledger** | beads in `.beads/` — work and discoveries survive the session that found them |
 | **Brief** | `scripts/brief.sh`, a SessionStart hook: the seat and what it's for, the last note, the ready list, the memory keys, in ~500 tokens |
 | **Gate** | `scripts/verify.sh` — build, tests, and doc staleness behind one exit code and about six lines of output |
-| **Review** | `scripts/review.sh` builds one packet; three subagents read it on Opus 5.5 at low effort — taste, correctness, design reading screenshots |
+| **Review** | `scripts/review.sh` builds one packet; three subagents read it — taste on Sonnet 5 at high effort, correctness and design on Opus 5.5 at low effort |
 | **Librarian** | audits the knowledge layer from a digest, on a cadence, and proposes what to delete |
 | **Dashboard** | `scripts/dashboard.py` — a live diagram of all of it at localhost:7391, backgrounded, opened in Claude Code's browser pane |
 | **Skills** | `workflow` (the hub), `agentic-review`, `beads`, `handoff` — each costs a description line until invoked |

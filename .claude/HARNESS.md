@@ -29,8 +29,9 @@ how the pieces fit together.
   `beads`, `handoff`. Each costs a description line until invoked; bodies are
   free until then. Add project-specific ones (how to build and drive the app,
   how to add a source file) as you learn what they are.
-- **Reviewers:** `.claude/agents/` — `reviewer-taste`, `reviewer-correctness`,
-  and `reviewer-design` (all Opus 5.5 at low effort), run against a
+- **Reviewers:** `.claude/agents/` — `reviewer-taste` (Sonnet 5 at high
+  effort), `reviewer-correctness` and `reviewer-design` (Opus 5.5 at low
+  effort), run against a
   packet from `scripts/review.sh`. Design reads screenshots rather than the
   diff, because a diff can't show you clipping. The packet carries untracked
   files too, and stages nothing to do it; its captures are dated from the

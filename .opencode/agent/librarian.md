@@ -1,7 +1,6 @@
 ---
 description: Audits the whole knowledge layer at once — every skill, every memory, and what a session pays before it starts — and proposes what to merge, delete, shorten, or promote. Reads a digest rather than the repo. Run on a cadence or when the always-loaded cost climbs, never on the hot path of doing work.
 mode: subagent
-model: opencode/muse-spark-1.3-contributor-free
 permission:
   edit: deny
   task: deny

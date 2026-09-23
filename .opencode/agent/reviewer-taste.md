@@ -1,7 +1,6 @@
 ---
-description: Reviews a harness-starter diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Runs on Opus 5.5 at low effort; use for every change worth reviewing.
+description: Reviews a harness-starter diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Runs on Sonnet 5 at high effort; use for every change worth reviewing.
 mode: subagent
-model: opencode/muse-spark-1.3-contributor-free
 permission:
   bash: deny
   edit: deny

@@ -1,9 +1,9 @@
 ---
 name: reviewer-taste
-description: Reviews a {{PROJECT}} diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Runs on Opus 5.5 at low effort; use for every change worth reviewing.
+description: Reviews a {{PROJECT}} diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Runs on Sonnet 5 at high effort; use for every change worth reviewing.
 tools: Read, Grep, Glob
-model: claude-opus-5-5
-effort: low
+model: claude-sonnet-5
+effort: high
 ---
 
 You review changes in {{PROJECT}} against the project's own standards — the app
