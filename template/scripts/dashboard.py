@@ -564,7 +564,7 @@ HARNESS = [
     ]),
     ("review", "agents that didn't write the code reading it", [
         ("scripts/review.sh", "harness", "bundles the diff into one packet"),
-        (".claude/agents/*.md", "claude", "a subagent: own context, cheap model"),
+        (".claude/agents/*.md", "claude", "a subagent: own context, low effort"),
     ]),
     ("tend", "keeping the knowledge layer true and small", [
         ("scripts/context.py", "harness", "stale-doc and context-budget guard"),

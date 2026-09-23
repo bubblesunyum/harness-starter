@@ -170,9 +170,9 @@ The whole harness is shaped by having one account. The rules that follow from th
   Use `--json` only when you are actually parsing it.
 - **Read the diff, not the repo.** Review and verification are scoped to what
   changed. `git diff` is the unit of work, not the file tree.
-- **Spend cheap models on bulk.** Review passes, log triage, and screenshot
-  checks run on Haiku or Sonnet through subagents. Reserve the expensive model
-  for design and for code you actually intend to keep.
+- **Spend low effort on bulk.** Review passes, log triage, and screenshot
+  checks run on Opus 5.5 at low effort through subagents. Reserve high effort
+  for code you actually intend to keep.
 - **Subagents are for fan-out, not for delegation theater.** A subagent starts
   cold and re-derives context you already have. Use one when the work is a wide
   read you don't want in your own window (a review pass, a search), not to hand
