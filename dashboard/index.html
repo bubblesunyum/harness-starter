@@ -7,6 +7,17 @@
     <link rel="stylesheet" href="vendor/diff2html.min.css" />
     <style>
       :root {
+        /* Section-header palette. Grape is a dusk-heavy oklab mix with bubblegum:
+        purple, but kept clear of pink in hue. Fills use these flat, identical
+        in both modes; only the grey helper lanes adapt. */
+        --dusk: #26547c;
+        --bubblegum: #ef476f;
+        --pollen: #ffd166;
+        --emerald: #06d6a0;
+        --grape: color-mix(in oklab, var(--dusk) 65%, var(--bubblegum));
+        /* Pale neutral bar for the machinery lanes. Fixed, not adaptive, so
+        the dark header ink always holds — the one fill that never changes. */
+        --ash: #d4d5cf;
         --bg: #f6f6f4;
         --panel: #fffffe;
         --ink: #14150f;
@@ -213,9 +224,9 @@
         flex-direction: column;
       }
       .lane > summary {
-        background: color-mix(in srgb, var(--idle) 60%, white);
-        /* The bars stay light in both modes — dark-mode tokens mix down
-        toward white — so the ink stays dark instead of following --ink. */
+        background: var(--ash);
+        /* Fallback only — every lane names its own fill below. Fixed dark ink
+        like the rest of the bars. */
         color: #14150f;
       }
       .lane[open] > summary {
@@ -327,75 +338,43 @@
         border-color: var(--ok);
         color: var(--ok);
       }
-      .lane.ready > summary {
-        background: color-mix(in srgb, var(--accent) 60%, white);
-      }
-      .lane.in_progress > summary {
-        background: color-mix(in srgb, var(--blue) 60%, white);
-      }
-      .lane.blocked > summary {
-        background: color-mix(in srgb, var(--fail) 60%, white);
-      }
-      .lane.done > summary {
-        background: color-mix(in srgb, var(--ok) 60%, white);
-      }
+      /* Section headers take the palette flat, identical in both modes, and
+      neighbouring lanes stay far apart in hue on purpose: lavender for the
+      accent lanes, blue for active work, pink for blocked, green for done,
+      yellow for staging, pale grey for the machinery. Every bar is light
+      enough for the same fixed dark ink — text follows the fill, not the mode. */
+      .lane.ready > summary,
       .lane.review > summary {
-        background: color-mix(in srgb, var(--accent) 60%, white);
-      }
-      .lane.staging > summary {
-        background: color-mix(in srgb, var(--warn) 60%, white);
-      }
-      .lane.worktree > summary {
-        background: color-mix(in srgb, var(--teal) 60%, white);
-      }
-      /* Backlog and the harness have no status colour, so they take the idle
-      grey as a fill rather than a rule. */
-      .backlog > summary,
-      .harness > summary {
-        background: color-mix(in srgb, var(--idle) 60%, white);
+        background: color-mix(in oklab, var(--grape) 50%, white);
         color: #14150f;
       }
-      /* Every header here lives in a details.panel, whose own rules paint h2
-      --ink and the chevron/count --dim. These have to tie that specificity
-      (and come later) to win — a bare `.lane > summary .n` loses to
-      `details.panel > summary .n` and the count stays dim on the fill. */
-      details.panel > summary h2,
-      details.panel > summary .chev,
-      details.panel > summary .n {
-        color: inherit;
+      .lane.in_progress > summary {
+        background: color-mix(in oklab, var(--dusk) 50%, white);
+        color: #14150f;
       }
-      /* Dark mode gets its own fills: the light-mode bars mix toward white and
-      would glow against the dark page. These mix toward the panel instead, so
-      the bars stay dark and the ink follows --ink back to light. 35% keeps
-      every lane above 6:1 against it. */
-      @media (prefers-color-scheme: dark) {
-        .lane > summary,
-        .backlog > summary,
-        .harness > summary {
-          background: color-mix(in srgb, var(--idle) 35%, var(--panel));
-          color: var(--ink);
-        }
-        .lane.ready > summary,
-        .lane.review > summary {
-          background: color-mix(in srgb, var(--accent) 35%, var(--panel));
-        }
-        .lane.in_progress > summary {
-          background: color-mix(in srgb, var(--blue) 35%, var(--panel));
-        }
-        .lane.blocked > summary {
-          background: color-mix(in srgb, var(--fail) 35%, var(--panel));
-        }
-        .lane.done > summary {
-          background: color-mix(in srgb, var(--ok) 35%, var(--panel));
-        }
-        .lane.staging > summary {
-          background: color-mix(in srgb, var(--warn) 35%, var(--panel));
-        }
-        .lane.worktree > summary {
-          background: color-mix(in srgb, var(--teal) 35%, var(--panel));
-        }
+      .lane.blocked > summary {
+        background: var(--bubblegum);
+        color: #14150f;
       }
-
+      .lane.done > summary {
+        background: var(--emerald);
+        color: #14150f;
+      }
+      .lane.staging > summary {
+        background: var(--pollen);
+        color: #14150f;
+      }
+      .lane.worktree > summary {
+        background: var(--ash);
+        color: #14150f;
+      }
+      /* Backlog and the harness have no status colour, so they take pale grey
+      like the work tree. */
+      .backlog > summary,
+      .harness > summary {
+        background: var(--ash);
+        color: #14150f;
+      }
       .lane-name.hoverable {
         position: relative;
         cursor: help;
@@ -1410,6 +1389,15 @@
         margin-left: auto;
         font-size: 11.5px;
         color: var(--dim);
+      }
+      /* Headers are filled bars, so their h2, chevron and count take the bar's
+      own ink instead of --ink/--dim. This sits after the rules above on
+      purpose: `details.panel > summary .n` ties it on specificity, and the
+      later rule wins — from any earlier spot the count stays dim on the fill. */
+      details.panel > summary h2,
+      details.panel > summary .chev,
+      details.panel > summary .n {
+        color: inherit;
       }
       /* Rows, like the lanes below it — the backlog is read the same way the rest
      of the ledger is, and it's behind a disclosure, so its length costs nothing
