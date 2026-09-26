@@ -1,0 +1,33 @@
+# dashboard.toml — project-owned run buttons and display name.
+#
+# The harness installs this file once and never touches it again: add buttons
+# here freely, this is the file for them. dashboard.py reads it on every
+# snapshot build, so a change lands on the next poll with no restart.
+#
+# A missing file serves the two standard buttons (run + push) and names the
+# project after its directory. A broken one keeps serving the last good table
+# and complains on the server's stderr.
+
+[project]
+# Display name for the title. Defaults to the directory name.
+# name = "my project"
+
+# One button per [[task]]: a fixed command the server may run, the label it
+# wears, the label while it's going, and where on the page it belongs —
+# "header" (top-right strip), "gate" (inside the gate popover), or
+# "lane:<key>" (a board lane's header, e.g. "lane:staging").
+[[task]]
+name = "verify"
+command = ["scripts/verify.sh"]
+label = "run"
+busy = "running…"
+where = "gate"
+
+# The only one that leaves this machine. Keep it a plain `git push` with no
+# arguments so it can only ever do what the branch is already tracking.
+[[task]]
+name = "push"
+command = ["git", "push"]
+label = "push"
+busy = "pushing…"
+where = "lane:staging"

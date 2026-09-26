@@ -32,11 +32,45 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 from pathlib import Path
 import urllib.request
 from urllib.parse import parse_qs, unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _bd_prefix():
+    """The ledger's bead prefix, asked of the ledger itself at runtime — the
+    installer used to bake it into this file, which made every copy differ and
+    un-updatable. The ledger is the one source of truth for it."""
+    try:
+        r = subprocess.run(["bd", "config", "get", "issue_prefix"],
+                           capture_output=True, text=True, timeout=10, cwd=ROOT)
+        got = (r.stdout or "").strip()
+        if r.returncode == 0 and re.fullmatch(r"[a-z0-9]{1,10}", got):
+            return got
+    except Exception:
+        pass
+    # No ledger to ask, or an answer with nothing usable in it: derive from the
+    # directory name the same way `harness add` does, so the worst case still
+    # validates this project's own beads.
+    short = re.sub(r"[^a-z0-9]", "", ROOT.name.lower()).lstrip("0123456789")[:3]
+    return short or "bd"
+
+
+_prefix = None
+
+
+def prefix():
+    global _prefix
+    if _prefix is None:
+        _prefix = _bd_prefix()
+    return _prefix
+
+
+def bead_re():
+    return re.compile(rf"^{re.escape(prefix())}-[a-z0-9]+(?:\.\d+)?$")
 # The first checkout to start gets 7391; a second one running this same harness
 # steps to the next free port rather than colliding. See free_port().
 PORT = 7391
@@ -106,7 +140,7 @@ def git_state():
                              "at": float(parts[3]) if len(parts) > 3 and parts[3] else 0})
             # A bead can be spread over several commits; the lane shows the
             # bead once and says how many carry it.
-            for bead in set(re.findall(r"\bhar-[a-z0-9]+(?:\.\d+)?\b", entry)):
+            for bead in set(re.findall(rf"\b{re.escape(prefix())}-[a-z0-9]+(?:\.\d+)?\b", entry)):
                 seen = mentioned.setdefault(bead, {"commits": 0, "at": 0, "list": []})
                 seen["commits"] += 1
                 seen["at"] = max(seen["at"], unpushed[-1]["at"])
@@ -417,7 +451,7 @@ def read_logs(logs):
 def verify_state():
     """Read the last gate run off its logs rather than running it — the dashboard
     reports on the system, it doesn't drive it."""
-    logs = Path("/tmp/har-verify")
+    logs = Path(f"/tmp/{prefix()}-verify")
     if not logs.is_dir():
         return {"status": "never run", "when": "", "tests": "", "steps": [],
                 "unverified": 0, "took": "", "at": 0}
@@ -721,7 +755,7 @@ def state():
 
     return {
         "generated": time.strftime("%H:%M:%S"),
-        "project": ROOT.name,
+        "project": project_name(),
         "git": git,
         "ledger": ledger,
         "worktree": worktree_state(),
@@ -784,10 +818,10 @@ def commit(message, amend):
 
 
 # The board's own writes: filing a bead and dragging one between lanes. Like
-# TASKS and the work-tree actions, these run fixed `bd` invocations — nothing
-# in a request reaches a shell, and the id, lane and labels are validated
-# before they get near one.
-BEAD_ID = re.compile(r"^har-[a-z0-9]+(?:\.\d+)?$")
+# the run table and the work-tree actions, these run fixed `bd` invocations —
+# nothing in a request reaches a shell, and the id, lane and labels are
+# validated before they get near one. Bead ids are checked against bead_re(),
+# the ledger's own prefix resolved at runtime.
 # The lanes a card can be dropped on. Kept in step with DROP_LANES and the
 # backlog strip's data-drop in dashboard/index.html by hand — the page can't
 # read this table, so a lane added here needs adding there too.
@@ -867,7 +901,7 @@ def move_bead(payload):
     bead = bead.strip() if isinstance(bead, str) else ""
     lane = payload.get("lane")
     lane = lane.strip() if isinstance(lane, str) else ""
-    if not BEAD_ID.match(bead):
+    if not bead_re().match(bead):
         return {"ok": False, "error": "not a bead id"}
     if lane not in MOVE_LANES:
         return {"ok": False, "error": "not a bead lane"}
@@ -902,22 +936,22 @@ def move_bead(payload):
     return {"ok": True}
 
 
-# The loops a human still triggers by hand. Kept as a fixed table rather than
-# anything the page can name, so the only commands this server will ever run are
-# the ones written here. It is also the only place a run button is described:
-# label, the label while it's going, and where on the page it belongs. The page
-# draws slots from this and names no task of its own.
+# The loops a human still triggers by hand. They live in dashboard.toml beside
+# this file — project-owned, installed once, never touched by `harness update`
+# — so adding a button is a TOML edit, not a code edit, and this file stays
+# byte-identical everywhere. The table is still a fixed list, never anything
+# the page names: the only commands this server will ever run are the ones
+# written there. It is also the only place a run button is described: label,
+# the label while it's going, and where on the page it belongs. The page draws
+# slots from the state and names no task of its own.
 #
 #   where = "header"       the strip at the top right
 #           "gate"         inside the gate popover, next to the word it proves
 #           "lane:<key>"   in a board lane's header, e.g. lane:staging
 #
-# ── FILL THIS IN ──────────────────────────────────────────────────────────
-# Add the ones that put the app in front of you — installing it, launching it on
-# a device — with where="header". Nothing else to edit: a new entry here is a new
-# button. Start empty of them on purpose; a button for a script that doesn't
-# exist is worse than no button.
-TASKS = {
+# A missing dashboard.toml serves these defaults; a broken one keeps serving
+# the last good table and says so on stderr. Either way the page never waits.
+DEFAULT_TASKS = {
     "verify": {
         "command": ["scripts/verify.sh"],
         "label": "run",
@@ -934,14 +968,108 @@ TASKS = {
     },
 }
 
+_TASK_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+_TASK_WHERE = {"header", "gate"} | {
+    f"lane:{k}" for k in
+    ("ready", "blocked", "in_progress", "review", "done", "backlog", "staging", "worktree")}
+
+_toml = {"mtime": (0.0, 0), "reported": (0.0, 0), "tasks": None, "name": None}
+_toml_lock = threading.Lock()
+
+
+def _check_tasks(doc):
+    """dashboard.toml, validated. Returns (tasks, name); raises ValueError with
+    the reason when the file parses but doesn't say something runnable."""
+    if not isinstance(doc, dict):
+        raise ValueError("dashboard.toml holds no table")
+    project = doc.get("project", {})
+    if not isinstance(project, dict):
+        raise ValueError("[project] is not a table")
+    name = project.get("name")
+    if name is not None:
+        if not isinstance(name, str) or not name.strip() or len(name) > 80:
+            raise ValueError("[project].name must be 1–80 characters")
+        name = name.strip()
+    entries = doc.get("task", [])
+    if not isinstance(entries, list):
+        raise ValueError("[[task]] must be a list")
+    tasks = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            raise ValueError("a [[task]] entry is not a table")
+        tname = e.get("name")
+        if not isinstance(tname, str) or not _TASK_NAME.match(tname):
+            raise ValueError(f"bad task name: {tname!r}")
+        if tname in tasks:
+            raise ValueError(f"duplicate task: {tname}")
+        cmd = e.get("command")
+        if (not isinstance(cmd, list) or not cmd
+                or any(not isinstance(c, str) or not c or len(c) > 200 for c in cmd)):
+            raise ValueError(f"task {tname} needs a non-empty command list")
+        for key in ("label", "busy"):
+            if not isinstance(e.get(key), str) or not e[key] or len(e[key]) > 40:
+                raise ValueError(f"task {tname} needs a short {key}")
+        if e.get("where") not in _TASK_WHERE:
+            raise ValueError(f"task {tname} has an unknown where: {e.get('where')!r}")
+        tasks[tname] = {"command": list(cmd), "label": e["label"],
+                        "busy": e["busy"], "where": e["where"]}
+    return tasks, name
+
+
+def _refresh_toml():
+    """Re-read dashboard.toml when it changed. Missing file: the defaults,
+    silently. Broken file: keep serving the last good table and complain once
+    per change, not once per snapshot build — the stamp only advances past a
+    file that parsed, so a torn read retries instead of sticking."""
+    global _toml
+    try:
+        st = (ROOT / "dashboard.toml").stat()
+        stamp = (st.st_mtime, st.st_size)
+    except OSError:
+        stamp = (0.0, 0)
+    with _toml_lock:
+        if stamp == _toml["mtime"]:
+            return
+        if stamp == (0.0, 0):
+            _toml = {"mtime": stamp, "reported": stamp, "tasks": dict(DEFAULT_TASKS), "name": None}
+            return
+        try:
+            with open(ROOT / "dashboard.toml", "rb") as f:
+                tasks, name = _check_tasks(tomllib.load(f))
+        except (OSError, tomllib.TOMLDecodeError, ValueError) as e:
+            if stamp != _toml["reported"]:
+                # Guarded: a detached server can outlive its stderr, and a
+                # logging print that raises would take the refresher thread —
+                # and every future snapshot — down with it.
+                try:
+                    print(f"dashboard: {e} — keeping last good table", file=sys.stderr)
+                except OSError:
+                    pass
+                _toml["reported"] = stamp
+            if _toml["tasks"] is None:
+                _toml["tasks"] = dict(DEFAULT_TASKS)
+            return
+        _toml = {"mtime": stamp, "reported": stamp, "tasks": tasks, "name": name}
+
+
+def tasks():
+    _refresh_toml()
+    return _toml["tasks"]
+
+
+def project_name():
+    """Display name for the title. The TOML's, or the directory's."""
+    _refresh_toml()
+    return _toml["name"] or ROOT.name
+
 _runs = {}
 
 
 def start_task(name):
-    """Run one of TASKS in the background and keep its last result. A second
+    """Run one of the dashboard.toml tasks in the background and keep its last result. A second
     press while it's still going is ignored rather than queued — these install
     and relaunch the app, and two at once fight over the same process."""
-    if name not in TASKS:
+    if name not in tasks():
         return {"error": "unknown task"}
     if _runs.get(name, {}).get("state") == "running":
         return _runs[name]
@@ -950,7 +1078,7 @@ def start_task(name):
 
     def work():
         try:
-            r = subprocess.run(TASKS[name]["command"], capture_output=True, text=True,
+            r = subprocess.run(tasks()[name]["command"], capture_output=True, text=True,
                                cwd=ROOT, timeout=900)
             tail = (r.stdout + r.stderr).strip().splitlines()
             _runs[name] = {
@@ -975,10 +1103,10 @@ def start_task(name):
 
 def runs_state():
     """Every task's last result, plus the label and placement the page draws it
-    with. Presentation travels with the state so that TASKS above stays the one
-    description of a run button."""
+    with. Presentation travels with the state so that the TOML table above
+    stays the one description of a run button."""
     out = {}
-    for name, task in TASKS.items():
+    for name, task in tasks().items():
         r = _runs.get(name, {"state": "idle", "output": "", "at": 0})
         ago = ""
         if r["at"]:
@@ -1102,7 +1230,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         # The page can only ask for a task by name; the command behind that name
-        # lives in TASKS and nothing in the request reaches a shell.
+        # lives in dashboard.toml and nothing in the request reaches a shell.
         if self.path.startswith("/run/"):
             body = json.dumps(start_task(self.path[len("/run/"):].split("?")[0])).encode()
             self.send_response(200)
@@ -1459,7 +1587,7 @@ def main():
 
     # Named so `scripts/review.sh` picks it up with the app's own captures.
     if command == "shot":
-        target = args[1] if len(args) > 1 else "/tmp/har-dashboard.png"
+        target = args[1] if len(args) > 1 else f"/tmp/{prefix()}-dashboard.png"
         print(shot(target, port))
         return
 
@@ -1471,7 +1599,7 @@ def main():
         if holder(port) is not None:
             note = "already serving"
         else:
-            log = open("/tmp/har-dash.log", "a")
+            log = open(f"/tmp/{prefix()}-dash.log", "a")
             # --port, or the child re-runs free_port() from scratch and can
             # pick a different one than the port just printed — two siblings
             # starting at once then both claim to have started on 7391, one
@@ -1490,7 +1618,7 @@ def main():
             # link to nothing until some later `up` overwrites it.
             note = "started" if wait_until_serving(port) else ""
         if not note:
-            print(f"! nothing came up on {port} — see " + "/tmp/har-dash.log")
+            print(f"! nothing came up on {port} — see " + f"/tmp/{prefix()}-dash.log")
         else:
             # Written here rather than left to the child: the hook output the
             # agent reads is this process's, and a launch entry that lands
