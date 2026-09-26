@@ -213,9 +213,18 @@
         flex-direction: column;
       }
       .lane > summary {
-        border-bottom: 2px solid var(--idle);
+        background: color-mix(in srgb, var(--idle) 60%, white);
+        /* The bars stay light in both modes — dark-mode tokens mix down
+        toward white — so the ink stays dark instead of following --ink. */
+        color: #14150f;
       }
       .lane[open] > summary {
+        border-radius: 14px 14px 0 0;
+      }
+      /* Filled bars meet square content when open — without this the bar's
+      rounded bottom corners butt against the rows below it. */
+      .backlog[open] > summary,
+      .harness[open] > summary {
         border-radius: 14px 14px 0 0;
       }
       .lane > summary h2 {
@@ -319,25 +328,45 @@
         color: var(--ok);
       }
       .lane.ready > summary {
-        border-bottom-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 60%, white);
       }
       .lane.in_progress > summary {
-        border-bottom-color: var(--blue);
+        background: color-mix(in srgb, var(--blue) 60%, white);
       }
       .lane.blocked > summary {
-        border-bottom-color: var(--fail);
+        background: color-mix(in srgb, var(--fail) 60%, white);
       }
       .lane.done > summary {
-        border-bottom-color: var(--ok);
+        background: color-mix(in srgb, var(--ok) 60%, white);
       }
       .lane.review > summary {
-        border-bottom-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 60%, white);
       }
       .lane.staging > summary {
-        border-bottom-color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 60%, white);
       }
       .lane.worktree > summary {
-        border-bottom-color: var(--teal);
+        background: color-mix(in srgb, var(--teal) 60%, white);
+      }
+      /* Backlog and the harness have no status colour, so they take the idle
+      grey as a fill rather than a rule. */
+      .backlog > summary,
+      .harness > summary {
+        background: color-mix(in srgb, var(--idle) 60%, white);
+        color: #14150f;
+      }
+      /* h2, the chevron and the count otherwise follow --ink/--dim, which go
+      light in dark mode and would wash out on the pale bars. */
+      .lane > summary h2,
+      .backlog > summary h2,
+      .harness > summary h2,
+      .lane > summary .chev,
+      .backlog > summary .chev,
+      .harness > summary .chev,
+      .lane > summary .n,
+      .backlog > summary .n,
+      .harness > summary .n {
+        color: inherit;
       }
 
       .lane-name.hoverable {
