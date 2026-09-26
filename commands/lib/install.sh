@@ -6,16 +6,17 @@
 # placeholders become, which files carry the contract — or `update` reports
 # drift in files `add` never installed, which is a worse lie than saying nothing.
 
-# Files the installer copies byte-for-byte and never compares. Two different
-# reasons, both meaning "a difference here is not drift":
+# Files the installer copies byte-for-byte and never compares. Three different
+# reasons, all meaning "a difference here is not drift":
 #   dashboard/vendor/*   third-party assets, copied whole, no substitution
+#   dashboard.toml       project-owned run buttons; installed once, never touched
 #   *.gitkeep            empty by definition
 #   harness/laurels.jsonl  a log the project appends to; the template ships it empty
 #   harness/diverged.txt   the acknowledged-fork list; the project edits it,
 #                          the template ships it empty
 harness_is_data() {
   case "$1" in
-    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt) return 0 ;;
+    dashboard/vendor/*|dashboard.toml|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -329,7 +330,7 @@ harness_files_for() {
 harness_render() {
   local rel="$1" src="$2" name="$3" prefix="$4"
   case "$rel" in
-    dashboard/vendor/*) cat "$src"; return ;;
+    dashboard/vendor/*|dashboard.toml) cat "$src"; return ;;
   esac
   sed -e "s/{{PROJECT}}/$name/g" \
       -e "s/{{PREFIX_UPPER}}/$(printf '%s' "$prefix" | tr 'a-z' 'A-Z')/g" \

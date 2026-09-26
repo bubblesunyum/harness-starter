@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{PROJECT}} · harness</title>
+    <title>harness</title>
     <link rel="stylesheet" href="vendor/diff2html.min.css" />
     <style>
       :root {
@@ -1815,7 +1815,7 @@
     <header>
       <span class="titlemenu" id="titlemenu">
         <button class="titletrigger" id="metaToggle" aria-expanded="false" aria-controls="metaTip">
-          <h1>{{PROJECT}}</h1>
+          <h1 id="projectName"></h1>
           <span class="chev">›</span>
         </button>
         <span
@@ -1934,7 +1934,7 @@
       starts collapsed on load. */
       const expandedEpics = new Set()
 
-      /* Run buttons are described once, in TASKS in scripts/dashboard.py, and
+      /* Run buttons are described once, in dashboard.toml beside the server, and
          arrive here inside the state with their label and their placement. The
          page draws slots; it never names a task. */
       let runStates = {}
@@ -3311,7 +3311,7 @@
 
       /* ---- run controls ----------------------------------------------------- */
       /* The header carries the ones that put the app in front of you — whatever
-         TASKS in scripts/dashboard.py places there. Running the gate belongs with
+         dashboard.toml places there. Running the gate belongs with
          the word that reports it, so it sits in the gate's own pane instead, and
          the gate's note is what those runs last said. */
       let runsSignature = ''
@@ -3458,6 +3458,8 @@
         drawCommit(d)
         drawMeta(d)
         $('branchline').textContent = `${d.git.branch} · ${d.ledger.counts.open} open`
+        document.title = `${d.project} · harness`
+        $('projectName').textContent = d.project
         drawGate(d)
       }
 
