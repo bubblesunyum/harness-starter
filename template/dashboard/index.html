@@ -355,18 +355,45 @@
         background: color-mix(in srgb, var(--idle) 60%, white);
         color: #14150f;
       }
-      /* h2, the chevron and the count otherwise follow --ink/--dim, which go
-      light in dark mode and would wash out on the pale bars. */
-      .lane > summary h2,
-      .backlog > summary h2,
-      .harness > summary h2,
-      .lane > summary .chev,
-      .backlog > summary .chev,
-      .harness > summary .chev,
-      .lane > summary .n,
-      .backlog > summary .n,
-      .harness > summary .n {
+      /* Every header here lives in a details.panel, whose own rules paint h2
+      --ink and the chevron/count --dim. These have to tie that specificity
+      (and come later) to win — a bare `.lane > summary .n` loses to
+      `details.panel > summary .n` and the count stays dim on the fill. */
+      details.panel > summary h2,
+      details.panel > summary .chev,
+      details.panel > summary .n {
         color: inherit;
+      }
+      /* Dark mode gets its own fills: the light-mode bars mix toward white and
+      would glow against the dark page. These mix toward the panel instead, so
+      the bars stay dark and the ink follows --ink back to light. 35% keeps
+      every lane above 6:1 against it. */
+      @media (prefers-color-scheme: dark) {
+        .lane > summary,
+        .backlog > summary,
+        .harness > summary {
+          background: color-mix(in srgb, var(--idle) 35%, var(--panel));
+          color: var(--ink);
+        }
+        .lane.ready > summary,
+        .lane.review > summary {
+          background: color-mix(in srgb, var(--accent) 35%, var(--panel));
+        }
+        .lane.in_progress > summary {
+          background: color-mix(in srgb, var(--blue) 35%, var(--panel));
+        }
+        .lane.blocked > summary {
+          background: color-mix(in srgb, var(--fail) 35%, var(--panel));
+        }
+        .lane.done > summary {
+          background: color-mix(in srgb, var(--ok) 35%, var(--panel));
+        }
+        .lane.staging > summary {
+          background: color-mix(in srgb, var(--warn) 35%, var(--panel));
+        }
+        .lane.worktree > summary {
+          background: color-mix(in srgb, var(--teal) 35%, var(--panel));
+        }
       }
 
       .lane-name.hoverable {
