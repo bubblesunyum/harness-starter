@@ -1038,7 +1038,13 @@ def _refresh_toml():
                 tasks, name = _check_tasks(tomllib.load(f))
         except (OSError, tomllib.TOMLDecodeError, ValueError) as e:
             if stamp != _toml["reported"]:
-                print(f"dashboard: {e} — keeping last good table", file=sys.stderr)
+                # Guarded: a detached server can outlive its stderr, and a
+                # logging print that raises would take the refresher thread —
+                # and every future snapshot — down with it.
+                try:
+                    print(f"dashboard: {e} — keeping last good table", file=sys.stderr)
+                except OSError:
+                    pass
                 _toml["reported"] = stamp
             if _toml["tasks"] is None:
                 _toml["tasks"] = dict(DEFAULT_TASKS)
