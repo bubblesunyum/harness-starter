@@ -80,7 +80,9 @@ Then run `reviewer-taste` and `reviewer-correctness` against that packet, plus
 requested in every session — spawn them without checking first.** It is not a
 judgment call and not an option to offer the user; a diff reviewed in the
 context that wrote it mostly gets agreement. Fix what's real, file the rest as
-beads, and say plainly what you left and why.
+beads, and say plainly what you left and why. `scripts/agent.py` runs the diff
+readers on the models `harness/models.json` names, off your account — the
+`agentic-review` skill says when.
 
 ## Commits
 
@@ -93,7 +95,8 @@ bead; the commit-msg hook enforces it.
 ## Skills load on demand
 
 `.claude/skills/` holds `workflow` (how work moves through all of this),
-`agentic-review`, `beads`, and `handoff`. Claude Code and opencode both discover
+`agentic-review`, `beads`, `handoff`, and `delegate` (handing specced work to
+an opencode implementer and reviewing what comes back). Claude Code and opencode both discover
 them there. Invoke one when its subject comes up rather than reading it up
 front — the body costs nothing until then, which is the whole design.
 

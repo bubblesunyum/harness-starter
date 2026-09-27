@@ -202,6 +202,10 @@ The rules that follow from that:
   read you don't want in your own window (a review pass, a search), not to hand
   off something you could do in two calls.
 
+  Handing *implementation* to another model is a different trade, and it pays
+  when the work is specced: the `delegate` skill runs it on opencode, off this
+  account, with you as its reviewer.
+
   The asymmetry is the whole argument. A search that opens eight files costs the
   main window ~30k tokens *for the rest of the session*; the same search in an
   `Explore` subagent costs its summary, once. The review pass is the proof that

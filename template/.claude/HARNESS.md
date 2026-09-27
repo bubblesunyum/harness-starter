@@ -229,6 +229,29 @@ Claude Code's reviewers; the roster drives
 opencode's generated agents; Codex ignores both and inherits its host model.
 A model named in one path says nothing about the others.
 
+**`scripts/agent.py` is how any tool reaches the roster.** It runs one role
+through `opencode run` — so Claude Code can put its reviewers, and delegated
+implementation, on another provider's bill without the packet ever entering its
+own context. Three behaviours of `opencode run` shaped it, all found by running
+it:
+
+- `--agent` given a `mode: subagent` agent prints a warning and falls back to
+  the default agent, so the reviewer runs without its prompt. The script
+  promotes the agent to primary for its own process through
+  `OPENCODE_CONFIG_CONTENT`, leaving the generated files — and the picker —
+  alone.
+- OpenCode's free models answer the built-in agents and refuse every custom one
+  (a 403 naming the free tier). A roster pointing a reviewer at a `-free` model
+  works for `implement`, which runs `build`, and fails for every reviewer.
+- Headless, every permission prompt is answered no and the agent carries on
+  without it — including reads outside the project, which is where review.sh
+  puts the packet. Reviewers are granted `/tmp`, and any other refusal makes
+  the script exit non-zero rather than pass on a reply written blind.
+
+The revision cap lives in the script rather than in the `delegate` skill's prose
+because guidance is what a long thread erodes first. It counts the session's
+messages back out of `opencode export`, so there is no counter file to lose.
+
 **There is no session-start hook to write.** opencode's plugin hooks are
 `event`, `chat.message`, `chat.params`, `chat.headers`, `chat.completion`,
 `tool.execute.before/after`, `auth`, `config`, and `permission.*`. None of them

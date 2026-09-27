@@ -75,6 +75,7 @@ echo "verify: $ROOT"
 
 step "codex support" python3 scripts/codex-support.py check
 step "codex regression" python3 scripts/test-codex-support.py
+step "agent runner" python3 scripts/test-agent.py
 
 # The knowledge layer gets the same treatment as the code. A doc that quietly
 # stopped being true is worse than a missing one, and it can't be caught by

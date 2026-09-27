@@ -31,6 +31,20 @@ Give each one only the packet path and one line on what the change was meant to
 do. They read `CLAUDE.md` themselves. Don't paste the diff into the prompt —
 that's the packet's job, and pasting it doubles the cost.
 
+**Off the account, when the roster allows.** If `harness/models.json` names a
+model for `reviewer-taste` and `reviewer-correctness`, run those two through
+opencode instead of spawning them — both at once, in the background:
+
+```bash
+scripts/agent.py reviewer-taste "Review <packet> — <what it was meant to do>"
+scripts/agent.py reviewer-correctness "Review <packet> — <what it was meant to do>"
+```
+
+Same prompts, same packet, different model and bill. A non-zero exit is a
+reviewer that didn't run, not one that found nothing — spawn it natively
+instead. `reviewer-design` stays native: it reads screenshots, and a roster
+model that can't see pixels would pass every one of them.
+
 Review a change that doesn't build yet and you'll get findings about the
 breakage instead of the design, so keep the order.
 
@@ -72,11 +86,11 @@ nobody looked at is the defect.
   intent-to-add entry left in the index gets committed in full by the next
   `git commit -a`, which would ride an untracked scratch file into someone
   else's commit.
-- **Fit the model to the read.** Under Claude Code each reviewer's model and
-  effort live in its `.claude/agents/` frontmatter, sized to its pass — and
-  only there, so a model change is one edit. Under opencode each role runs
-  whatever `harness/models.json` gives it, and under Codex every role inherits
-  the host model.
+- **Fit the model to the read.** A native Claude Code spawn runs the model and
+  effort in the reviewer's `.claude/agents/` frontmatter. Under opencode — and
+  through `scripts/agent.py` from anywhere — each role runs whatever
+  `harness/models.json` gives it. Under Codex every role inherits the host
+  model.
 - **One reviewer looks at pixels.** In the project this came from, both diff
   readers passed a card that clipped every value it existed to show — and were
   right to: nothing in the diff was wrong. The defect lived in the render, in a
@@ -112,4 +126,4 @@ that's the pass that costs the least to run and catches what nothing else can.
 thorough than this. It's user-triggered and billed separately — mention it when
 a change genuinely warrants it, but never try to launch it yourself.
 
-<!-- tracks: scripts/review.sh .claude/agents/reviewer-taste.md .claude/agents/reviewer-correctness.md .claude/agents/reviewer-design.md -->
+<!-- tracks: scripts/review.sh scripts/agent.py .claude/agents/reviewer-taste.md .claude/agents/reviewer-correctness.md .claude/agents/reviewer-design.md -->
