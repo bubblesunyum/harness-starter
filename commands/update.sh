@@ -304,7 +304,9 @@ if [ -n "$skipped_steps" ]; then
   echo "  so overwriting would delete them. Move the steps or scope by hand into:"
   printf '%s' "$skipped_steps" | while IFS= read -r line; do
     [ -n "$line" ] || continue
-    printf '%s  → %s\n' "$line" "$(harness_overlay_of "${line#  }")"
+    # Never truncate the list silently: under set -e a failed substitution
+    # would end the subshell early and swallow the entries after it.
+    printf '%s  →  %s\n' "$line" "$(harness_overlay_of "${line#  }" || printf '?')"
   done
   echo
 fi

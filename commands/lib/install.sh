@@ -81,13 +81,13 @@ harness_overlay_of() {
 # prevent.
 #
 # Succeeds silently when there is nothing to move: the overlay already exists,
-# the script isn't there, or the script already is the base (its block is the
-# pointer, and the template's overlay covers it — `add` installs that). Moves
-# the block when the project's file carries a filled one. Fails when the file
-# differs but holds no block to lift — a fully rewritten script — which the
-# caller reports loudly instead of converging over.
+# the script isn't there, the block is the pointer (then the template's overlay
+# covers it — `add` installs that), or the block carries no answers. Moves the
+# block when the project's file carries a filled one. Fails when the file
+# differs but holds no block to lift — a fully rewritten script, a missing or
+# duplicated marker — which the caller reports loudly instead of converging over.
 harness_extract_overlay() {
-  local here="$1" target="$2" rel="$3" overlay start end block baseblock
+  local here="$1" target="$2" rel="$3" overlay start end block baseblock tmp
   overlay="$(harness_overlay_of "$rel")" || return 0
   [ -e "$target/$overlay" ] && return 0
   [ -f "$target/$rel" ] || return 0
@@ -95,17 +95,37 @@ harness_extract_overlay() {
     scripts/verify.sh) start="── PROJECT STEPS ──"; end="── END PROJECT STEPS ──" ;;
     scripts/review.sh) start="── CONFIGURE ──"; end="── END CONFIGURE ──" ;;
   esac
+  # Exactly one block, in order: a missing end marker would lift to end-of-file,
+  # a duplicated one would merge both copies with markers inside, and a swapped
+  # pair would lift everything after the start line — and the base then
+  # converges and deletes what the lift garbled. Count with -F: the boxes are
+  # literal text, not a pattern.
+  [ "$(grep -cF "$start" "$target/$rel")" -eq 1 ] || return 1
+  [ "$(grep -cF "$end" "$target/$rel")" -eq 1 ] || return 1
+  [ "$(grep -nF "$start" "$target/$rel" | head -1 | cut -d: -f1)" \
+    -lt "$(grep -nF "$end" "$target/$rel" | head -1 | cut -d: -f1)" ] || return 1
   block="$(sed -n "/$start/,/$end/p" "$target/$rel" | sed '1d;$d')"
-  [ -n "$block" ] || return 1
   baseblock="$(sed -n "/$start/,/$end/p" "$here/template/$rel" | sed '1d;$d')"
   [ "$block" = "$baseblock" ] && return 0
+  # A filled block carries answers — real lines to run, not just comments. A
+  # stale pointer carries none, and lifting it would strand a comment-only
+  # overlay the gate then runs as zero steps and passes vacuously. Code lines
+  # decide, not keywords: a comment mentioning `step "..."` is still a comment,
+  # and steps or scopes spelled any valid way still count.
+  printf '%s' "$block" | grep -qE '^[[:space:]]*[^#[:space:]]' || return 0
+  tmp="$(mktemp "$target/.harness-extract-XXXXXX")" || return 1
   {
     printf '# Recovered from %s by the harness: this project'"'"'s own %s,\n' "$rel" \
       "$( [ "$rel" = scripts/verify.sh ] && printf 'gate steps' || printf 'review scope' )"
     printf '# moved here so the base file could converge. Edit freely — the harness\n'
     printf '# installs this file once and never compares or overwrites it.\n\n'
     printf '%s\n' "$block"
-  } > "$target/$overlay" || return 1
+  } > "$tmp" || { rm -f "$tmp"; return 1; }
+  # Renamed, not copied: the temp file sits beside the overlay, so the move is
+  # a rename on the same filesystem — a half-written overlay (disk full, lost
+  # NFS) would read as moved and block every later recovery, stranding the
+  # steps it truncated.
+  mv "$tmp" "$target/$overlay" || { rm -f "$tmp"; return 1; }
   printf '%s\n' "$overlay"
   return 0
 }

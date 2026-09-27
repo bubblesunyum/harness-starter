@@ -395,6 +395,240 @@ step "add accepts a linked worktree" bash -c '
     echo "error: add claimed to initialise a worktree"; echo "$out"; exit 1;
   fi'
 
+# The starter eats its own dogfood: its working tree reads as current against
+# its own template. A stale contract file here means the split already slipped —
+# a base edited in one place, or an overlay the update started comparing.
+step "the starter reads as current" bash -c '
+  out=$(bin/harness update 2>&1) || { echo "error: the starter is stale against its own template"; echo "$out"; exit 1; }'
+
+# The split sticks only while the base files stay identical. This is the
+# enforcement: a base edited in the root copy instead of the template fails the
+# gate, rather than drifting quietly until update calls every install stale.
+step "contract scripts match the template byte for byte" bash -c '
+  cmp -s template/scripts/verify.sh scripts/verify.sh ||
+    { echo "error: scripts/verify.sh differs from its template — change the template, not the copy"; exit 1; }
+  cmp -s template/scripts/review.sh scripts/review.sh ||
+    { echo "error: scripts/review.sh differs from its template — change the template, not the copy"; exit 1; }'
+
+# Overlay files are the project's to edit, so an edited one must read as
+# current, not stale — a warning nobody can clear is the one that stops being
+# read, and then the real drift hides behind it.
+step "overlay edits stay quiet under update" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  echo "# local steps" >> "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot edit the steps file"; exit 1; }
+  echo "# local scope" >> "$probe/scripts/review.scope.sh" ||
+    { echo "error: cannot edit the scope file"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) ||
+    { echo "error: update failed on overlay edits"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "verify.steps.sh\|review.scope.sh"; then
+    echo "error: update named an overlay file"; echo "$out"; exit 1;
+  fi'
+
+# The scope file is wired in, not decorative: a review that ignored it would
+# keep reading the old inline scope, and the packet would carry files the
+# project excluded — silently unreviewable in the other direction.
+step "review honors the scope overlay" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  # --no-verify: the probe commit is scaffolding in a throwaway repo, and add
+  # wired the bead-naming hook here. Its message names nothing real.
+  (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false add -A &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe commit failed"; exit 1; }
+  echo "scoped" >> "$probe/scoped.md" || { echo "error: cannot dirty a tracked doc"; exit 1; }
+  echo "scoped" >> "$probe/scoped.py" || { echo "error: cannot dirty a tracked source"; exit 1; }
+  { printf "%s\n" "SCOPE=(\"*.py\")" "CAPTURES=\"no-captures-here-*.png\"" > "$probe/scripts/review.scope.sh"; } ||
+    { echo "error: cannot narrow the scope file"; exit 1; }
+  out=$(bash "$probe/scripts/review.sh" </dev/null 2>&1) ||
+    { echo "error: review failed"; echo "$out"; exit 1; }
+  packet=$(printf "%s" "$out" | grep -o "/tmp/[^ )]*" | head -1)
+  [ -n "$packet" ] || { echo "error: review never printed the packet"; echo "$out"; exit 1; }
+  grep -q "scoped.py" "$packet" || { echo "error: packet missed an in-scope file"; exit 1; }
+  if grep -q "scoped.md" "$packet"; then
+    echo "error: packet carried an out-of-scope file"; exit 1;
+  fi'
+
+# A gate with no project steps must not pass: "ok" from a suite that ran
+# nothing is the silent success this project exists to avoid, in the check
+# meant to catch it.
+step "a missing steps overlay fails the gate loudly" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the steps file"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1) &&
+    { echo "error: the gate passed with no project steps"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "verify.steps.sh" ||
+    { echo "error: the failure never named the missing file"; echo "$out"; exit 1; }'
+
+# --apply converges stale bases and leaves overlays alone: the fix arrives and
+# the project's answers survive in the same run.
+step "apply converges base scripts but keeps overlays" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  echo "# local fork" >> "$probe/scripts/verify.sh" || { echo "error: cannot fork the base"; exit 1; }
+  echo "# local steps" >> "$probe/scripts/verify.steps.sh" || { echo "error: cannot edit the steps file"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) ||
+    { echo "error: update --apply failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "applied" ||
+    { echo "error: apply never said it applied"; echo "$out"; exit 1; }
+  grep -q "local steps" "$probe/scripts/verify.steps.sh" ||
+    { echo "error: apply touched the overlay"; exit 1; }
+  if grep -q "local fork" "$probe/scripts/verify.sh"; then
+    echo "error: apply never converged the base"; exit 1;
+  fi
+  out=$(bin/harness update "$probe" 2>&1) ||
+    { echo "error: update still stale after apply"; echo "$out"; exit 1; }'
+
+# Overlays need no acknowledgment — there is nothing to fork. Accepting one
+# would let a dead-weight entry sit in the diverged list looking meaningful.
+step "diverge refuses overlay files" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  root="$PWD"
+  # if-form, not trailing &&: a refusing diverge as the last line exits the step 1.
+  if (cd "$probe" && "$root/bin/harness" diverge scripts/verify.steps.sh >/dev/null 2>&1); then
+    echo "error: diverge acknowledged an overlay"; exit 1;
+  fi
+  if (cd "$probe" && "$root/bin/harness" diverge scripts/review.scope.sh >/dev/null 2>&1); then
+    echo "error: diverge acknowledged an overlay"; exit 1;
+  fi'
+
+# The migration itself: a pre-split project recovers its inline blocks into
+# overlay files on --apply, and the lifted steps actually run. Without this the
+# converge above would delete answers only the project has.
+step "apply lifts pre-split blocks into overlays" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/scripts/verify.steps.sh" "$probe/scripts/review.scope.sh" ||
+    { echo "error: cannot remove the overlays"; exit 1; }
+  python3 - "$probe/scripts/verify.sh" "$probe/scripts/review.sh" <<PYEOF ||
+import sys
+v, r = sys.argv[1], sys.argv[2]
+t = open(v).read()
+start = t.index("# ── PROJECT STEPS ──")
+end = t.index("# ── END PROJECT STEPS ──") + len("# ── END PROJECT STEPS ──")
+open(v, "w").write(t[:start] + "# ── PROJECT STEPS ──\nstep \"legacy\" true\n# ── END PROJECT STEPS ──" + t[end:])
+t = open(r).read()
+start = t.index("# ── CONFIGURE ──")
+end = t.index("# ── END CONFIGURE ──") + len("# ── END CONFIGURE ──")
+open(r, "w").write(t[:start] + "# ── CONFIGURE ──\nSCOPE=(\"*.sh\")\nCAPTURES=\"none-*.png\"\n# ── END CONFIGURE ──" + t[end:])
+PYEOF
+    { echo "error: cannot write old-style scripts"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) ||
+    { echo "error: update --apply failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "moved this project" ||
+    { echo "error: apply never said it moved the blocks"; echo "$out"; exit 1; }
+  grep -q "legacy" "$probe/scripts/verify.steps.sh" ||
+    { echo "error: steps never landed in the overlay"; exit 1; }
+  grep -q "SCOPE=" "$probe/scripts/review.scope.sh" ||
+    { echo "error: scope never landed in the overlay"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1) ||
+    { echo "error: migrated gate failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "ok    legacy" ||
+    { echo "error: migrated gate never ran the lifted step"; echo "$out"; exit 1; }'
+
+# The same recovery on a re-add: the pre-pass runs before the copy loop, so the
+# project's own answers win over the template's placeholders. Without this a
+# re-add would install placeholder overlays beside real inline answers, and the
+# next --apply would converge the base and strand them.
+step "add lifts pre-split blocks before installing overlays" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the overlay"; exit 1; }
+  python3 - "$probe/scripts/verify.sh" <<PYEOF ||
+import sys
+v = sys.argv[1]
+t = open(v).read()
+start = t.index("# ── PROJECT STEPS ──")
+end = t.index("# ── END PROJECT STEPS ──") + len("# ── END PROJECT STEPS ──")
+open(v, "w").write(t[:start] + "# ── PROJECT STEPS ──\nstep \"kept\" true\n# ── END PROJECT STEPS ──" + t[end:])
+PYEOF
+    { echo "error: cannot write an old-style script"; exit 1; }
+  out=$(bin/harness add "$probe" 2>&1) || { echo "error: re-add failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "moved this project" ||
+    { echo "error: re-add never said it moved the block"; echo "$out"; exit 1; }
+  grep -q "kept" "$probe/scripts/verify.steps.sh" ||
+    { echo "error: steps never landed in the overlay"; exit 1; }
+  grep -q "kept" "$probe/scripts/verify.sh" ||
+    { echo "error: re-add touched the inline steps"; exit 1; }'
+
+# A block with no end marker lifts to end-of-file — converging over that would
+# delete everything after the start line. Decline instead: the file stays stale
+# and says whose job it is, and no overlay is written.
+step "apply leaves marker-damaged scripts stale and loud" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the overlay"; exit 1; }
+  python3 - "$probe/scripts/verify.sh" <<PYEOF ||
+import sys
+v = sys.argv[1]
+t = open(v).read()
+start = t.index("# ── PROJECT STEPS ──")
+end = t.index("# ── END PROJECT STEPS ──") + len("# ── END PROJECT STEPS ──")
+open(v, "w").write(t[:start] + "# ── PROJECT STEPS ──\nstep \"doomed\" true\n" + t[end:])
+PYEOF
+    { echo "error: cannot damage the end marker"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) &&
+    { echo "error: apply passed a marker-damaged script"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "verify.steps.sh" ||
+    { echo "error: apply never named the stranded overlay"; echo "$out"; exit 1; }
+  [ -e "$probe/scripts/verify.steps.sh" ] &&
+    { echo "error: apply wrote an overlay from a damaged block"; exit 1; }
+  grep -q "doomed" "$probe/scripts/verify.sh" ||
+    { echo "error: apply converged over the stranded steps"; exit 1; }'
+
+# Same for a duplicated block: lifting would merge both copies with markers
+# inside, so it declines the same loud way.
+step "apply leaves duplicated blocks stale and loud" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/scripts/review.scope.sh" || { echo "error: cannot remove the overlay"; exit 1; }
+  python3 - "$probe/scripts/review.sh" <<PYEOF ||
+import sys
+r = sys.argv[1]
+t = open(r).read()
+start = t.index("# ── CONFIGURE ──")
+end = t.index("# ── END CONFIGURE ──") + len("# ── END CONFIGURE ──")
+block = t[start:end]
+open(r, "w").write(t[:start] + block + "\n" + block + t[end:])
+PYEOF
+    { echo "error: cannot duplicate the block"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) &&
+    { echo "error: apply passed a duplicated block"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "review.scope.sh" ||
+    { echo "error: apply never named the stranded overlay"; echo "$out"; exit 1; }
+  # if-form, not trailing &&: an absent overlay as the last line exits the step 1.
+  if [ -e "$probe/scripts/review.scope.sh" ]; then
+    echo "error: apply wrote an overlay from a duplicated block"; exit 1;
+  fi'
+
+# A stale pointer block carries no answers — lifting its comments would strand
+# a step-less overlay the gate then passes vacuously. Converge the base, write
+# nothing, and let `add` install the template overlay.
+step "apply converges answer-less blocks without writing overlays" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the overlay"; exit 1; }
+  python3 - "$probe/scripts/verify.sh" <<PYEOF ||
+import sys
+v = sys.argv[1]
+t = open(v).read()
+start = t.index("# ── PROJECT STEPS ──")
+end = t.index("# ── END PROJECT STEPS ──") + len("# ── END PROJECT STEPS ──")
+open(v, "w").write(t[:start] + "# ── PROJECT STEPS ──\n# an old pointer, edited since\n# ── END PROJECT STEPS ──" + t[end:])
+PYEOF
+    { echo "error: cannot age the pointer block"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) ||
+    { echo "error: update --apply failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "applied" ||
+    { echo "error: apply never said it applied"; echo "$out"; exit 1; }
+  [ -e "$probe/scripts/verify.steps.sh" ] &&
+    { echo "error: apply wrote an overlay with no steps in it"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) ||
+    { echo "error: update still stale after apply"; echo "$out"; exit 1; }'
+
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
 fi
