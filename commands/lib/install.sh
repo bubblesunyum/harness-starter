@@ -48,6 +48,68 @@ harness_has_beads_block() {
   grep -q "BEGIN BEADS" "$1" 2>/dev/null
 }
 
+# Project-owned overlays: the files a project's own answers live in. Installed
+# once like everything else, but never compared and never converged — a
+# difference here is the project, not drift, so `update` stays silent and
+# `--apply` never writes. The base file each overlays stays a byte-identical
+# contract file, which is what lets its fixes still arrive.
+#
+#   scripts/verify.steps.sh   the gate's project steps, sourced by verify.sh
+#   scripts/review.scope.sh   what a review may see, sourced by review.sh
+harness_is_overlay() {
+  case "$1" in
+    scripts/verify.steps.sh|scripts/review.scope.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The overlay file carrying a base script's project-owned block, or failure
+# for any other file.
+harness_overlay_of() {
+  case "$1" in
+    scripts/verify.sh) printf 'scripts/verify.steps.sh\n' ;;
+    scripts/review.sh) printf 'scripts/review.scope.sh\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Recover a pre-split project's inline block into its overlay file, on stdout
+# what happened. A project from before the split carries its steps and scope
+# inside scripts/verify.sh / scripts/review.sh, between the same marker boxes
+# the new base files still carry as pointers — converging such a file would
+# delete the project's own answers, which is the silent loss this exists to
+# prevent.
+#
+# Succeeds silently when there is nothing to move: the overlay already exists,
+# the script isn't there, or the script already is the base (its block is the
+# pointer, and the template's overlay covers it — `add` installs that). Moves
+# the block when the project's file carries a filled one. Fails when the file
+# differs but holds no block to lift — a fully rewritten script — which the
+# caller reports loudly instead of converging over.
+harness_extract_overlay() {
+  local here="$1" target="$2" rel="$3" overlay start end block baseblock
+  overlay="$(harness_overlay_of "$rel")" || return 0
+  [ -e "$target/$overlay" ] && return 0
+  [ -f "$target/$rel" ] || return 0
+  case "$rel" in
+    scripts/verify.sh) start="── PROJECT STEPS ──"; end="── END PROJECT STEPS ──" ;;
+    scripts/review.sh) start="── CONFIGURE ──"; end="── END CONFIGURE ──" ;;
+  esac
+  block="$(sed -n "/$start/,/$end/p" "$target/$rel" | sed '1d;$d')"
+  [ -n "$block" ] || return 1
+  baseblock="$(sed -n "/$start/,/$end/p" "$here/template/$rel" | sed '1d;$d')"
+  [ "$block" = "$baseblock" ] && return 0
+  {
+    printf '# Recovered from %s by the harness: this project'"'"'s own %s,\n' "$rel" \
+      "$( [ "$rel" = scripts/verify.sh ] && printf 'gate steps' || printf 'review scope' )"
+    printf '# moved here so the base file could converge. Edit freely — the harness\n'
+    printf '# installs this file once and never compares or overwrites it.\n\n'
+    printf '%s\n' "$block"
+  } > "$target/$overlay" || return 1
+  printf '%s\n' "$overlay"
+  return 0
+}
+
 # Everything else. These are the harness itself — the contract every agent reads
 # (AGENTS.md, opencode.json), the machinery behind the scripts, the skills. The
 # project has no reason to edit them, so a difference means the install is stale
@@ -55,6 +117,7 @@ harness_has_beads_block() {
 harness_is_contract() {
   local rel="$1" src="$2"
   harness_is_data "$rel" && return 1
+  harness_is_overlay "$rel" && return 1
   harness_is_customised "$src" && return 1
   return 0
 }

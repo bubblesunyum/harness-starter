@@ -102,6 +102,26 @@ echo
 
 files="$(harness_files_for "$HERE" "$target")"
 
+# Pre-split projects carry their gate steps and review scope inline in
+# scripts/verify.sh / scripts/review.sh. This runs before the copy loop so the
+# project's own answers win over the template's placeholders: a re-add never
+# overwrites, so without this the overlay would arrive with placeholder content
+# beside the project's real answers — and the next `update --apply` would
+# converge the base and strand them.
+moved_all=""
+for rel in scripts/verify.sh scripts/review.sh; do
+  overlay="$(harness_overlay_of "$rel")" || continue
+  [ -e "$target/$overlay" ] && continue
+  [ -f "$target/$rel" ] || continue
+  if moved="$(harness_extract_overlay "$HERE" "$target" "$rel")"; then
+    [ -n "$moved" ] && moved_all="$moved_all  moved this project's block to $moved"$'\n'
+  else
+    moved_all="$moved_all  ! $rel predates the base/overlay split and holds no block to lift —"$'\n'
+    moved_all="$moved_all    move its steps or scope by hand into $overlay, then re-run."$'\n'
+  fi
+done
+[ -n "$moved_all" ] && { printf '%s' "$moved_all"; echo; }
+
 copied=0; skipped=0; stale=0
 while IFS= read -r rel; do
   src="$TEMPLATE/$rel"
@@ -136,8 +156,6 @@ if [ "$stale" -gt 0 ]; then
   echo "    What changed:"
   echo "      harness update --diff $target"
 fi
-echo
-
 # The hook logic lives in scripts/ and is pointed at, rather than copied into
 # a hooks directory — beads rewrites .beads/hooks on upgrade and would eat it.
 # Git runs hooks from core.hooksPath when set and ignores .git/hooks entirely,
@@ -444,8 +462,8 @@ Do these now, in this order. They are the parts no script can infer.
    testing, the traps this codebase keeps hitting. AGENTS.md already holds the
    harness contract and CLAUDE.md imports it, so don't repeat any of it here.
 
-3. scripts/verify.sh — the PROJECT STEPS block, with this project's real build
-   and test commands. Everything around it works as-is.
+3. scripts/verify.steps.sh — this project's real build and test commands, going
+   through `step`. scripts/verify.sh around it works as-is.
 
 4. .claude/agents/reviewer-{taste,correctness,design}.md — each has a
    FILL THIS IN block for this project's language, framework, and actual

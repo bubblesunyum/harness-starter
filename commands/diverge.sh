@@ -22,8 +22,8 @@ Acknowledges deliberate local forks of the harness contract.
   harness diverge <file>...   acknowledge each file, relative to the project root
 
 Validates before writing: the file must exist in the template as a contract
-file (data files and FILL THIS IN files are already quiet — acknowledging
-them does nothing), must exist here, and must actually differ. Already-listed
+file (data files, overlays, and FILL THIS IN files are already quiet —
+acknowledging them does nothing), must exist here, and must actually differ. Already-listed
 files are left alone. Run it in the project directory.
 USAGE
 }
@@ -62,7 +62,7 @@ for rel in "$@"; do
     echo "✗ $rel: no such template file" >&2; fail=1; continue
   fi
   if ! harness_is_contract "$rel" "$TEMPLATE/$rel"; then
-    echo "✗ $rel: already quiet (data or FILL THIS IN) — nothing to acknowledge" >&2; fail=1; continue
+    echo "✗ $rel: already quiet (data, overlay, or FILL THIS IN) — nothing to acknowledge" >&2; fail=1; continue
   fi
   if [ ! -e "$target/$rel" ]; then
     echo "✗ $rel: not here — 'harness add' installs it; acknowledge the fork, not the absence" >&2; fail=1; continue

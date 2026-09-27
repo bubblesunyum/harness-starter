@@ -37,7 +37,9 @@ Files carrying the harness contract — AGENTS.md, opencode.json, the skills, th
 scripts behind them — are reported as warnings and make this exit non-zero: the
 project has no reason to edit them, so a difference means a starter fix never
 arrived. Files with a FILL THIS IN block are meant to be edited, so those are
-listed quietly, for you to check against the template yourself.
+listed quietly, for you to check against the template yourself. Project-owned
+overlay files — the gate steps, the review scope — are installed once and never
+compared at all.
 
 Report-only, unless --apply: that rewrites the stale contract files that
 exist — never customised ones, never missing ones — and prints each file it
@@ -96,7 +98,7 @@ render_dir="$(mktemp -d)" || { echo "✗ mktemp failed" >&2; exit 1; }
 trap 'rm -rf "$render_dir"' EXIT
 
 stale=""; customised=""; missing=""; missing_contract=0; diffs=""
-applied=""; skipped_beads=""
+applied=""; skipped_beads=""; skipped_steps=""
 diverged=""; diverged_clean=""; bad_diverged=""
 # Acknowledged local forks. A contract file listed in the project's
 # harness/diverged.txt differs on purpose, so it is shown for the record but
@@ -116,6 +118,25 @@ fi
 in_diverged_list() {
   [ -n "$diverged_want" ] && printf '%s\n' "$diverged_want" | grep -qxF "$1"
 }
+# Pre-split projects carry their gate steps and review scope inline in
+# scripts/verify.sh / scripts/review.sh. Converging those files would delete
+# the project's own answers, so --apply lifts the blocks into their overlay
+# files first. Report-only without --apply: the stale warning below is the
+# pointer, and nothing is written.
+noextract=""
+if [ "$apply" -eq 1 ]; then
+  while IFS= read -r rel; do
+    case "$rel" in scripts/verify.sh|scripts/review.sh) ;; *) continue ;; esac
+    [ -e "$target/$rel" ] || continue
+    harness_overlay_of "$rel" >/dev/null || continue
+    [ -e "$target/$(harness_overlay_of "$rel")" ] && continue
+    if moved="$(harness_extract_overlay "$HERE" "$target" "$rel")"; then
+      [ -n "$moved" ] && echo "  moved this project's block to $moved"
+    else
+      noextract="$noextract  $rel"$'\n'
+    fi
+  done <<< "$files"
+fi
 # Whether a flagged file is a reviewer source, split by kind. Merging a stale
 # contract source is half the job — the generated copies, the hashes, and the
 # gate are the other half, and the report below says so. A customised source
@@ -127,6 +148,7 @@ while IFS= read -r rel; do
   src="$TEMPLATE/$rel"
   dst="$target/$rel"
   harness_is_data "$rel" && continue
+  harness_is_overlay "$rel" && continue
   if [ ! -e "$dst" ]; then
     # A contract file that isn't there is the same failure as a stale one, with
     # a louder cause — opencode.json simply absent from an older install is the
@@ -167,7 +189,13 @@ while IFS= read -r rel; do
     # Written only now, after the diff above was taken from the pre-write
     # state — a --diff --apply run shows what the apply changed, not an empty
     # diff of each file against itself.
-    if harness_has_beads_block "$dst"; then
+    if [ -n "$noextract" ] && printf '%s' "$noextract" | grep -qxF "  $rel"; then
+      # A pre-split script with no block to lift — rewritten by the project
+      # past its markers. Converging would delete answers only it has, so it
+      # stays stale and says whose job it is, like the beads-block files below.
+      skipped_steps="$skipped_steps  $rel"$'\n'
+      stale="$stale  $rel"$'\n'
+    elif harness_has_beads_block "$dst"; then
       # Left stale and named below, loudly.
       skipped_beads="$skipped_beads  $rel"$'\n'
       stale="$stale  $rel"$'\n'
@@ -191,7 +219,7 @@ while IFS= read -r want; do
   if ! printf '%s\n' "$files" | grep -qxF "$want"; then
     bad_diverged="$bad_diverged  $want (no such template file)"$'\n'
   elif ! harness_is_contract "$want" "$TEMPLATE/$want"; then
-    bad_diverged="$bad_diverged  $want (already quiet — data or FILL THIS IN, nothing to acknowledge)"$'\n'
+    bad_diverged="$bad_diverged  $want (already quiet — data, overlay, or FILL THIS IN, nothing to acknowledge)"$'\n'
   fi
 done <<< "$diverged_want"
 
@@ -267,6 +295,17 @@ if [ -n "$skipped_beads" ]; then
   echo "  $(tally "$skipped_beads") contract file(s) left stale — each carries a beads block the"
   echo "  template has no copy of, so overwriting would delete it. Merge by hand:"
   printf '%s' "$skipped_beads"
+  echo
+fi
+
+if [ -n "$skipped_steps" ]; then
+  echo "  $(tally "$skipped_steps") contract file(s) left stale — each carries project answers"
+  echo "  from before the base/overlay split with no block to lift into its overlay file,"
+  echo "  so overwriting would delete them. Move the steps or scope by hand into:"
+  printf '%s' "$skipped_steps" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s  → %s\n' "$line" "$(harness_overlay_of "${line#  }")"
+  done
   echo
 fi
 

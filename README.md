@@ -84,7 +84,8 @@ things are left, because no script can infer them.
    already installed as `AGENTS.md` and `CLAUDE.md` imports it, so don't repeat
    any of it here — everything else about the harness lives behind the
    `workflow` skill, and should stay there.
-3. **`scripts/verify.sh`** — the `PROJECT STEPS` block. Everything around it is
+3. **`scripts/verify.steps.sh`** — this project's real build and test commands,
+   each going through `step`. Everything around it, in `scripts/verify.sh`, is
    scaffolding that works as-is.
 4. **The reviewers** — each of `.claude/agents/reviewer-*.md` has a `FILL THIS
    IN` block for this project's language, framework, and *actual recurring
