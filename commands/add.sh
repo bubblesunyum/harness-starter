@@ -74,10 +74,6 @@ name="$(basename "$target")"
 existing_prefix="$(harness_ledger_prefix "$target")"
 prefix="$existing_prefix"
 [ -n "$prefix" ] || prefix="$(harness_derive_prefix "$name")"
-# What harness_current substitutes with; it is called from inside the copy loop,
-# where threading two more arguments through every call buys nothing.
-HARNESS_NAME="$name"
-HARNESS_PREFIX="$prefix"
 
 echo "installing the harness into $target"
 [ "$had_git" -eq 0 ] && echo "  initialised a git repository"
@@ -125,7 +121,7 @@ while IFS= read -r rel; do
     continue
   fi
   mkdir -p "$(dirname "$dst")"
-  harness_render "$rel" "$src" "$name" "$prefix" > "$dst"
+  harness_render "$src" > "$dst"
   [ -x "$src" ] && chmod +x "$dst"
   echo "  add   $rel"
   copied=$((copied + 1))
@@ -415,8 +411,9 @@ else
   echo "    beads blocks, and .claude/settings.json a bd prime hook."
 fi
 
-# After substitution, not before: the generated opencode agents carry the
-# project's name, which template/.claude/agents/ still spells {{PROJECT}}.
+# The generated opencode agents are built from the installed agent files, so this
+# runs after the copy loop — with the project's own FILL THIS IN answers in
+# place when it has them.
 if agents_out="$(cd "$target" && ./scripts/opencode-agents.py 2>&1)"; then
   echo "$agents_out"
 else

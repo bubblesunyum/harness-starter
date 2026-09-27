@@ -64,8 +64,6 @@ for arg in "$@"; do
 done
 
 target="$(harness_resolve_target "${target:-$PWD}")"
-name="$(basename "$target")"
-prefix="$(harness_prefix_for "$target" "$name")"
 # Which stacks' guidance this project should have. No stacks.txt is an install
 # from before stacks existed — the same "a fix never arrived" as a missing
 # contract file, and `add` is what writes it.
@@ -138,7 +136,7 @@ while IFS= read -r rel; do
     continue
   fi
   rendered="$render_dir/rendered"
-  harness_render "$rel" "$src" "$name" "$prefix" > "$rendered"
+  harness_render "$src" > "$rendered"
   harness_same "$rel" "$rendered" "$dst" && continue
   if harness_is_contract "$rel" "$src"; then contract=1; else contract=0; fi
   case "$rel" in
@@ -174,7 +172,7 @@ while IFS= read -r rel; do
       skipped_beads="$skipped_beads  $rel"$'\n'
       stale="$stale  $rel"$'\n'
     else
-      harness_render "$rel" "$src" "$name" "$prefix" > "$dst"
+      harness_render "$src" > "$dst"
       [ -x "$src" ] && chmod +x "$dst"
       applied="$applied  $rel"$'\n'
     fi
@@ -205,7 +203,7 @@ while IFS= read -r want; do
   harness_is_contract "$want" "$TEMPLATE/$want" || continue
   [ -e "$target/$want" ] || continue
   rendered="$render_dir/rendered-clean"
-  harness_render "$want" "$TEMPLATE/$want" "$name" "$prefix" > "$rendered"
+  harness_render "$TEMPLATE/$want" > "$rendered"
   if harness_same "$want" "$rendered" "$target/$want"; then
     diverged_clean="$diverged_clean  $want"$'\n'
   fi

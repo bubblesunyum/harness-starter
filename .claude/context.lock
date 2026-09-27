@@ -1,36 +1,36 @@
 {
   ".claude/HARNESS.md": {
-    ".claude/agents/librarian.md": "493dbce81268ace3",
-    ".claude/agents/reviewer-correctness.md": "82babe9ed0a166e1",
-    ".claude/agents/reviewer-design.md": "ebbf4f380d1d001c",
+    ".claude/agents/librarian.md": "bd87aae352bdea4f",
+    ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
+    ".claude/agents/reviewer-design.md": "99919f9da1b9b4c5",
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
-    ".claude/skills/workflow/SKILL.md": "9594ad92b2456cee",
-    "doc": "ce6e6bbf39470294",
-    "scripts/brief.sh": "1b6b79d306c6d78b",
-    "scripts/context.py": "c8062ff4222befbb",
+    ".claude/skills/workflow/SKILL.md": "8d00b913f6a93a43",
+    "doc": "a4e531d8d2638b96",
+    "scripts/brief.sh": "2480824f8bfe8220",
+    "scripts/context.py": "1758842ffc4bf3a1",
     "scripts/opencode-agents.py": "a0ac7edba54c4bf4",
-    "scripts/review.sh": "f1584f6088d339ed",
-    "scripts/verify.sh": "e4f1bd3ef53a9911"
+    "scripts/review.sh": "6eb5e1d677c4d290",
+    "scripts/verify.sh": "7577a9ab0ad9b6aa"
   },
   ".claude/skills/agentic-review/SKILL.md": {
-    ".claude/agents/reviewer-correctness.md": "82babe9ed0a166e1",
-    ".claude/agents/reviewer-design.md": "ebbf4f380d1d001c",
+    ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
+    ".claude/agents/reviewer-design.md": "99919f9da1b9b4c5",
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
-    "doc": "ac85fa5ceba693ca",
-    "scripts/review.sh": "f1584f6088d339ed"
+    "doc": "aea3186049b67090",
+    "scripts/review.sh": "6eb5e1d677c4d290"
   },
   ".claude/skills/handoff/SKILL.md": {
-    "doc": "a5905bb8e6530f3e",
-    "scripts/brief.sh": "1b6b79d306c6d78b"
+    "doc": "7fec5b9a76db6581",
+    "scripts/brief.sh": "2480824f8bfe8220"
   },
   ".claude/skills/workflow/SKILL.md": {
-    "doc": "9594ad92b2456cee",
+    "doc": "8d00b913f6a93a43",
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "074ffa6c56c79c90",
-    "scripts/brief.sh": "1b6b79d306c6d78b",
-    "scripts/review.sh": "f1584f6088d339ed",
-    "scripts/verify.sh": "e4f1bd3ef53a9911"
+    "doc": "c1ee8cdff8a32738",
+    "scripts/brief.sh": "2480824f8bfe8220",
+    "scripts/review.sh": "6eb5e1d677c4d290",
+    "scripts/verify.sh": "7577a9ab0ad9b6aa"
   }
 }

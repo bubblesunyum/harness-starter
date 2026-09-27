@@ -27,14 +27,25 @@ brief() {
   # is pending on it. Backlog is work deliberately not being done next, and a
   # needs-human bead is one a session already declined to guess at — leaving it
   # in the ready list just invites the next session to make that guess.
+  # A mktemp file, not a fixed /tmp path: the value is consumed once, by the
+  # python below, in this same invocation, so it needs no per-project prefix —
+  # and a fixed name would collide between two checkouts of one project.
+  ready_json="$(mktemp -t harness-ready)" || return 0
+  trap 'rm -f "$ready_json"' RETURN
   bd ready --exclude-label backlog --exclude-label needs-human --json \
-    2>/dev/null > /tmp/.har-ready.json || return 0
+    2>/dev/null > "$ready_json" || return 0
 
-  python3 - "$READY_SHOWN" "$ROOT" <<'PY'
+  python3 - "$READY_SHOWN" "$ROOT" "$ready_json" <<'PY'
 import json, os, re, subprocess, sys, glob, datetime
 
 shown = int(sys.argv[1])
 root = sys.argv[2]
+try:
+    ready = json.load(open(sys.argv[3]))
+except (OSError, ValueError):
+    ready = []
+if not isinstance(ready, list):
+    ready = []
 
 # Nothing here may raise: an uncaught exception prints no brief at all, and a
 # session that wakes with no ledger is worse off than one missing a seat line.
@@ -52,7 +63,6 @@ def bd(*args):
     except ValueError:
         return []
 
-ready = json.load(open("/tmp/.har-ready.json"))
 active = bd("list", "--status", "in_progress", "--json")
 # One `bd stats` replaces the open-issue list and a closed-issue list: each bd
 # call spins up an embedded Dolt engine (~half a second), so counts come from

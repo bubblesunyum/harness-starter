@@ -221,6 +221,21 @@ def bless():
     print(f"blessed {len(lock)} docs → {LOCK.relative_to(ROOT)}")
 
 
+def _bd_prefix():
+    """The ledger's bead prefix, asked of the ledger itself at runtime — it used
+    to be baked into this file at install time, which made every copy differ."""
+    try:
+        r = subprocess.run(["bd", "config", "get", "issue_prefix"],
+                           capture_output=True, text=True, timeout=10, cwd=ROOT)
+        got = (r.stdout or "").strip()
+        if r.returncode == 0 and re.fullmatch(r"[a-z0-9]{1,10}", got):
+            return got
+    except Exception:
+        pass
+    short = re.sub(r"[^a-z0-9]", "", ROOT.name.lower()).lstrip("0123456789")[:3]
+    return short or "bd"
+
+
 def digest():
     """Everything the librarian reads, in one place, so it doesn't spend its
     context rediscovering the shape of the knowledge layer."""
@@ -246,7 +261,7 @@ def digest():
     out.append(f"\n## Memories ({len(entries)})\n")
     out += [f"\n### {k}\n{v}" for k, v in sorted(entries.items())]
 
-    packet = Path("/tmp/{{PREFIX}}-knowledge-digest.md")
+    packet = Path(f"/tmp/{_bd_prefix()}-knowledge-digest.md")
     packet.write_text("\n".join(out) + "\n")
     print(packet)
 

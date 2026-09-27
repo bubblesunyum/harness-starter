@@ -23,7 +23,25 @@ message="$(sed -e '/^#/d' -e '/^diff --git/,$d' "$msg_file")"
 # `fixup!` and `squash!` fold into a commit that already carries the reference.
 case "$message" in fixup!*|squash!*|amend!*) exit 0 ;; esac
 
-ids="$(printf '%s' "$message" | grep -oE '\bhar-[a-z0-9]+(\.[0-9]+)?\b' | sort -u)"
+# The ledger's bead prefix, asked of the ledger itself at runtime — it used to be
+# baked into this file at install time, which made every copy differ. Derived
+# from the directory name when the ledger has nothing to say, the same way
+# `harness add` does, so a fresh clone can still commit.
+harness_prefix() {
+  local p=""
+  if command -v bd >/dev/null 2>&1; then
+    p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+  fi
+  if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
+    p="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")" \
+        | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
+    [ -n "$p" ] || p="bd"
+  fi
+  printf '%s\n' "$p"
+}
+prefix="$(harness_prefix)"
+
+ids="$(printf '%s' "$message" | grep -oE "\\b$prefix-[a-z0-9]+(\.[0-9]+)?\\b" | sort -u)"
 
 if [ -z "$ids" ]; then
   cat >&2 <<'EOF'
@@ -36,7 +54,7 @@ if [ -z "$ids" ]; then
       bd q "what this commit is doing"    # file one, get an id back
       bd ready                            # or claim something already filed
 
-    Then put the id in the message: "Closes har-abc", or just har-abc in the body.
+    Then put the id in the message: "Closes <bead-id>", or just the id in the body.
 
 EOF
   exit 1

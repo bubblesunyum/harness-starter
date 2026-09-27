@@ -8,8 +8,9 @@
 #
 # Output is deliberately tiny. A build tool prints tens of thousands of lines
 # and an agent that pipes that into its context has spent a chunk of the day's
-# tokens to learn one bit — did it pass. Full logs land in /tmp/{{PREFIX}}-verify/
-# and are worth reading only when something fails.
+# tokens to learn one bit — did it pass. Full logs land in /tmp/<prefix>-verify/
+# (the ledger's bead prefix, resolved below) and are worth reading only when
+# something fails.
 #
 # ── FILL THIS IN ──────────────────────────────────────────────────────────
 # Everything outside the PROJECT STEPS block below is harness scaffolding and
@@ -20,7 +21,22 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-LOGS=/tmp/{{PREFIX}}-verify
+
+# The ledger's bead prefix, asked of the ledger itself at runtime — baked into
+# this file once per install, which made every copy differ and un-updatable.
+# Falls back to the directory name, derived the same way `harness add` does.
+_harness_prefix() {
+  local p=""
+  if command -v bd >/dev/null 2>&1; then
+    p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+  fi
+  if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
+    p="$(basename "$ROOT" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
+    [ -n "$p" ] || p="bd"
+  fi
+  printf '%s\n' "$p"
+}
+LOGS=/tmp/$(_harness_prefix)-verify
 mkdir -p "$LOGS"
 
 mode="${1:---default}"

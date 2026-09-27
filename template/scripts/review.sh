@@ -29,7 +29,21 @@ mtime() { stat -f '%m' "$@" 2>/dev/null || stat -c '%Y' "$@"; }
 stamp() { date -r "$1" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$1" +%Y%m%d%H%M.%S; }
 
 base="${1:-}"
-packet=/tmp/{{PREFIX}}-review-packet.md
+# The ledger's bead prefix, asked of the ledger itself at runtime — baked into
+# this file once per install, which made every copy differ and un-updatable.
+# Falls back to the directory name, derived the same way `harness add` does.
+_harness_prefix() {
+  local p=""
+  if command -v bd >/dev/null 2>&1; then
+    p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+  fi
+  if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
+    p="$(basename "$ROOT" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
+    [ -n "$p" ] || p="bd"
+  fi
+  printf '%s\n' "$p"
+}
+packet=/tmp/$(_harness_prefix)-review-packet.md
 
 # No base given: review what isn't committed yet, and fall back to the last
 # commit when the tree is clean — "review my work" almost never means "review
@@ -64,8 +78,8 @@ SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'scripts/hooks/*'
        ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
 
 # Screenshots the design reviewer looks at. Whatever drives your app should
-# write its captures to /tmp with this prefix.
-CAPTURES='{{PREFIX}}-*.png'
+# write its captures to /tmp with this prefix — the ledger's, resolved above.
+CAPTURES="$(_harness_prefix)-*.png"
 # ── END CONFIGURE ─────────────────────────────────────────────────────────
 
 diff_cmd() {

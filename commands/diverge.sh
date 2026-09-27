@@ -37,8 +37,6 @@ done
 [ "$#" -gt 0 ] || { echo "✗ no files given" >&2; echo >&2; usage >&2; exit 1; }
 
 target="$(harness_resolve_target "$PWD")"
-name="$(basename "$target")"
-prefix="$(harness_prefix_for "$target" "$name")"
 # Fails with its own message: the template list is unreadable, or stacks.txt is.
 files="$(harness_files_for "$HERE" "$target")" || {
   [ -e "$target/harness/stacks.txt" ] && [ ! -r "$target/harness/stacks.txt" ] &&
@@ -74,7 +72,7 @@ for rel in "$@"; do
     continue
   fi
   rendered="$(mktemp)" || { echo "✗ mktemp failed" >&2; exit 1; }
-  harness_render "$rel" "$TEMPLATE/$rel" "$name" "$prefix" > "$rendered"
+  harness_render "$TEMPLATE/$rel" > "$rendered"
   if harness_same "$rel" "$rendered" "$target/$rel"; then
     rm -f "$rendered"
     echo "✗ $rel: already current — nothing to acknowledge" >&2; fail=1; continue

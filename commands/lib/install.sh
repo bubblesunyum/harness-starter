@@ -2,9 +2,10 @@
 # Shared by `harness add` and `harness update`: everything both need to know
 # about a target project and the template it came from. Sourced, never run.
 #
-# The two commands have to agree on all of it — what the file list is, what the
-# placeholders become, which files carry the contract — or `update` reports
-# drift in files `add` never installed, which is a worse lie than saying nothing.
+# The two commands have to agree on all of it — what the file list is, which files
+# are copied as-is and which carry the project's own answers, which files carry
+# the contract — or `update` reports drift in files `add` never installed, which
+# is a worse lie than saying nothing.
 
 # Files the installer copies byte-for-byte and never compares. Three different
 # reasons, all meaning "a difference here is not drift":
@@ -173,15 +174,6 @@ harness_derive_prefix() {
   printf '%s\n' "$prefix"
 }
 
-# The prefix a project's files were substituted with: the ledger's, or the
-# derived one. What `update` has to reproduce to compare anything.
-harness_prefix_for() {
-  local prefix
-  prefix="$(harness_ledger_prefix "$1")"
-  [ -n "$prefix" ] || prefix="$(harness_derive_prefix "$2")"
-  printf '%s\n' "$prefix"
-}
-
 # The template's file list, as paths relative to template/, one per line.
 #
 # What ships is what the repo says ships. `find` would also sweep up whatever a
@@ -325,16 +317,13 @@ harness_files_for() {
   done <<< "$files"
 }
 
-# A template file as it would land in this project, on stdout. Binaries and
-# vendored assets are copied whole; only text gets substituted.
+# A template file as it lands in a project, on stdout. Byte-for-byte, always:
+# nothing in template/ is substituted anymore. Per-project values — the bead
+# prefix, the /tmp paths, the title — resolve at runtime from the ledger and
+# the checkout, so what ships is what's on disk here. That is what makes
+# `update` a plain comparison and `--apply` a plain copy.
 harness_render() {
-  local rel="$1" src="$2" name="$3" prefix="$4"
-  case "$rel" in
-    dashboard/vendor/*|dashboard.toml) cat "$src"; return ;;
-  esac
-  sed -e "s/{{PROJECT}}/$name/g" \
-      -e "s/{{PREFIX_UPPER}}/$(printf '%s' "$prefix" | tr 'a-z' 'A-Z')/g" \
-      -e "s/{{PREFIX}}/$prefix/g" "$src"
+  cat "$1"
 }
 
 # Whether a target file still matches what the template would produce.
@@ -401,12 +390,13 @@ sys.stdout.write(text + "\n")
 PYEOF
 }
 
-# harness_same against a template source, rendering it on the way. The form the
-# copy loop wants, where there is no rendered file lying around to compare.
+# harness_same against a template source. The form the copy loop wants, where
+# there is no installed file lying around to compare against — the template is
+# rendered (copied) and compared.
 harness_current() {
   local rel="$1" src="$2" dst="$3" rendered result
   rendered="$(mktemp)" || return 1
-  harness_render "$rel" "$src" "$HARNESS_NAME" "$HARNESS_PREFIX" > "$rendered"
+  harness_render "$src" > "$rendered"
   harness_same "$rel" "$rendered" "$dst" && result=0 || result=1
   rm -f "$rendered"
   return "$result"
