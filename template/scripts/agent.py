@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from models import model_for
+from models import model_for, variant_for
 
 MAX_ROUNDS = 3
 # Long enough for an implementer that runs the gate twice; short enough that a
@@ -166,11 +166,15 @@ def explain(error):
     return message
 
 
-def run(agent, model, session, prompt):
+def run(agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
     fail loudly."""
     command = ["opencode", "run", "--format", "json", "--agent", agent,
                "-m", model]
+    if variant:
+        # The generated agent file carries it too, but `implement` runs
+        # opencode's own build agent, which has no file of ours to carry it.
+        command += ["--variant", variant]
     if session:
         command += ["--session", session]
     env = dict(os.environ)
@@ -242,9 +246,11 @@ def main(argv):
     prompt = message
     if role == "implement" and not session:
         prompt = IMPLEMENT_CONTRACT + message
-    reply, session_id, refused = run(agent, model, session, prompt)
+    variant = variant_for(role)
+    reply, session_id, refused = run(agent, model, variant, session, prompt)
     print(reply)
-    print(f"agent.py: {role} on {model} · session {session_id} · "
+    on = f"{model} ({variant})" if variant else model
+    print(f"agent.py: {role} on {on} · session {session_id} · "
           f"round {round_number} of {MAX_ROUNDS}", file=sys.stderr)
     if refused:
         # The reply is printed anyway — an implementer's report still says what

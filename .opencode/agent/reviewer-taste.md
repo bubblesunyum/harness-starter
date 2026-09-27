@@ -1,7 +1,8 @@
 ---
 description: Reviews a harness-starter diff against the project's documented taste — composition, module size, naming, comments, accessibility. Covers the app and the harness scripts. Reads a review packet and reports violations. Use for every change worth reviewing.
 mode: subagent
-model: opencode-go/glm-5.3
+model: opencode-go/muse-spark-1.3-contributor
+variant: xhigh
 permission:
   bash: deny
   edit: deny

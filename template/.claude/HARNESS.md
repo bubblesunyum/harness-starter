@@ -224,6 +224,11 @@ role and writes it; later runs are silent. With no roster the agents omit
 `model:` and inherit the session's model, which always resolves — the cost is
 that `reviewer-taste` stops being the cheap one under opencode until then.
 
+A role's roster entry may add a `variant` — the provider's reasoning effort,
+such as `xhigh` — which becomes the agent's `variant:` line and agent.py's
+`--variant`. Both, because `implement` runs opencode's own build agent, which
+has no generated file to carry it.
+
 Three paths, three model lines: the `.claude/agents/` frontmatter drives
 Claude Code's reviewers; the roster drives
 opencode's generated agents; Codex ignores both and inherits its host model.

@@ -58,7 +58,7 @@ class AgentTests(unittest.TestCase):
         (root / "harness").mkdir()
         (root / "harness/models.json").write_text(json.dumps({
             "reviewer-taste": {"model": "go/taste"},
-            "implement": {"model": "go/impl"},
+            "implement": {"model": "go/impl", "variant": " xhigh "},
         }))
         (root / ".opencode/agent").mkdir(parents=True)
         (root / ".opencode/agent/reviewer-taste.md").write_text("---\nmode: subagent\n---\n")
@@ -116,6 +116,14 @@ class AgentTests(unittest.TestCase):
         revision = self.calls()[-1]
         self.assertEqual(revision["argv"][-1], "fix it")
         self.assertIn("--session", revision["argv"])
+
+    def test_a_roster_variant_reaches_opencode_and_its_absence_sends_none(self):
+        out = self.agent("implement", "go", events=text_event("done"))
+        self.assertIn("on go/impl (xhigh)", out.stderr)
+        argv = self.calls()[0]["argv"]
+        self.assertEqual(argv[argv.index("--variant") + 1], "xhigh")
+        self.agent("reviewer-taste", "go", events=text_event("ok"))
+        self.assertNotIn("--variant", self.calls()[-1]["argv"])
 
     def test_a_message_starting_with_a_dash_is_not_a_flag(self):
         self.agent("reviewer-taste", "- fix naming", events=text_event("ok"))

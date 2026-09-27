@@ -23,6 +23,12 @@ unknowable from here (ollama defaults to 4-8k unless OLLAMA_CONTEXT_LENGTH
 says otherwise), and refusing early beats handing a reviewer a packet it can
 only read part of. A wrong budget is fixed by writing the real one into the
 roster; `budget` never prompts, so review.sh can call it from hooks and gates.
+
+A role may also name a "variant" — the provider's reasoning effort (minimal,
+low, medium, high, xhigh, max; which exist depends on the model, and
+`opencode models --verbose` lists them). It reaches opencode as the generated
+agent's `variant:` line and as agent.py's `--variant`. Absent, the model's own
+default applies.
 """
 
 import json
@@ -118,6 +124,14 @@ def model_for(role):
     return load_roster().get(role, "")
 
 
+def variant_for(role):
+    """The reasoning variant a role runs at, or empty for the model's default.
+    Tolerant like the roster reader: anything but a non-empty string is none."""
+    entry = load().get(role)
+    variant = entry.get("variant") if isinstance(entry, dict) else None
+    return variant.strip() if isinstance(variant, str) and variant.strip() else ""
+
+
 # Fallback packet budgets, in tokens, when the roster names no explicit
 # "context" for the role. Heuristic, documented as such in the docstring, and
 # always overridable per role — a table here would go stale in exactly the
@@ -190,6 +204,10 @@ def ensure(again=False):
     print("per-role models, stored machine-locally in harness/models.json.")
     if backends:
         print("backends seen: " + ", ".join(backends))
+    # What `ensure` doesn't ask about — context, variant — is kept from the
+    # entry it replaces: re-picking one model shouldn't reset every role's
+    # budget and reasoning effort without a word.
+    previous = load() if state == "ok" else {}
     roster, default = {}, None
     for role, hint in ROLES.items():
         if candidates:
@@ -208,7 +226,8 @@ def ensure(again=False):
             if not choice:
                 print("left unset; re-run with --again to fill it in.")
                 continue
-        roster[role] = {"model": choice}
+        kept = previous.get(role)
+        roster[role] = {**(kept if isinstance(kept, dict) else {}), "model": choice}
     ROSTER.parent.mkdir(parents=True, exist_ok=True)
     ROSTER.write_text(json.dumps(roster, indent=2, sort_keys=True) + "\n")
     print(f"\nwrote {len(roster)} roles → {ROSTER.relative_to(ROOT)}")

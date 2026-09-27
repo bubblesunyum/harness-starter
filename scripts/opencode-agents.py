@@ -30,7 +30,7 @@ OPENCODE_AGENTS = ROOT / ".opencode/agent"
 # The roster reader lives in models.py and is imported, not reimplemented:
 # two tolerant parsers of one file will drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from models import load_roster, roster_state
+from models import load_roster, roster_state, variant_for
 
 # Claude's `tools:` is an allowlist; opencode has no allowlist, only per-tool
 # permissions. Only the tools that write or reach outside the repo are
@@ -80,6 +80,9 @@ def translate(source, roster):
     model = roster.get(source.stem)
     if model:
         header.append(f"model: {model}")
+        variant = variant_for(source.stem)
+        if variant:
+            header.append(f"variant: {variant}")
     denied = [key for key, claude_tools in sorted(GUARDED.items())
               if not granted.intersection(claude_tools)]
     if denied:
