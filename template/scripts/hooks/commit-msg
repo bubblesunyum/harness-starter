@@ -33,7 +33,10 @@ harness_prefix() {
     p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
   fi
   if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
-    p="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD")" \
+    # Physical path: git runs hooks from the toplevel, and -P matches what
+    # `harness add` derived at install time and what the Python scripts
+    # resolve — through a symlink the logical name could be anything.
+    p="$(basename "$(pwd -P)" \
         | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
     [ -n "$p" ] || p="bd"
   fi

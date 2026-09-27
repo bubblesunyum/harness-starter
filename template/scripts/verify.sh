@@ -31,7 +31,10 @@ _harness_prefix() {
     p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
   fi
   if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
-    p="$(basename "$ROOT" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
+    # Physical path, matching what `harness add` derived at install time and what
+    # the Python scripts resolve: through a symlink the logical name could be
+    # anything, and two scripts deriving different fallbacks disagree.
+    p="$(basename "$(cd "$ROOT" && pwd -P)" | tr 'A-Z' 'a-z' | tr -cd '[:alnum:]' | sed 's/^[0-9]*//' | cut -c1-3)"
     [ -n "$p" ] || p="bd"
   fi
   printf '%s\n' "$p"

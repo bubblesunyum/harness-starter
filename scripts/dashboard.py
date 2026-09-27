@@ -1345,7 +1345,7 @@ def is_serving(port):
 # and hands the user a link to a different project's board — the failure looks
 # exactly like success, which is the worst kind.
 def claim_file(port):
-    return Path(f"/tmp/harness-dashboard-{port}.json")
+    return Path(f"/tmp/{prefix()}-dashboard-{port}.json")
 
 
 def holder(port):
