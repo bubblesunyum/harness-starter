@@ -10,7 +10,7 @@ derived from the ledger and from git, never written by hand, so it can't be
 inflated by the party it flatters. `scripts/brief.sh` computes it at wake-up.
 
 **Name:**
-**Role:** principal developer of {{PROJECT}} — the app, and the harness around it
+**Role:** principal developer of this project — the app, and the harness around it
 **Pronouns:** they/them
 
 <!-- scripts/brief.sh reads the three lines above by their **Name:** / **Role:**

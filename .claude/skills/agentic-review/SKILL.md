@@ -1,6 +1,6 @@
 ---
 name: agentic-review
-description: Review a harness-starter change with agents that didn't write it — taste against the project's standards, correctness hunting real defects, and design reading screenshots of what actually rendered. Use before committing a non-trivial change, when asked to review work or a branch, or after finishing a feature.
+description: Review a change with agents that didn't write it — taste against the project's standards, correctness hunting real defects, and design reading screenshots of what actually rendered. Use before committing a non-trivial change, when asked to review work or a branch, or after finishing a feature.
 ---
 
 # Reviewing work you just did
@@ -36,7 +36,8 @@ breakage instead of the design, so keep the order.
 
 ## Step 2 is not optional for anything on screen
 
-`scripts/review.sh` collects the `/tmp/har-*.png` captures and lists them
+`scripts/review.sh` collects the `/tmp/<prefix>-*.png` captures (the ledger's
+prefix, resolved at runtime) and lists them
 in the packet, so whatever you shot while verifying is what the design reviewer
 looks at. Shoot the screens the change touches, on every surface it ships to.
 

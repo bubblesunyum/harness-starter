@@ -59,9 +59,6 @@ looked fine in the diff. The ones it keeps hitting:
   name runs a file outside the directory. This shipped.
 - **Unbounded symlink resolution.** A link pointing into its own chain hangs
   with no output — the worst way for a PATH command to fail.
-- **A placeholder that survives substitution.** `{{PREFIX}}` inside a regex or a
-  path only fails at the far end, in an installed project, long after anything
-  connects it to the change.
 - **Silent success.** Reporting "initialised the ledger" when nothing was
   initialised, or "already serving" while pointing at a different project's
   server. Check for claims the code cannot actually back.

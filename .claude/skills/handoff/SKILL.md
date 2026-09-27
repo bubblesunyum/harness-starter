@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Close out a harness-starter session on purpose — settle the ledger, leave a note for whoever wakes up next, and optionally hand straight off to a fresh agent. Use when work is wrapping up, when the context window is getting long, or when the user says to hand off, wrap up, or take a beat.
+description: Close out a session on purpose — settle the ledger, leave a note for whoever wakes up next, and optionally hand straight off to a fresh agent. Use when work is wrapping up, when the context window is getting long, or when the user says to hand off, wrap up, or take a beat.
 ---
 
 # Ending a session
@@ -53,7 +53,7 @@ anything sensitive; this file is committed.
 ```markdown
 # handoff 2026-08-11
 
-Closed har-6sn — the inset really was a no-op, not a sign error.
+Closed abc-1a2b — the inset really was a no-op, not a sign error.
 Was mid-thought on whether the same double-inset exists in the calendar layout;
 didn't check. If it does, it's the same fix.
 ```
@@ -64,7 +64,7 @@ If the user said something genuinely appreciative this session, append it to
 `harness/laurels.jsonl` before you go — one JSON object per line:
 
 ```json
-{"date": "2026-08-11", "quote": "the magazine layout is gorgeous", "context": "har-abc"}
+{"date": "2026-08-11", "quote": "the magazine layout is gorgeous", "context": "abc-1a2b"}
 ```
 
 Real praise only, in the user's own words. Not politeness, not "thanks" at the

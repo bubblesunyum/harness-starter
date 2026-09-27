@@ -4,7 +4,7 @@
   scripts/verify.sh
 -->
 
-# Working on harness-starter
+# Working on this project
 
 The harness contract: how work is found here, proved, and left behind. It is the
 same in every project running this harness, and it is written for any agent in
@@ -27,7 +27,8 @@ session spends its first ten minutes rediscovering what the ledger already knew.
 
 ## The ledger is beads, and it is the record
 
-Work and discoveries live in `bd` (prefix `har-`), not in TodoWrite, not
+Work and discoveries live in `bd` (bead ids start with this project's prefix),
+not in TodoWrite, not
 in a markdown TODO list, not in your head. It is the thing that survives the
 session ending.
 

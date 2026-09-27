@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: How work moves through harness-starter — the beads ledger, the verify gate, the review pass, and the token budget that keeps them affordable on one account. Use when starting a work session, deciding where a note or a discovery belongs, planning a multi-step change, handing off at the end of a session, or wondering which skill or script to reach for.
+description: How work moves through this project — the beads ledger, the verify gate, the review pass, and the token budget that keeps them affordable on one account. Use when starting a work session, deciding where a note or a discovery belongs, planning a multi-step change, handing off at the end of a session, or wondering which skill or script to reach for.
 ---
 
 # How work moves here
@@ -50,7 +50,7 @@ bd ready → claim → build → scripts/verify.sh → review → commit → clo
    it differs from the plan, which is most of the time.
 7. **Capture it.** Below.
 
-**Name the bead in the commit message** — `Closes har-abc`, or just the id in the
+**Name the bead in the commit message** — `Closes <bead-id>`, or just the id in the
 body. A `commit-msg` hook enforces it: no bead, no commit, and the id has to
 resolve. That link is what lets a later session ask why a line looks the way it
 does and get an answer, and it's how the staging lane knows what's sitting

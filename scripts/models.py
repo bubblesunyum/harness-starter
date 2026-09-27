@@ -13,8 +13,8 @@ providers, `ollama list`, `claude` on PATH), prompts once per role, and writes
 the file. Present, it stays silent — including when there is no terminal, where
 prompting would hang a hook or a gate.
 
-Roles cover more than reviewers: the librarian audits monthly, and
-har-kli will run implement/summarize roles off this same file.
+Roles cover more than reviewers: the librarian audits monthly, and future
+implement/summarize roles resolve through this same file.
 
 A role's packet budget is its explicit "context" (tokens), else a heuristic
 from the model id — Claude-pattern ids read as 200000, anything else as 8192.
@@ -40,8 +40,8 @@ ROLES = {
     "reviewer-correctness": "reads every packet for defects",
     "reviewer-design": "reads screenshots, not the diff",
     "librarian": "monthly knowledge-layer audit",
-    "implement": "already-specced bead work (har-kli)",
-    "summarize": "session notes and handoffs (har-kli)",
+    "implement": "already-specced bead work",
+    "summarize": "session notes and handoffs",
 }
 
 
@@ -74,7 +74,7 @@ def detect():
         backends.append("ollama")
     if shutil.which("claude"):
         # Noted, not offered: Claude agents keep their frontmatter tiers until
-        # agent.sh (har-kli) learns to resolve them through this file.
+        # a future agent runner learns to resolve them through this file.
         backends.append("claude")
     return seen, backends
 

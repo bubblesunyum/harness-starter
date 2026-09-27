@@ -12,4 +12,3 @@
 # dead weight — drop it.
 scripts/review.sh
 .claude/HARNESS.md
-.claude/skills/agentic-review/SKILL.md

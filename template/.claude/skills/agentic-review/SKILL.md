@@ -1,6 +1,6 @@
 ---
 name: agentic-review
-description: Review a {{PROJECT}} change with agents that didn't write it — taste against the project's standards, correctness hunting real defects, and design reading screenshots of what actually rendered. Use before committing a non-trivial change, when asked to review work or a branch, or after finishing a feature.
+description: Review a change with agents that didn't write it — taste against the project's standards, correctness hunting real defects, and design reading screenshots of what actually rendered. Use before committing a non-trivial change, when asked to review work or a branch, or after finishing a feature.
 ---
 
 # Reviewing work you just did
@@ -36,7 +36,8 @@ breakage instead of the design, so keep the order.
 
 ## Step 2 is not optional for anything on screen
 
-`scripts/review.sh` collects the `/tmp/{{PREFIX}}-*.png` captures and lists them
+`scripts/review.sh` collects the `/tmp/<prefix>-*.png` captures (the ledger's
+prefix, resolved at runtime) and lists them
 in the packet, so whatever you shot while verifying is what the design reviewer
 looks at. Shoot the screens the change touches, on every surface it ships to.
 
@@ -59,7 +60,9 @@ nobody looked at is the defect.
 ## Why it's shaped like this
 
 - **Diff-scoped.** Reviewers see the change, not the repo. A review that reads
-  the whole tree costs more than writing the feature did.
+  the whole tree costs more than writing the feature did. The cost of that is a
+  `SCOPE` list in `scripts/review.sh` that has to earn every suffix it carries:
+  a file type missing from it is a file no reviewer has ever read.
 - **One packet, many readers.** `scripts/review.sh` writes the diff to a file
   once; each reviewer reads that file instead of running its own git commands.
   Three agents, one diff-assembly cost.

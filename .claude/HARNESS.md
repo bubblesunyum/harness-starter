@@ -21,7 +21,8 @@ how the pieces fit together.
 
 ## The pieces
 
-- **Ledger:** beads (`bd`, prefix `har-`) in `.beads/`. Work and
+- **Ledger:** beads (`bd`) in `.beads/`. Bead ids start with the project's
+  prefix. Work and
   discoveries go there, not into TodoWrite or markdown TODOs. It is the thing
   that survives a session ending, so a bead that's still `open` mid-implementation
   is a ledger that's lying.

@@ -13,7 +13,7 @@
 
 # The harness
 
-{{PROJECT}} runs a bespoke agentic development harness: the pieces that let a
+This project runs a bespoke agentic development harness: the pieces that let a
 session start cold, find the work, prove the work, and leave a trail. This file
 is the rationale — why the pieces are shaped this way. The `workflow` skill is
 the procedure — how work actually moves through them. Read this before changing
@@ -21,7 +21,8 @@ how the pieces fit together.
 
 ## The pieces
 
-- **Ledger:** beads (`bd`, prefix `{{PREFIX}}-`) in `.beads/`. Work and
+- **Ledger:** beads (`bd`) in `.beads/`. Bead ids start with the project's
+  prefix. Work and
   discoveries go there, not into TodoWrite or markdown TODOs. It is the thing
   that survives a session ending, so a bead that's still `open` mid-implementation
   is a ledger that's lying.
