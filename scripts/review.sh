@@ -66,27 +66,18 @@ else
 fi
 
 # ── CONFIGURE ─────────────────────────────────────────────────────────────
-# What a review is allowed to see: the app's source, and the harness that builds
-# it. Include the harness — it grows enough code of its own to have bugs, and a
-# scope that omits it means those never get reviewed. Exclude generated churn: a
-# lockfile or project file whose ids got reshuffled, and the ledger export, are
-# noise that dilutes the read. Config files are in scope: opencode.json is
-# three lines that decide what every session in the project loads, and it went
-# through a full review pass invisible because the scope had no *.json.
-# Add this project's own source globs. The docs are here from the start: a
-# CLAUDE.md or a skill that quietly stopped being true is a defect the reviewers
-# should see, and a suffix-only scope is also how a file with no extension at all
-# stays unreviewable — list such files by path.
-# bin/* and commands/* are listed by path because the two most important files
-# here carry no extension at all — a glob-by-suffix scope leaves the dispatcher
-# unreviewable, which is how it kept its path-traversal bug through a full pass.
-# The docs are in scope too: in this project the prose is half the product.
-SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'bin/*' 'commands/*' 'scripts/hooks/*'
-       ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
-
-# Screenshots the design reviewer looks at. Whatever drives your app should
-# write its captures to /tmp with this prefix — the ledger's, resolved above.
-CAPTURES="$(_harness_prefix)-*.png"
+# What a review is allowed to see lives in scripts/review.scope.sh, sourced
+# just below. That file is yours — installed once, never compared or
+# overwritten — so scope edits there are safe and packet fixes here still
+# arrive with `harness update`.
+if [ -f "$ROOT/scripts/review.scope.sh" ]; then
+  . "$ROOT/scripts/review.scope.sh"
+else
+  echo "  ! no scripts/review.scope.sh — the packet has no scope to review." >&2
+  echo "    'harness add' installs it; a project from before the split recovers" >&2
+  echo "    its scope from its old review.sh on 'harness update --apply'." >&2
+  exit 1
+fi
 # ── END CONFIGURE ─────────────────────────────────────────────────────────
 
 diff_cmd() {

@@ -61,7 +61,7 @@ nobody looked at is the defect.
 
 - **Diff-scoped.** Reviewers see the change, not the repo. A review that reads
   the whole tree costs more than writing the feature did. The cost of that is a
-  `SCOPE` list in `scripts/review.sh` that has to earn every suffix it carries:
+  `SCOPE` list in `scripts/review.scope.sh` that has to earn every suffix it carries:
   a file type missing from it is a file no reviewer has ever read.
 - **One packet, many readers.** `scripts/review.sh` writes the diff to a file
   once; each reviewer reads that file instead of running its own git commands.

@@ -12,11 +12,10 @@
 # (the ledger's bead prefix, resolved below) and are worth reading only when
 # something fails.
 #
-# ── FILL THIS IN ──────────────────────────────────────────────────────────
-# Everything outside the PROJECT STEPS block below is harness scaffolding and
-# works as-is. Replace the steps with your project's real build and test
-# commands. Keep them going through `step`, which swallows the log and reports
-# one line — that is the whole point of the gate.
+# Everything in scripts/verify.steps.sh is yours to replace with your project's
+# real build and test commands. Everything here works as-is: keep checks going
+# through `step`, which swallows the log and reports one line — that is the
+# whole point of the gate.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -101,27 +100,18 @@ else
 fi
 
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────
-# Replace these with your project's real commands. `step <name> <cmd...>` runs
-# it, logs it, and prints one line. Nothing else in this file needs to change.
-
-step "build" false   # e.g. cargo build / npm run build / xcodebuild ... build
-
-if [ "$mode" != "--quick" ]; then
-  step "tests" false # e.g. cargo test / npm test / pytest -q
-
-  # Test counts are the one detail worth surfacing on success — "ok" alone
-  # can't distinguish a green suite from a suite that ran nothing. Point this
-  # grep at whatever your runner prints.
-  if [ -f "$LOGS/tests.log" ]; then
-    grep -oE "[0-9]+ (passed|tests?)[^.]*" "$LOGS/tests.log" | tail -1 | sed -e 's/^/        /'
-  fi
-fi
-
-if [ "$mode" = "--full" ]; then
-  # Anything slow, or anything needing a GUI session: a second platform's
-  # build, an integration suite, a smoke check that launches the app and
-  # asserts it came up. Delete this block if the project has none.
-  :
+# Your project's build, test, and smoke steps live in scripts/verify.steps.sh,
+# sourced just below. That file is yours — installed once, never compared or
+# overwritten — so scaffolding fixes here still arrive with `harness update`.
+if [ -f "$ROOT/scripts/verify.steps.sh" ]; then
+  . "$ROOT/scripts/verify.steps.sh"
+else
+  # A gate with no project steps would pass vacuously — the green suite that
+  # ran nothing — so a missing steps file fails loudly instead. `harness add`
+  # installs it; a project from before the split recovers its steps from its
+  # old verify.sh on `harness update --apply`.
+  failed=1
+  echo "  ! no scripts/verify.steps.sh — the gate has no project steps to run."
 fi
 # ── END PROJECT STEPS ─────────────────────────────────────────────────────
 

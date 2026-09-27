@@ -37,7 +37,8 @@ how the pieces fit together.
   diff, because a diff can't show you clipping. The packet carries untracked
   files too, and stages nothing to do it; its captures are dated from the
   working tree's first edit, so an unrelated session's screenshots stay out.
-  Its scope carries the docs, `*.html` for the dashboard page, and `bin/*` and
+  Its scope lives in `scripts/review.scope.sh` — project-owned, never overwritten,
+  so a scope edit never blocks a packet fix — and carries the docs, `*.html` for the dashboard page, and `bin/*` and
   `commands/*` by path: the two most important files here have no extension, and
   a suffix-only scope left the dispatcher unreviewable long enough for it to keep
   a path-traversal bug through a full pass — then did the same to the dashboard
