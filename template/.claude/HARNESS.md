@@ -4,6 +4,7 @@
   .claude/agents/reviewer-design.md
   .claude/agents/reviewer-taste.md
   .claude/skills/workflow/SKILL.md
+  scripts/agent.py
   scripts/brief.sh
   scripts/context.py
   scripts/opencode-agents.py

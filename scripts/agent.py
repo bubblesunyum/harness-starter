@@ -11,6 +11,11 @@
 The reply goes to stdout. The session id, model and round go to stderr, as one
 line — the id is what a revision round needs.
 
+Exits 0 with a reply; 1 when the run failed and there is no reply to trust; 2 on
+a usage error; 3 when the session is past its revision cap, without running; 4
+when opencode refused a permission — the reply is still printed, but was
+written without what it asked for.
+
 This is how a session in any tool — Claude Code included — hands work to a
 model that isn't its own: the packet or the brief is read in a separate
 opencode process, off the caller's context, on whatever model
@@ -65,7 +70,7 @@ The brief:
 """
 
 
-def plain(line):
+def strip_ansi(line):
     """A line of opencode's stderr without its colour codes."""
     return re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
 
@@ -128,7 +133,14 @@ def agent_config(agent):
              f"isn't an object — unset it or fix it")
     settings = config.setdefault("agent", {}).setdefault(agent, {})
     settings["mode"] = "primary"
-    outside = settings.setdefault("permission", {}).setdefault("external_directory", {})
+    permission = settings.setdefault("permission", {})
+    if not isinstance(permission, dict):
+        fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent}.permission to something "
+             f"that isn't an object — unset it or fix it")
+    outside = permission.setdefault("external_directory", {})
+    if not isinstance(outside, dict):
+        fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent}.permission.external_directory "
+             f"to something that isn't an object — unset it or fix it")
     for tmp in sorted({"/tmp", os.path.realpath("/tmp")}):
         outside[f"{tmp}/*"] = "allow"
     return json.dumps(config)
@@ -166,7 +178,27 @@ def explain(error):
     return message
 
 
-def run(agent, model, variant, session, prompt):
+def parse_events(stdout, session):
+    """(reply texts, error lines, session id) from `opencode run --format json`."""
+    texts, errors, session_id = [], [], session
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        session_id = event.get("sessionID") or session_id
+        if event.get("type") == "step_start":
+            # Only the last step is the answer; earlier ones are the model
+            # narrating its tool calls ("let me read the packet…").
+            texts = []
+        elif event.get("type") == "text":
+            texts.append(event.get("part", {}).get("text", ""))
+        elif event.get("type") == "error":
+            errors.append(explain(event.get("error", {})))
+    return texts, errors, session_id
+
+
+def run_role(agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
     fail loudly."""
     command = ["opencode", "run", "--format", "json", "--agent", agent,
@@ -191,29 +223,14 @@ def run(agent, model, variant, session, prompt):
         fail(f"no reply after {TIMEOUT_SECONDS // 60} minutes — "
              f"`opencode session list` shows where it got to")
 
-    texts, errors, session_id = [], [], session
-    for line in out.stdout.splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        session_id = event.get("sessionID") or session_id
-        if event.get("type") == "step_start":
-            # Only the last step is the answer; earlier ones are the model
-            # narrating its tool calls ("let me read the packet…").
-            texts = []
-        elif event.get("type") == "text":
-            texts.append(event.get("part", {}).get("text", ""))
-        elif event.get("type") == "error":
-            errors.append(explain(event.get("error", {})))
-
+    texts, errors, session_id = parse_events(out.stdout, session)
     if errors:
         fail("opencode reported an error:\n  " + "\n  ".join(errors))
     reply = "\n\n".join(t.strip() for t in texts if t.strip())
     # Headless opencode answers every permission prompt with no, and the agent
     # carries on without whatever it asked for. A reviewer that couldn't open
     # the packet still replies — about something else.
-    refused = [plain(l) for l in out.stderr.splitlines() if "auto-rejecting" in l]
+    refused = [strip_ansi(l) for l in out.stderr.splitlines() if "auto-rejecting" in l]
     if out.returncode != 0 or not reply:
         # An empty reply is not a clean review. Say so rather than print
         # nothing, which the caller would read as "no findings".
@@ -222,7 +239,7 @@ def run(agent, model, variant, session, prompt):
                 else "— its reply was discarded, since a failed run's half-answer "
                      "reads like a whole one")
         fail(f"opencode exited {out.returncode} {what}"
-             + "".join(f"\n  {plain(l)}" for l in tail))
+             + "".join(f"\n  {strip_ansi(l)}" for l in tail))
     return reply, session_id, refused
 
 
@@ -247,10 +264,10 @@ def main(argv):
     if role == "implement" and not session:
         prompt = IMPLEMENT_CONTRACT + message
     variant = variant_for(role)
-    reply, session_id, refused = run(agent, model, variant, session, prompt)
+    reply, session_id, refused = run_role(agent, model, variant, session, prompt)
     print(reply)
-    on = f"{model} ({variant})" if variant else model
-    print(f"agent.py: {role} on {on} · session {session_id} · "
+    model_label = f"{model} ({variant})" if variant else model
+    print(f"agent.py: {role} on {model_label} · session {session_id} · "
           f"round {round_number} of {MAX_ROUNDS}", file=sys.stderr)
     if refused:
         # The reply is printed anyway — an implementer's report still says what

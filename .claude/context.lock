@@ -5,7 +5,8 @@
     ".claude/agents/reviewer-design.md": "99919f9da1b9b4c5",
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
     ".claude/skills/workflow/SKILL.md": "1d9c9b01ab64d5de",
-    "doc": "deef0e63c8f17d1b",
+    "doc": "0da07d24a88ca93a",
+    "scripts/agent.py": "c63f61eee10036f7",
     "scripts/brief.sh": "2480824f8bfe8220",
     "scripts/context.py": "1758842ffc4bf3a1",
     "scripts/opencode-agents.py": "39b4988ea1d2d4a4",
@@ -16,13 +17,13 @@
     ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
     ".claude/agents/reviewer-design.md": "99919f9da1b9b4c5",
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
-    "doc": "51cc13731cadd2a8",
-    "scripts/agent.py": "90234126f9445613",
+    "doc": "c735007145dad128",
+    "scripts/agent.py": "c63f61eee10036f7",
     "scripts/review.sh": "29232a439308fac2"
   },
   ".claude/skills/delegate/SKILL.md": {
     "doc": "73e5637e16ffd9a3",
-    "scripts/agent.py": "90234126f9445613"
+    "scripts/agent.py": "c63f61eee10036f7"
   },
   ".claude/skills/handoff/SKILL.md": {
     "doc": "7fec5b9a76db6581",

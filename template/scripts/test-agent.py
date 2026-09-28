@@ -168,11 +168,15 @@ class AgentTests(unittest.TestCase):
         self.assertIn("discarded", out.stderr)
 
     def test_a_misshapen_config_content_fails_in_the_scripts_voice(self):
-        self.env["OPENCODE_CONFIG_CONTENT"] = '{"agent": "primary"}'
-        out = self.agent("reviewer-taste", "go", events=text_event("ok"))
-        self.assertEqual(out.returncode, 1)
-        self.assertNotIn("Traceback", out.stderr)
-        self.assertIn("OPENCODE_CONFIG_CONTENT", out.stderr)
+        for shape in ('{"agent": "primary"}',
+                      '{"agent": {"reviewer-taste": {"permission": "allow"}}}',
+                      '{"agent": {"reviewer-taste": {"permission": {"external_directory": "allow"}}}}'):
+            with self.subTest(shape=shape):
+                self.env["OPENCODE_CONFIG_CONTENT"] = shape
+                out = self.agent("reviewer-taste", "go", events=text_event("ok"))
+                self.assertEqual(out.returncode, 1)
+                self.assertNotIn("Traceback", out.stderr)
+                self.assertIn("OPENCODE_CONFIG_CONTENT", out.stderr)
 
     def test_free_tier_refusal_names_the_fix(self):
         out = self.agent("reviewer-taste", "review", events=error_event(

@@ -207,7 +207,7 @@ def ensure(again=False):
     # What `ensure` doesn't ask about — context, variant — is kept from the
     # entry it replaces: re-picking one model shouldn't reset every role's
     # budget and reasoning effort without a word.
-    previous = load() if state == "ok" else {}
+    previous = load() if state in ("ok", "empty") else {}
     roster, default = {}, None
     for role, hint in ROLES.items():
         if candidates:

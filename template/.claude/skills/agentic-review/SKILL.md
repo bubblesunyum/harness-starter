@@ -33,7 +33,8 @@ that's the packet's job, and pasting it doubles the cost.
 
 **Off the account, when the roster allows.** If `harness/models.json` names a
 model for `reviewer-taste` and `reviewer-correctness`, run those two through
-opencode instead of spawning them — both at once, in the background:
+opencode instead of spawning them — each as its own background command, so
+the two run at once:
 
 ```bash
 scripts/agent.py reviewer-taste "Review <packet> — <what it was meant to do>"
