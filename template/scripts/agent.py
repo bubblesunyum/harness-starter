@@ -198,7 +198,7 @@ def parse_events(stdout, session):
     return texts, errors, session_id
 
 
-def run_role(agent, model, variant, session, prompt):
+def run_agent(agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
     fail loudly."""
     command = ["opencode", "run", "--format", "json", "--agent", agent,
@@ -265,7 +265,7 @@ def main(argv):
     if role == "implement" and not session:
         prompt = IMPLEMENT_CONTRACT + message
     variant = variant_for(role)
-    reply, session_id, refused = run_role(agent, model, variant, session, prompt)
+    reply, session_id, refused = run_agent(agent, model, variant, session, prompt)
     print(reply)
     model_label = f"{model} ({variant})" if variant else model
     print(f"agent.py: {role} on {model_label} · session {session_id} · "
