@@ -317,8 +317,9 @@ if [ "$agents_contract" -eq 1 ]; then
   if [ -f "$target/scripts/models.py" ] &&
      [ "$(harness_roster_state "$target")" != "ok" ]; then
     # The roster is machine-local and no commit carries it, so a fresh machine
-    # regenerates model-free agents until someone runs this once per role.
-    echo "    scripts/models.py ensure   (no usable roster — generated agents carry no model lines)"
+    # has none until someone runs this once per role — agent.py runs and
+    # review budgets need it, though the generated agents never do.
+    echo "    scripts/models.py ensure   (no usable roster — agent.py runs need one)"
   fi
   [ -f "$target/scripts/opencode-agents.py" ] && echo "    scripts/opencode-agents.py"
   echo "    scripts/context.py bless"

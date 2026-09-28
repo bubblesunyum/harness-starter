@@ -1,8 +1,6 @@
 ---
 description: Reviews screenshots of a project change — what the app actually renders, not what the diff says it should. Hunts clipping, truncation, overflow, misalignment, and drift from the app's established look. Reads a review packet listing captures to look at. Use whenever a change touches anything on screen.
 mode: subagent
-model: opencode-go/muse-spark-1.3-contributor
-variant: xhigh
 permission:
   edit: deny
   task: deny

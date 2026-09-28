@@ -217,23 +217,25 @@ it worked and fails at spawn. So the prompt body has one home,
 header around it into `.opencode/agent/`. The gate checks the two match, because
 nothing about editing the source makes opencode complain.
 
-The generated agents carry a `model:` line from `harness/models.json` — the
-per-role roster, mapping reviewer-taste and friends to provider-qualified ids.
-The roster is machine-local and gitignored: it names models this machine
-happens to have. A fresh clone has none, so the first review prompts once per
-role and writes it; later runs are silent. With no roster the agents omit
-`model:` and inherit the session's model, which always resolves — the cost is
-that `reviewer-taste` stops being the cheap one under opencode until then.
+The generated agents carry no `model:` line — by design, not omission. The
+roster is machine-local and gitignored: it names models this machine happens
+to have, so a model line would bake one machine's answers into every clone's
+committed files, and a fresh clone with an empty roster would generate
+model-free files that fail check against them. Without a line the agent
+inherits the session's model, which always resolves — the cost is that
+`reviewer-taste` stops being the cheap one under a native opencode spawn. The
+roster still picks the model everywhere a model is actually chosen:
+`scripts/agent.py` passes it as `-m`.
 
 A role's roster entry may add a `variant` — the provider's reasoning effort,
-such as `xhigh` — which becomes the agent's `variant:` line and agent.py's
-`--variant`. Both, because `implement` runs opencode's own build agent, which
-has no generated file to carry it.
+such as `xhigh` — which becomes agent.py's `--variant`. Only there: no
+generated file carries one, and `implement` runs opencode's own build agent,
+which has no generated file at all.
 
-Three paths, three model lines: the `.claude/agents/` frontmatter drives
-Claude Code's reviewers; the roster drives
-opencode's generated agents; Codex ignores both and inherits its host model.
-A model named in one path says nothing about the others.
+Three paths to a model: the `.claude/agents/` frontmatter names Claude Code's
+reviewers; the roster names `scripts/agent.py`'s; opencode's generated agents
+and Codex inherit the session's and the host's. A model named in one path says
+nothing about the others.
 
 **`scripts/agent.py` is how any tool reaches the roster.** It runs one role
 through `opencode run` — so Claude Code can put its reviewers, and delegated

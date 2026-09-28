@@ -174,7 +174,7 @@ def explain(error):
     if "free tier can only be used from within OpenCode" in message:
         return (f"{message}\n  OpenCode's free models refuse every agent but "
                 f"opencode's built-in ones. Point this role at a paid model "
-                f"in harness/models.json, then run scripts/opencode-agents.py.")
+                f"in harness/models.json.")
     return message
 
 
@@ -204,8 +204,9 @@ def run_role(agent, model, variant, session, prompt):
     command = ["opencode", "run", "--format", "json", "--agent", agent,
                "-m", model]
     if variant:
-        # The generated agent file carries it too, but `implement` runs
-        # opencode's own build agent, which has no file of ours to carry it.
+        # No generated file carries it, so the flag is the whole mechanism —
+        # including for `implement`, which runs opencode's own build agent
+        # with no file of ours at all.
         command += ["--variant", variant]
     if session:
         command += ["--session", session]

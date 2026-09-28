@@ -26,9 +26,9 @@ roster; `budget` never prompts, so review.sh can call it from hooks and gates.
 
 A role may also name a "variant" — the provider's reasoning effort (minimal,
 low, medium, high, xhigh, max; which exist depends on the model, and
-`opencode models --verbose` lists them). It reaches opencode as the generated
-agent's `variant:` line and as agent.py's `--variant`. Absent, the model's own
-default applies.
+`opencode models --verbose` lists them). It reaches opencode as agent.py's
+`--variant` — the only path; no generated file carries one. Absent, the
+model's own default applies.
 """
 
 import json
@@ -60,7 +60,7 @@ def run(*args, timeout=15):
 
 
 def detect():
-    """(candidates, backends): model ids offerable for opencode agent lines,
+    """(candidates, backends): model ids offerable for roster roles,
     and a one-line account of where they came from."""
     seen, backends = [], []
     opencode = [l.strip() for l in run("opencode", "models").splitlines()

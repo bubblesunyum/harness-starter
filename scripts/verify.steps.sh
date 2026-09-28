@@ -332,6 +332,32 @@ EOF
   echo "$out" | grep -q "review-packet" ||
     { echo "error: review never printed the packet"; echo "$out"; exit 1; }'
 
+# The roster is machine-local and gitignored, so generated agents must not
+# carry it: a model line baked in here passes check on this machine and fails
+# it on every fresh clone. Asserted both ways — a populated roster leaks
+# nothing into the output, and check passes with the roster removed.
+step "generated opencode agents ignore the roster" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  cat > "$probe/harness/models.json" <<EOF ||
+{"reviewer-taste": {"model": "some-provider/some-model", "context": 12345},
+ "reviewer-correctness": "other-provider/other-model",
+ "reviewer-design": {"model": "third-provider/third-model"},
+ "librarian": "fourth-provider/fourth-model"}
+EOF
+    { echo "error: cannot write test roster"; exit 1; }
+  (cd "$probe" && ./scripts/opencode-agents.py >/dev/null 2>&1) ||
+    { echo "error: generate failed with a populated roster"; exit 1; }
+  if grep -H "^model:\|^variant:" "$probe"/.opencode/agent/*.md; then
+    echo "error: roster leaked into generated agents — a fresh clone fails check"; exit 1;
+  fi
+  (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1) ||
+    { echo "error: check failed with a populated roster"; exit 1; }
+  rm "$probe/harness/models.json" ||
+    { echo "error: cannot remove test roster"; exit 1; }
+  (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1) ||
+    { echo "error: check failed with no roster — the fresh-clone case"; exit 1; }'
+
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
 step "add initialises a missing git repository" bash -c '

@@ -1,8 +1,6 @@
 ---
 description: Hunts for real defects in a harness-starter diff — logic errors, concurrency bugs, lifecycle and state mistakes, and the platform traps this project keeps hitting. Reads a review packet and reports only findings with a concrete failure scenario.
 mode: subagent
-model: opencode-go/muse-spark-1.3-contributor
-variant: xhigh
 permission:
   edit: deny
   task: deny
