@@ -655,6 +655,57 @@ PYEOF
   out=$(bin/harness update "$probe" 2>&1) ||
     { echo "error: update still stale after apply"; echo "$out"; exit 1; }'
 
+# The committed ledger export is a fresh clone's memories: bd's plain export
+# omits them, so the file has to be regenerated with --include-memories (which
+# ledger-push.sh does on every push). Compared as whole memory lines in both
+# directions — a remembered, edited, or deleted memory trips it, while ordinary
+# issue churn never does. In Python, not grep: BSD grep -f dies past 64 KiB
+# pattern lines, and a comparison that cannot read the lines passes blind.
+step "the committed ledger export carries every memory" bash -c '
+  [ -f .beads/issues.jsonl ] || { echo "error: no committed ledger export"; exit 1; }
+  tmp="$(mktemp)" || { echo "error: mktemp failed"; exit 1; }
+  trap '"'"'rm -f "$tmp"'"'"' EXIT
+  bd export --include-memories -o "$tmp" >/dev/null 2>&1 ||
+    { echo "error: ledger export failed"; exit 1; }
+  python3 - "$tmp" .beads/issues.jsonl <<PYEOF
+import sys
+export_path, committed_path = sys.argv[1], sys.argv[2]
+def memories(path):
+    with open(path, errors="replace") as f:
+        return {line for line in (l.rstrip("\n") for l in f)
+                if line and "\"_type\":\"memory\"" in line}
+fresh, committed = memories(export_path), memories(committed_path)
+missing = sorted(fresh - committed)
+gone = sorted(committed - fresh)
+if missing:
+    print("error: the committed export is missing memories — "
+          "run scripts/ledger-push.sh to regenerate")
+    print("\n".join(missing))
+if gone:
+    print("error: the committed export carries deleted memories — "
+          "run scripts/ledger-push.sh to regenerate")
+    print("\n".join(gone))
+sys.exit(1 if (missing or gone) else 0)
+PYEOF'
+
+# Neither transport hydrates a fresh clone on its own: bd init with a
+# configured remote starts an empty database without reading the committed
+# export. So add imports it on fresh init — issues and memories both, and only
+# then. Seeded here with one of each; recall proves the memories arrived.
+step "a fresh install hydrates the committed ledger export" bash -c '
+  fresh_probe || exit 1
+  mkdir -p "$probe/.beads" || { echo "error: cannot seed the export"; exit 1; }
+  printf "%s\n" "{\"_type\":\"issue\",\"id\":\"probe-1\",\"title\":\"seeded\",\"status\":\"open\"}" \
+    "{\"_type\":\"memory\",\"key\":\"probe-trap\",\"value\":\"seeded knowledge\"}" \
+    > "$probe/.beads/issues.jsonl" || { echo "error: cannot seed the export"; exit 1; }
+  out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "hydrated" ||
+    { echo "error: add never said it hydrated"; echo "$out"; exit 1; }
+  (cd "$probe" && bd recall probe-trap 2>&1) | grep -q "seeded knowledge" ||
+    { echo "error: seeded memory never reached the fresh ledger"; exit 1; }
+  (cd "$probe" && bd list 2>&1) | grep -q "seeded" ||
+    { echo "error: seeded issue never reached the fresh ledger"; exit 1; }'
+
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
 fi

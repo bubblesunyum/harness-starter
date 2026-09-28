@@ -270,6 +270,25 @@ if command -v bd >/dev/null 2>&1; then
   elif (cd "$target" && bd init --prefix "$prefix" >/dev/null 2>&1); then
     echo "  initialised the ledger ($prefix-)"
     ledger=1
+    # A fresh database behind a committed export means a clone: neither
+    # transport hydrates it on its own — bd init with a configured remote
+    # starts an empty database without reading issues.jsonl. So add imports it
+    # explicitly on fresh init, and only then: an existing ledger keeps
+    # whatever it has, and a stale export must never resurrect what the ledger
+    # deleted.
+    if [ ! -s "$target/.beads/issues.jsonl" ]; then
+      : # No export to hydrate from — a genuinely new project, nothing to say.
+    elif ! grep -q '"_type"' "$target/.beads/issues.jsonl" 2>/dev/null; then
+      echo "  ! .beads/issues.jsonl doesn't look like a ledger export — the ledger starts empty." >&2
+      echo "    Fix or remove the file, then run 'bd import .beads/issues.jsonl' yourself." >&2
+    elif import_out="$(cd "$target" && bd import .beads/issues.jsonl 2>&1)"; then
+      echo "  hydrated the ledger from the committed export"
+      echo "$import_out" | sed -e 's/^/    /'
+    else
+      echo "  ! couldn't import .beads/issues.jsonl — the ledger starts empty." >&2
+      echo "$import_out" | sed -e 's/^/    /' >&2
+      echo "    Once the ledger is up, run 'bd import .beads/issues.jsonl' yourself." >&2
+    fi
   else
     echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
   fi

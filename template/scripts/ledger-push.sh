@@ -92,6 +92,16 @@ fi
 # and under it an uncommitted working set pushes as an empty change silently.
 bd dolt commit -m "ledger" >/dev/null 2>&1 || true
 
+# The git-committed copy: .beads/issues.jsonl is what a fresh clone hydrates
+# from, and a plain `bd export` omits memories — the store the harness tells
+# every project to keep its knowledge in. Regenerate with them, so both
+# transports carry the whole ledger. A regen failure warns and continues: the
+# Dolt ref above is the primary transport, and a stale JSONL must never block
+# it — the gate's export probe keeps the staleness visible instead.
+if ! bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1; then
+  echo "  ! ledger export failed — .beads/issues.jsonl stays stale; continuing to the Dolt push, which still carries everything." >&2
+fi
+
 if push_out="$(bd dolt push 2>&1)"; then
   echo "✓ ledger pushed"
 else
