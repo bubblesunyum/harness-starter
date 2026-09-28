@@ -7,16 +7,18 @@
     <link rel="stylesheet" href="vendor/diff2html.min.css" />
     <style>
       :root {
-        /* Section-header palette. Grape is a dusk-heavy oklab mix with bubblegum:
-        purple, but kept clear of pink in hue. Fills use these flat, identical
-        in both modes; only the grey helper lanes adapt. */
-        --dusk: #26547c;
-        --bubblegum: #ef476f;
-        --pollen: #ffd166;
-        --emerald: #06d6a0;
-        --grape: color-mix(in oklab, var(--dusk) 65%, var(--bubblegum));
-        /* Pale neutral bar for the machinery lanes. Fixed, not adaptive, so
-        the dark header ink always holds — the one fill that never changes. */
+        /* Section-header palette. Flat pop brights, identical in both modes;
+        every bar is light enough for the same fixed dark ink — text follows
+        the fill, not the mode. */
+        --pop-rose: #ff7597;
+        --pop-apricot: #ffa05c;
+        --pop-butter: #ffd166;
+        --pop-mint: #52df9e;
+        --pop-sky: #7ab5ff;
+        --pop-grape: #b79bff;
+        /* Pale neutral fallback for lanes that name no fill of their own, so an
+        unknown lane degrades to grey instead of transparent. Fixed, not
+        adaptive, so the dark header ink always holds. */
         --ash: #d4d5cf;
         --bg: #f6f6f4;
         --panel: #fffffe;
@@ -338,41 +340,42 @@
         border-color: var(--ok);
         color: var(--ok);
       }
-      /* Section headers take the palette flat, identical in both modes, and
-      neighbouring lanes stay far apart in hue on purpose: lavender for the
-      accent lanes, blue for active work, pink for blocked, green for done,
-      yellow for staging, pale grey for the machinery. Every bar is light
+      /* Section headers take the palette flat, identical in both modes: grape
+      for the accent lanes, sky for active work, rose for blocked, mint for
+      done, butter for staging, apricot for the machinery. Status and
+      machinery share the same weight on purpose — the board reads as one
+      family — so tell them apart by hue, not by treatment. Every bar is light
       enough for the same fixed dark ink — text follows the fill, not the mode. */
       .lane.ready > summary,
       .lane.review > summary {
-        background: color-mix(in oklab, var(--grape) 50%, white);
+        background: var(--pop-grape);
         color: #14150f;
       }
       .lane.in_progress > summary {
-        background: color-mix(in oklab, var(--dusk) 50%, white);
+        background: var(--pop-sky);
         color: #14150f;
       }
       .lane.blocked > summary {
-        background: var(--bubblegum);
+        background: var(--pop-rose);
         color: #14150f;
       }
       .lane.done > summary {
-        background: var(--emerald);
+        background: var(--pop-mint);
         color: #14150f;
       }
       .lane.staging > summary {
-        background: var(--pollen);
+        background: var(--pop-butter);
         color: #14150f;
       }
       .lane.worktree > summary {
-        background: var(--ash);
+        background: var(--pop-apricot);
         color: #14150f;
       }
-      /* Backlog and the harness have no status colour, so they take pale grey
+      /* Backlog and the harness have no status colour, so they take apricot
       like the work tree. */
       .backlog > summary,
       .harness > summary {
-        background: var(--ash);
+        background: var(--pop-apricot);
         color: #14150f;
       }
       .lane-name.hoverable {
