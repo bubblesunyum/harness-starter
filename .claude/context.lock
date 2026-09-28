@@ -5,13 +5,13 @@
     ".claude/agents/reviewer-design.md": "99919f9da1b9b4c5",
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
     ".claude/skills/workflow/SKILL.md": "1d9c9b01ab64d5de",
-    "doc": "b854dc566b188a6c",
+    "doc": "1aecef1cfb133064",
     "scripts/agent.py": "ea1859cf36a6f1be",
     "scripts/brief.sh": "2480824f8bfe8220",
     "scripts/context.py": "1758842ffc4bf3a1",
     "scripts/opencode-agents.py": "1b55c0b1b177666f",
     "scripts/review.sh": "29232a439308fac2",
-    "scripts/verify.sh": "7bfca5b876cf1b29"
+    "scripts/verify.sh": "6be650e4709f43d2"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
@@ -34,9 +34,9 @@
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "07667d101de91e1d",
+    "doc": "0d83fe84ca529e4e",
     "scripts/brief.sh": "2480824f8bfe8220",
     "scripts/review.sh": "29232a439308fac2",
-    "scripts/verify.sh": "7bfca5b876cf1b29"
+    "scripts/verify.sh": "6be650e4709f43d2"
   }
 }

@@ -67,6 +67,11 @@ Run this rather than raw build commands. It swallows tens of thousands of log
 lines and prints one line per step, which is the difference between proving your
 work and spending the day's context learning one bit.
 
+The gate also checks the committed ledger export matches the ledger. If it
+fails, regen with `bd export --include-memories -o .beads/issues.jsonl` and
+re-run — the committed file is what a fresh clone hydrates from, and nothing
+regenerates it on mutation.
+
 ## The review pass is standing, not optional
 
 Every change worth committing gets reviewed by agents that didn't write it:

@@ -41,6 +41,32 @@ fresh_probe() {
 }
 export -f fresh_probe
 
+# Reading one field out of bd JSON, and waiting out its read-your-write lag:
+# step bodies below are single-quoted, so both quote kinds are spoken for down
+# there - these live up here, where quotes are just quotes, and get exported
+# like fresh_probe because each step runs in its own bash -c child. bd stderr
+# is captured into the error, so a failing list says why instead of dying mute.
+probe_json_field() {
+  local dir="$1" field="$2" json
+  json=$(cd "$dir" && bd list --json --all 2>&1) ||
+    { echo "error: cannot list the probe beads: $json"; return 1; }
+  printf %s "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0].get(sys.argv[1]))' "$field" ||
+    { echo "error: cannot read the probe bead back"; return 1; }
+}
+export -f probe_json_field
+
+await_bead_closed() {
+  local dir="$1" bid="$2" tries=0 st=""
+  while [ "$st" != "closed" ]; do
+    st=$(probe_json_field "$dir" status) || return 1
+    [ "$st" = "closed" ] && break
+    tries=$((tries + 1))
+    [ "$tries" -ge 15 ] && { echo "error: the probe bead $bid never closed (status: $st)"; return 1; }
+    sleep 2
+  done
+}
+export -f await_bead_closed
+
 # A template file that still says {{PROJECT}} after substitution is one the
 # installer missed — and the placeholder only shows up at the far end, in an
 # installed project, long after anyone would connect it to this change.
@@ -655,39 +681,6 @@ PYEOF
   out=$(bin/harness update "$probe" 2>&1) ||
     { echo "error: update still stale after apply"; echo "$out"; exit 1; }'
 
-# The committed ledger export is a fresh clone's memories: bd's plain export
-# omits them, so the file has to be regenerated with --include-memories (which
-# ledger-push.sh does on every push). Compared as whole memory lines in both
-# directions — a remembered, edited, or deleted memory trips it, while ordinary
-# issue churn never does. In Python, not grep: BSD grep -f dies past 64 KiB
-# pattern lines, and a comparison that cannot read the lines passes blind.
-step "the committed ledger export carries every memory" bash -c '
-  [ -f .beads/issues.jsonl ] || { echo "error: no committed ledger export"; exit 1; }
-  tmp="$(mktemp)" || { echo "error: mktemp failed"; exit 1; }
-  trap '"'"'rm -f "$tmp"'"'"' EXIT
-  bd export --include-memories -o "$tmp" >/dev/null 2>&1 ||
-    { echo "error: ledger export failed"; exit 1; }
-  python3 - "$tmp" .beads/issues.jsonl <<PYEOF
-import sys
-export_path, committed_path = sys.argv[1], sys.argv[2]
-def memories(path):
-    with open(path, errors="replace") as f:
-        return {line for line in (l.rstrip("\n") for l in f)
-                if line and "\"_type\":\"memory\"" in line}
-fresh, committed = memories(export_path), memories(committed_path)
-missing = sorted(fresh - committed)
-gone = sorted(committed - fresh)
-if missing:
-    print("error: the committed export is missing memories — "
-          "run scripts/ledger-push.sh to regenerate")
-    print("\n".join(missing))
-if gone:
-    print("error: the committed export carries deleted memories — "
-          "run scripts/ledger-push.sh to regenerate")
-    print("\n".join(gone))
-sys.exit(1 if (missing or gone) else 0)
-PYEOF'
-
 # Neither transport hydrates a fresh clone on its own: bd init with a
 # configured remote starts an empty database without reading the committed
 # export. So add imports it on fresh init — issues and memories both, and only
@@ -705,6 +698,77 @@ step "a fresh install hydrates the committed ledger export" bash -c '
     { echo "error: seeded memory never reached the fresh ledger"; exit 1; }
   (cd "$probe" && bd list 2>&1) | grep -q "seeded" ||
     { echo "error: seeded issue never reached the fresh ledger"; exit 1; }'
+
+# The export probe earns its place: a closed bead left open in the committed
+# file fails the gate naming it, and the regen command from the message clears
+# it. Setup polls for settle with a deadline - rapid bd invocations can read a
+# snapshot from before the mutation landed, and an unasserted fixture would read
+# as a probe that cannot see staleness. The delete path is covered manually:
+# bd delete sometimes reports success without applying, and bd dolt commit
+# auto-imports .beads/issues.jsonl, resurrecting a deletion - neither belongs
+# in a deterministic fixture.
+step "a stale ledger export fails the gate naming the bead" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  (cd "$probe" && bd q "probe bead for a stale export" >/dev/null 2>&1) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  bid=$(probe_json_field "$probe" id) || exit 1
+  [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot write the probe export"; exit 1; }
+  grep -qF "$bid" "$probe/.beads/issues.jsonl" ||
+    { echo "error: the probe export missed the bead"; exit 1; }
+  (cd "$probe" && bd close "$bid" --reason "probe" >/dev/null 2>&1) ||
+    { echo "error: cannot close the probe bead"; exit 1; }
+  await_bead_closed "$probe" "$bid" || exit 1
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  echo "$out" | grep -q "FAIL  ledger export" || {
+    st=$(probe_json_field "$probe" status) || st="unreadable"
+    if [ "$st" != "closed" ]; then
+      echo "error: the probe close reverted before the gate ran (status: $st)";
+    else
+      echo "error: the gate passed a stale ledger export";
+    fi
+    echo "$out"; exit 1; }
+  echo "$out" | grep -qF "$bid" ||
+    { echo "error: the failure never named the closed bead"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "bd export --include-memories" ||
+    { echo "error: the failure never said how to regen"; echo "$out"; exit 1; }
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot regen the probe export"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  echo "$out" | grep -q "ok    ledger export" ||
+    { echo "error: the gate still fails after a regen"; echo "$out"; exit 1; }'
+
+# An empty install has no export and nothing to carry: the probe passes rather
+# than failing a project that did nothing wrong.
+step "an empty install passes the ledger export check" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  if echo "$out" | grep -q "FAIL  ledger export"; then
+    echo "error: the gate failed an empty ledger"; echo "$out"; exit 1;
+  fi
+  echo "$out" | grep -q "ledger export" ||
+    { echo "error: the check never ran on an empty ledger"; echo "$out"; exit 1; }'
+
+# A fresh clone carries the committed export without the gitignored Dolt
+# working set behind it. The probe skips that shape out loud instead of failing
+# on an export command that cannot work before hydration.
+step "a clone with no live ledger skips the export check" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  (cd "$probe" && bd q "probe bead" >/dev/null 2>&1) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot write the probe export"; exit 1; }
+  rm -rf "$probe/.beads/embeddeddolt" || { echo "error: cannot remove the probe database"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  if echo "$out" | grep -q "FAIL  ledger export"; then
+    echo "error: the gate failed a clone with no live ledger"; echo "$out"; exit 1;
+  fi
+  echo "$out" | grep -q "no live ledger, skipping" ||
+    { echo "error: the skip never said itself"; echo "$out"; exit 1; }'
 
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'

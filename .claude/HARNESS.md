@@ -59,6 +59,12 @@ how the pieces fit together.
   project, long after anyone would connect it to the change that caused it.
   Probe installs also check that stack guidance lands only in projects that
   use the stack, and that a bad or missing `harness/stacks.txt` fails loudly.
+  And the gate compares a fresh ledger export against the committed
+  `.beads/issues.jsonl`, both directions: bd's auto-export is a timer, not a
+  per-write flush, so without this a session commits a file that still lists
+  closed beads and misses new ones. Checked rather than regenerated — a gate
+  that rewrote the file would still need the session to commit it, so it says
+  the command instead.
 - **Dashboard:** `scripts/dashboard.py` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in
