@@ -67,6 +67,57 @@ await_bead_closed() {
 }
 export -f await_bead_closed
 
+# Dirties a probe's dashboard the way real drift looks: a touched shipped file,
+# a deleted vendor asset, a file the template no longer ships, a live snapshot
+# to keep, a VERDICT answer to carry, and a project-owned toml task to leave
+# alone. Top-level with normal quoting, like fresh_probe: step bodies are
+# single-quoted, so anything quote-heavy lives here and gets exported.
+dirty_probe_dashboard() {
+  local probe="$1"
+  printf '\n<!-- probe dirt -->\n' >> "$probe/dashboard/index.html"
+  rm -f "$probe/dashboard/vendor/marked.umd.js"
+  printf 'stale' > "$probe/dashboard/old-asset.js"
+  printf '{"probe":1}' > "$probe/dashboard/state.json"
+  printf '\n[[task]]\nname = "probe-task"\ncommand = ["echo", "hi"]\nlabel = "hi"\nbusy = "busy"\nwhere = "header"\n' \
+    >> "$probe/dashboard.toml"
+  python3 - "$probe/scripts/dashboard.py" <<'PYEOF'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = 'VERDICT = r"(?!)"'
+assert old in t, "template default VERDICT missing"
+open(p, "w").write(t.replace(old, 'VERDICT = r"PROBE"', 1))
+PYEOF
+}
+export -f dirty_probe_dashboard
+
+# Installed files must stay group/other readable and dashboard.py executable:
+# mktemp makes 0600 and the update's rename keeps it, so a missing chmod would
+# revoke group read on every dashboard file on every run. Top-level like the
+# rest — step bodies are single-quoted, so anything quote-heavy lives here.
+probe_dashboard_modes() {
+  local probe="$1"
+  python3 - "$probe" <<'PYEOF'
+import os, sys
+probe = sys.argv[1]
+paths = [probe + "/scripts/dashboard.py"]
+for root, _, names in os.walk(probe + "/dashboard"):
+    for n in names:
+        if n == "state.json":
+            continue
+        paths.append(os.path.join(root, n))
+bad = [p for p in paths if os.stat(p).st_mode & 0o044 != 0o044]
+if bad:
+    print("error: installed files not group/other readable:")
+    print("\n".join("  " + p for p in bad))
+    sys.exit(1)
+if os.stat(probe + "/scripts/dashboard.py").st_mode & 0o111 != 0o111:
+    print("error: dashboard.py lost its executable bit")
+    sys.exit(1)
+PYEOF
+}
+export -f probe_dashboard_modes
+
 # A template file that still says {{PROJECT}} after substitution is one the
 # installer missed — and the placeholder only shows up at the far end, in an
 # installed project, long after anyone would connect it to this change.
@@ -204,6 +255,124 @@ step "update respects acknowledged forks" bash -c '
     echo "error: apply failed on an acknowledged fork"; echo "$out"; exit 1; }
   grep -q "local fork" "$probe/scripts/review.sh" ||
     { echo "error: apply wrote an acknowledged fork"; exit 1; }'
+
+# The dashboard ships outside the guided merge: dirt in the shipped files is
+# refreshed, files the template dropped are removed, and the project-owned
+# pieces — the toml task, the live snapshot, the VERDICT answer — survive.
+# Each half asserts its setup, so a fixture that never dirtied reads as failure
+# rather than a probe that cannot see staleness.
+step "update-dashboard refreshes the dashboard and leaves the toml alone" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  dirty_probe_dashboard "$probe" || { echo "error: cannot dirty the probe dashboard"; exit 1; }
+  grep -qF "probe dirt" "$probe/dashboard/index.html" ||
+    { echo "error: the fixture never dirtied index.html"; exit 1; }
+  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
+    { echo "error: update-dashboard failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "never touched dashboard.toml" ||
+    { echo "error: update-dashboard never said the toml was untouched"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "VERDICT" ||
+    { echo "error: update-dashboard never said it carried VERDICT"; echo "$out"; exit 1; }
+  if grep -qF "probe dirt" "$probe/dashboard/index.html"; then
+    echo "error: update-dashboard left the dirt in index.html"; exit 1;
+  fi
+  [ -f "$probe/dashboard/vendor/marked.umd.js" ] ||
+    { echo "error: update-dashboard never restored the vendor asset"; exit 1; }
+  [ ! -e "$probe/dashboard/old-asset.js" ] ||
+    { echo "error: update-dashboard kept a file the template dropped"; exit 1; }
+  grep -qF "{\"probe\":1}" "$probe/dashboard/state.json" ||
+    { echo "error: update-dashboard ate the live snapshot"; exit 1; }
+  grep -qF "VERDICT = r\"PROBE\"" "$probe/scripts/dashboard.py" ||
+    { echo "error: update-dashboard dropped the VERDICT answer"; exit 1; }
+  grep -qF "probe-task" "$probe/dashboard.toml" ||
+    { echo "error: update-dashboard touched dashboard.toml"; exit 1; }
+  probe_dashboard_modes "$probe" || exit 1'
+
+# Acknowledged dashboard forks are left alone, like --apply leaves them: the
+# blunt tool must not delete a fork it was told is deliberate.
+step "update-dashboard leaves diverged dashboard files alone" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  printf "\n<!-- probe chip -->\n" >> "$probe/dashboard/index.html" ||
+    { echo "error: cannot fork the probe dashboard"; exit 1; }
+  printf "dashboard/index.html\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot acknowledge the fork"; exit 1; }
+  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
+    { echo "error: update-dashboard failed on a diverged dashboard"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "diverged" ||
+    { echo "error: update-dashboard never said diverged"; echo "$out"; exit 1; }
+  grep -qF "probe chip" "$probe/dashboard/index.html" ||
+    { echo "error: update-dashboard wrote an acknowledged fork"; exit 1; }'
+
+# A diverged entry for a file that needs no acknowledgment — dashboard.py is
+# FILL THIS IN, so `harness update` fails loudly on the entry — is ignored
+# here with a note rather than honored: honoring it while update rejects it
+# would give contradictory orders, and the fork it claims to protect is one
+# `harness diverge` itself refuses.
+step "update-dashboard ignores diverged entries that acknowledge nothing" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  dirty_probe_dashboard "$probe" || { echo "error: cannot dirty the probe dashboard"; exit 1; }
+  printf "scripts/dashboard.py\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot write the diverged entry"; exit 1; }
+  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
+    { echo "error: update-dashboard failed on a meaningless entry"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "acknowledge nothing" ||
+    { echo "error: update-dashboard never said it ignored the entry"; echo "$out"; exit 1; }
+  grep -qF "VERDICT = r\"PROBE\"" "$probe/scripts/dashboard.py" ||
+    { echo "error: update-dashboard left dashboard.py stale"; exit 1; }'
+
+# A diverged entry naming a file the template no longer ships fails loudly and
+# deletes nothing: the entry is already dead — `harness update` fails on it
+# too — so both commands give the same order, fix the list.
+step "update-dashboard fails loudly on diverged entries for dropped files" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  printf "stale" > "$probe/dashboard/legacy.js" ||
+    { echo "error: cannot plant the extra file"; exit 1; }
+  printf "dashboard/legacy.js\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot write the diverged entry"; exit 1; }
+  out=$(bin/harness update-dashboard "$probe" 2>&1) &&
+    { echo "error: update-dashboard passed a dead diverged entry"; exit 1; }
+  echo "$out" | grep -q "no longer ships" ||
+    { echo "error: update-dashboard never said what was wrong"; echo "$out"; exit 1; }
+  [ -f "$probe/dashboard/legacy.js" ] ||
+    { echo "error: update-dashboard deleted the file it refused to handle"; exit 1; }'
+
+# A directory where a shipped file goes fails loudly and keeps the directory:
+# without the guard the rename would move the new file inside it, report
+# success, and the delete half would then remove the evidence.
+step "update-dashboard fails loudly when a file path is a directory" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm "$probe/dashboard/index.html" ||
+    { echo "error: cannot remove index.html"; exit 1; }
+  mkdir "$probe/dashboard/index.html" ||
+    { echo "error: cannot plant the directory"; exit 1; }
+  printf "note" > "$probe/dashboard/index.html/note.txt" ||
+    { echo "error: cannot plant the note"; exit 1; }
+  out=$(bin/harness update-dashboard "$probe" 2>&1) &&
+    { echo "error: update-dashboard passed a directory at a file path"; exit 1; }
+  echo "$out" | grep -q "is not a file" ||
+    { echo "error: update-dashboard never said what was wrong"; echo "$out"; exit 1; }
+  [ -f "$probe/dashboard/index.html/note.txt" ] ||
+    { echo "error: update-dashboard destroyed the evidence"; exit 1; }'
+
+# A project with no dashboard at all gets one: update-dashboard installs what
+# is missing, so a partial install converges without a full re-add.
+step "update-dashboard installs a missing dashboard" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  rm -rf "$probe/dashboard" "$probe/scripts/dashboard.py" ||
+    { echo "error: cannot remove the probe dashboard"; exit 1; }
+  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
+    { echo "error: update-dashboard failed on a missing dashboard"; echo "$out"; exit 1; }
+  [ -f "$probe/dashboard/index.html" ] ||
+    { echo "error: update-dashboard never installed index.html"; exit 1; }
+  [ -f "$probe/scripts/dashboard.py" ] ||
+    { echo "error: update-dashboard never installed dashboard.py"; exit 1; }
+  grep -qF "name = \"verify\"" "$probe/dashboard.toml" ||
+    { echo "error: update-dashboard touched dashboard.toml"; exit 1; }'
 
 # Stack guidance reaches only the projects that use the stack: a Swift probe
 # gets swift.md and not web.md, a bare one gets neither, and each reads as

@@ -136,6 +136,11 @@ prints the follow-ups the merge still owes — rebuilding the generated agent
 copies, re-blessing, verifying. `harness add` runs the same check on what it
 skips, so a re-run says which of those skips were the install failing.
 
+Dashboard fixes ship without the guided merge: `harness update-dashboard`
+re-copies `dashboard/` and `scripts/dashboard.py` over the project, never
+touching `dashboard.toml`. The one answer a project may hold inside the
+shipped files — the `VERDICT` pattern in `dashboard.py` — is carried across.
+
 ## Adding a command
 
 `harness` is a dispatcher over `commands/`. A new command is a new file — no

@@ -142,6 +142,16 @@ harness_is_contract() {
   return 0
 }
 
+# How many lines a list holds. grep -c '' rather than wc -l, which counts
+# newlines and calls a list without a trailing one empty.
+harness_tally() { printf '%s' "$1" | grep -c ''; }
+
+# Whether a path is on an acknowledged-forks list. The list, not the project,
+# is the first argument, so both callers read the same way.
+harness_in_diverged_list() {
+  [ -n "${1:-}" ] && printf '%s\n' "$1" | grep -qxF "${2:-}"
+}
+
 # Resolve and validate a target project directory, echoing the resolved path.
 # -P, so a symlink pointing at the starter can't slip past add.sh's guard by
 # comparing unequal to the path it resolves to.

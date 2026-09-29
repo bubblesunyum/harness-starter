@@ -82,10 +82,6 @@ else
 fi
 files="$(harness_files_for "$HERE" "$target")"
 
-# How many lines a list holds. grep -c '' rather than wc -l, which counts
-# newlines and calls a list without a trailing one empty.
-tally() { printf '%s' "$1" | grep -c ''; }
-
 echo "harness update: $target"
 echo "  against $TEMPLATE"
 echo
@@ -115,9 +111,6 @@ if [ -f "$target/harness/diverged.txt" ]; then
     exit 1
   }
 fi
-in_diverged_list() {
-  [ -n "$diverged_want" ] && printf '%s\n' "$diverged_want" | grep -qxF "$1"
-}
 # Pre-split projects carry their gate steps and review scope inline in
 # scripts/verify.sh / scripts/review.sh. Converging those files would delete
 # the project's own answers, so --apply lifts the blocks into their overlay
@@ -182,7 +175,7 @@ while IFS= read -r rel; do
     diffs="$diffs$(diff -u --label "template/$rel" --label "$rel" \
                      "$render_dir/a" "$render_dir/b" || true)"$'\n\n'
   fi
-  if [ "$contract" -eq 1 ] && in_diverged_list "$rel"; then
+  if [ "$contract" -eq 1 ] && harness_in_diverged_list "$diverged_want" "$rel"; then
     # Acknowledged: shown for the record below, never stale, never written.
     diverged="$diverged  $rel"$'\n'
   elif [ "$apply" -eq 1 ] && [ "$contract" -eq 1 ]; then
@@ -238,7 +231,7 @@ while IFS= read -r want; do
 done <<< "$diverged_want"
 
 if [ -n "$stale" ]; then
-  echo "⚠ $(tally "$stale") contract file(s) exist and differ from the template"
+  echo "⚠ $(harness_tally "$stale") contract file(s) exist and differ from the template"
   printf '%s' "$stale"
   echo "  The harness contract is not installed here — diff and merge each one."
   echo "  A deliberate fork belongs in harness/diverged.txt — \`harness diverge <file>\`."
@@ -259,47 +252,47 @@ if [ -n "$bad_stacks" ]; then
 fi
 
 if [ -n "$missing" ]; then
-  echo "  $(tally "$missing") file(s) missing — 'harness add $target' installs them"
+  echo "  $(harness_tally "$missing") file(s) missing — 'harness add $target' installs them"
   printf '%s' "$missing"
   echo
 fi
 
 if [ -n "$customised" ]; then
-  echo "  $(tally "$customised") customised file(s) differ — expected, they carry FILL THIS IN blocks."
+  echo "  $(harness_tally "$customised") customised file(s) differ — expected, they carry FILL THIS IN blocks."
   echo "  Worth a look anyway when the starter has moved:"
   printf '%s' "$customised"
   echo
 fi
 
 if [ -n "$diverged" ]; then
-  echo "  $(tally "$diverged") diverged file(s) differ — acknowledged in harness/diverged.txt, shown for the record."
+  echo "  $(harness_tally "$diverged") diverged file(s) differ — acknowledged in harness/diverged.txt, shown for the record."
   printf '%s' "$diverged"
   echo "  --apply never writes these; delete the line to un-acknowledge."
   echo
 fi
 
 if [ -n "$diverged_clean" ]; then
-  echo "  $(tally "$diverged_clean") acknowledged file(s) match the template — the entry is dead weight:"
+  echo "  $(harness_tally "$diverged_clean") acknowledged file(s) match the template — the entry is dead weight:"
   printf '%s' "$diverged_clean"
   echo
 fi
 
 if [ -n "$applied" ]; then
-  echo "  applied $(tally "$applied") contract file(s) from the template:"
+  echo "  applied $(harness_tally "$applied") contract file(s) from the template:"
   printf '%s' "$applied"
   echo "  Review with git diff; revert any with git checkout -- <file>."
   echo
 fi
 
 if [ -n "$skipped_beads" ]; then
-  echo "  $(tally "$skipped_beads") contract file(s) left stale — each carries a beads block the"
+  echo "  $(harness_tally "$skipped_beads") contract file(s) left stale — each carries a beads block the"
   echo "  template has no copy of, so overwriting would delete it. Merge by hand:"
   printf '%s' "$skipped_beads"
   echo
 fi
 
 if [ -n "$skipped_steps" ]; then
-  echo "  $(tally "$skipped_steps") contract file(s) left stale — each carries project answers"
+  echo "  $(harness_tally "$skipped_steps") contract file(s) left stale — each carries project answers"
   echo "  from before the base/overlay split with no block to lift into its overlay file,"
   echo "  so overwriting would delete them. Move the steps or scope by hand into:"
   printf '%s' "$skipped_steps" | while IFS= read -r line; do
@@ -337,7 +330,7 @@ elif [ "$agents_custom" -eq 1 ] &&
 fi
 
 if [ -n "$bad_diverged" ]; then
-  echo "✗ $(tally "$bad_diverged") diverged entry(s) acknowledge nothing — typo, removed file, or a file already quiet:"
+  echo "✗ $(harness_tally "$bad_diverged") diverged entry(s) acknowledge nothing — typo, removed file, or a file already quiet:"
   printf '%s' "$bad_diverged"
   echo "  Fix harness/diverged.txt; --diff still shows the real drift."
   echo
