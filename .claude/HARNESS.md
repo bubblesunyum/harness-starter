@@ -27,6 +27,9 @@ how the pieces fit together.
   discoveries go there, not into TodoWrite or markdown TODOs. It is the thing
   that survives a session ending, so a bead that's still `open` mid-implementation
   is a ledger that's lying.
+  `scripts/ledger-push.sh` regenerates the tracked `.beads/issues.jsonl` (with
+  memories) on every push — the Dolt ref is the primary transport, the JSONL is
+  what a fresh clone hydrates from, so the file stays committed, never ignored.
 - **Skills:** `.claude/skills/` — `workflow` (the hub), `agentic-review`,
   `beads`, `handoff`. Each costs a description line until invoked; bodies are
   free until then. Add project-specific ones (how to build and drive the app,

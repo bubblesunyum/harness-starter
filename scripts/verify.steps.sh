@@ -1065,6 +1065,11 @@ step "a stale ledger export fails the gate naming the bead" bash -c '
     { echo "error: cannot write the probe export"; exit 1; }
   grep -qF "$bid" "$probe/.beads/issues.jsonl" ||
     { echo "error: the probe export missed the bead"; exit 1; }
+  # Tracked like the dogfooded copy: the staleness path under test runs past
+  # the untracked check, which would otherwise fail first without naming the
+  # bead (har-l5a).
+  (cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot track the probe export"; exit 1; }
   (cd "$probe" && bd close "$bid" --reason "probe" >/dev/null 2>&1) ||
     { echo "error: cannot close the probe bead"; exit 1; }
   await_bead_closed "$probe" "$bid" || exit 1
@@ -1103,6 +1108,11 @@ step "a deleted bead still exported fails the gate naming the bead" bash -c '
     { echo "error: cannot write the probe export"; exit 1; }
   grep -qF "$bid" "$probe/.beads/issues.jsonl" ||
     { echo "error: the probe export missed the bead"; exit 1; }
+  # Tracked like the dogfooded copy: the gone-line path under test runs past
+  # the untracked check, which would otherwise fail first without naming the
+  # bead (har-l5a).
+  (cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot track the probe export"; exit 1; }
   (cd "$probe" && bd delete "$bid" >/dev/null 2>&1) ||
     { echo "error: the preview delete failed"; exit 1; }
   (cd "$probe" && bd show "$bid" >/dev/null 2>&1) ||
@@ -1121,6 +1131,30 @@ step "a deleted bead still exported fails the gate naming the bead" bash -c '
   out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
   echo "$out" | grep -q "ok    ledger export" ||
     { echo "error: the gate still fails after a regen"; echo "$out"; exit 1; }'
+
+# The har-l5a path: an export with matching content but no git tracking reaches
+# no fresh clone, so the gate fails saying untracked with the fix — and a
+# `git add` clears it.
+step "an untracked ledger export fails the gate saying to track it" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  (cd "$probe" && bd q "probe bead for an untracked export" >/dev/null 2>&1) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot write the probe export"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  echo "$out" | grep -q "FAIL  ledger export" || {
+    echo "error: the gate passed an untracked ledger export";
+    echo "$out"; exit 1; }
+  echo "$out" | grep -q "untracked" ||
+    { echo "error: the failure never said untracked"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "git add .beads/issues.jsonl" ||
+    { echo "error: the failure never said how to track it"; echo "$out"; exit 1; }
+  (cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot track the probe export"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  echo "$out" | grep -q "ok    ledger export" ||
+    { echo "error: the gate still fails after tracking"; echo "$out"; exit 1; }'
 
 # An empty install has no export and nothing to carry: the probe passes rather
 # than failing a project that did nothing wrong.

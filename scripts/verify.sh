@@ -127,6 +127,25 @@ ledger_export_check() {
     echo "  ok    ledger export: ledger empty, nothing to carry"
     return 0
   fi
+  # Present is not enough — the export only reaches a fresh clone when it is
+  # tracked. An untracked file matches content yet carries nothing, and every
+  # session then rediscovers the `??` in git status (har-l5a).
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if git check-ignore -q .beads/issues.jsonl 2>/dev/null; then
+      echo "  FAIL  ledger export"
+      echo "        error: .beads/issues.jsonl is gitignored — nothing reaches a fresh clone:"
+      echo "        un-ignore it, then git add .beads/issues.jsonl"
+      rm -f "$tmp"
+      return 1
+    fi
+    if ! git ls-files --error-unmatch .beads/issues.jsonl >/dev/null 2>&1; then
+      echo "  FAIL  ledger export"
+      echo "        error: .beads/issues.jsonl exists but is untracked — nothing reaches a fresh clone:"
+      echo "        git add .beads/issues.jsonl"
+      rm -f "$tmp"
+      return 1
+    fi
+  fi
   if ! python3 - "$tmp" .beads/issues.jsonl <<'PYEOF'; then
 import re, sys
 export_path, committed_path = sys.argv[1], sys.argv[2]
