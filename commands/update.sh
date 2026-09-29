@@ -23,15 +23,25 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TEMPLATE="$HERE/template"
 # shellcheck source=lib/install.sh
 . "$HERE/commands/lib/install.sh"
+# shellcheck source=lib/dashboard-update.sh
+. "$HERE/commands/lib/dashboard-update.sh"
 
 usage() {
   cat <<USAGE
 Reports harness files in a project that differ from the starter's template.
 
-  harness update            check the current directory
-  harness update <path>     check that project instead
-  harness update --diff     also print a unified diff of each difference
-  harness update --apply    write the rendered template over stale contract files
+  harness update                  check the current directory
+  harness update <path>           check that project instead
+  harness update --diff           also print a unified diff of each difference
+  harness update --apply          write the rendered template over stale contract files
+  harness update dashboard        re-copy the dashboard files over the project
+  harness update dashboard <path>  re-copy the dashboard into that project instead
+
+The dashboard ships outside the guided merge: 'update dashboard' re-copies
+dashboard/ and scripts/dashboard.py outright — everything the project owns
+lives in dashboard.toml beside them — instead of reporting drift for a hand
+merge. A directory literally named "dashboard" needs ./dashboard or its full
+path here, or the name reads as the subcommand.
 
 Files carrying the harness contract — AGENTS.md, opencode.json, the skills, the
 scripts behind them — are reported as warnings and make this exit non-zero: the
@@ -52,6 +62,50 @@ USAGE
 
 show_diff=0; apply=0
 target=""
+
+# The dashboard subcommand, before the option parse below: 'update dashboard'
+# re-copies rather than reporting, so it shares nothing with the flags after
+# this. Only as the first word — a project directory that happens to be named
+# "dashboard" is reached as ./dashboard or by its full path.
+if [ "${1:-}" = "dashboard" ]; then
+  shift
+  dashboard_usage() {
+    cat <<USAGE
+Re-copies the dashboard files from the starter over a project that has them.
+
+  harness update dashboard         into the current directory
+  harness update dashboard <path>  into that project instead
+
+Copies dashboard/ and scripts/dashboard.py from the template. Never touches
+dashboard.toml — that file is the project's, installed once — and keeps
+dashboard/state.json, the live snapshot. A VERDICT answer a project still
+carries inside scripts/dashboard.py is moved into dashboard.toml first, where
+the dashboard reads it on the next poll; after that the file is byte-identical
+everywhere. Contract files acknowledged in harness/diverged.txt are left
+alone, like 'harness update --apply' leaves them. A diverged entry naming a
+file the template no longer ships fails loudly — fix the list, 'harness
+update' says the same. Run 'harness add' first if the project has no dashboard
+at all.
+USAGE
+  }
+  dashboard_target=""
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help) dashboard_usage; exit 0 ;;
+      -*) echo "✗ unknown option: $arg" >&2; echo >&2; dashboard_usage >&2; exit 1 ;;
+      *)
+        [ -z "$dashboard_target" ] || { echo "✗ more than one path given: $dashboard_target and $arg" >&2; exit 1; }
+        dashboard_target="$arg"
+        ;;
+    esac
+  done
+  # No --init: an updater must not create repositories as a side effect. A path
+  # that isn't a working tree fails here, with resolve_target's own message.
+  dashboard_target="$(harness_resolve_target "${dashboard_target:-$PWD}")"
+  harness_update_dashboard "$dashboard_target"
+  exit $?
+fi
+
 for arg in "$@"; do
   case "$arg" in
     -h|--help) usage; exit 0 ;;
@@ -182,7 +236,12 @@ while IFS= read -r rel; do
     # Written only now, after the diff above was taken from the pre-write
     # state — a --diff --apply run shows what the apply changed, not an empty
     # diff of each file against itself.
-    if [ -n "$noextract" ] && printf '%s' "$noextract" | grep -qxF "  $rel"; then
+    if [ "$rel" = "scripts/dashboard.py" ] && harness_dashboard_verdict_unmigrated "$target"; then
+      # Left stale and named below, loudly: the copy would delete the
+      # project's VERDICT answer before it ever reached dashboard.toml, and
+      # `harness update dashboard` is the command that moves it.
+      stale="$stale  $rel"$'\n'
+    elif [ -n "$noextract" ] && printf '%s' "$noextract" | grep -qxF "  $rel"; then
       # A pre-split script with no block to lift — rewritten by the project
       # past its markers. Converging would delete answers only it has, so it
       # stays stale and says whose job it is, like the beads-block files below.
@@ -301,6 +360,27 @@ if [ -n "$skipped_steps" ]; then
     # would end the subshell early and swallow the entries after it.
     printf '%s  →  %s\n' "$line" "$(harness_overlay_of "${line#  }" || printf '?')"
   done
+  echo
+fi
+
+# A dashboard.py the toml hasn't taken over yet: converging it — by --apply
+# here, or by hand off the report above — would delete the project's VERDICT
+# answer. `harness update dashboard` moves it into dashboard.toml first, and
+# from then on the file is byte-identical everywhere.
+verdict_stranded=0
+if printf '%s' "$stale" | grep -qxF "  scripts/dashboard.py" &&
+   harness_dashboard_verdict_unmigrated "$target"; then
+  verdict_stranded=1
+fi
+if [ "$verdict_stranded" -eq 1 ]; then
+  if [ "$apply" -eq 1 ]; then
+    echo "  scripts/dashboard.py left stale — it carries a VERDICT answer dashboard.toml"
+    echo "  doesn't have yet, and converging it would delete the answer."
+  else
+    echo "  scripts/dashboard.py carries a VERDICT answer dashboard.toml doesn't have"
+    echo "  yet — merging it by hand would delete the answer."
+  fi
+  echo "  Run 'harness update dashboard $target' to move it into dashboard.toml."
   echo
 fi
 

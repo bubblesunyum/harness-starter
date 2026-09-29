@@ -69,7 +69,7 @@ export -f await_bead_closed
 
 # Dirties a probe's dashboard the way real drift looks: a touched shipped file,
 # a deleted vendor asset, a file the template no longer ships, a live snapshot
-# to keep, a VERDICT answer to carry, and a project-owned toml task to leave
+# to keep, and project-owned toml answers (a task and a verdict) to leave
 # alone. Top-level with normal quoting, like fresh_probe: step bodies are
 # single-quoted, so anything quote-heavy lives here and gets exported.
 dirty_probe_dashboard() {
@@ -80,16 +80,46 @@ dirty_probe_dashboard() {
   printf '{"probe":1}' > "$probe/dashboard/state.json"
   printf '\n[[task]]\nname = "probe-task"\ncommand = ["echo", "hi"]\nlabel = "hi"\nbusy = "busy"\nwhere = "header"\n' \
     >> "$probe/dashboard.toml"
+  printf '\n[verdict]\npattern = %s\n' "'PROBE-(OK|FAIL)'" >> "$probe/dashboard.toml"
+}
+export -f dirty_probe_dashboard
+
+# Plants a pre-toml VERDICT answer inside the probe's shipped dashboard.py, the
+# way installs from before the verdict moved into dashboard.toml carry it.
+plant_old_verdict() {
+  local probe="$1"
   python3 - "$probe/scripts/dashboard.py" <<'PYEOF'
 import sys
 p = sys.argv[1]
 t = open(p).read()
-old = 'VERDICT = r"(?!)"'
-assert old in t, "template default VERDICT missing"
-open(p, "w").write(t.replace(old, 'VERDICT = r"PROBE"', 1))
+anchor = "def verdict_pattern():"
+assert anchor in t, "verdict reader missing"
+assert "\nVERDICT = " not in t, "probe already carries a VERDICT line"
+open(p, "w").write(t.replace(anchor, 'VERDICT = r"PROBE-(OK|FAIL)"  # the build tool verdict\n\n\n' + anchor, 1))
 PYEOF
 }
-export -f dirty_probe_dashboard
+export -f plant_old_verdict
+
+# The verdict pattern the probe's dashboard serves, through the real reader —
+# importing the module runs only definitions, never the server.
+probe_dashboard_verdict() {
+  local probe="$1" want="$2"
+  (cd "$probe" && python3 - "$want" <<'PYEOF'
+import importlib.util
+import sys
+want = sys.argv[1]
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+got = db.verdict_pattern()
+assert got == want, "served verdict %r != %r" % (got, want)
+# A verdict shape the validator let through must still not blow up the reader:
+# log_ok runs on gate logs with no status sibling beside them.
+db.log_ok("BUILD OK and error: boom")
+PYEOF
+  )
+}
+export -f probe_dashboard_verdict
 
 # Installed files must stay group/other readable and dashboard.py executable:
 # mktemp makes 0600 and the update's rename keeps it, so a missing chmod would
@@ -258,91 +288,189 @@ step "update respects acknowledged forks" bash -c '
 
 # The dashboard ships outside the guided merge: dirt in the shipped files is
 # refreshed, files the template dropped are removed, and the project-owned
-# pieces — the toml task, the live snapshot, the VERDICT answer — survive.
+# pieces — the toml tasks and verdict, the live snapshot — survive.
 # Each half asserts its setup, so a fixture that never dirtied reads as failure
 # rather than a probe that cannot see staleness.
-step "update-dashboard refreshes the dashboard and leaves the toml alone" bash -c '
+step "update dashboard refreshes the dashboard and leaves the toml alone" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   dirty_probe_dashboard "$probe" || { echo "error: cannot dirty the probe dashboard"; exit 1; }
   grep -qF "probe dirt" "$probe/dashboard/index.html" ||
     { echo "error: the fixture never dirtied index.html"; exit 1; }
-  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
-    { echo "error: update-dashboard failed"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "never touched dashboard.toml" ||
-    { echo "error: update-dashboard never said the toml was untouched"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "VERDICT" ||
-    { echo "error: update-dashboard never said it carried VERDICT"; echo "$out"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "never re-copied dashboard.toml" ||
+    { echo "error: update dashboard never said the toml was untouched"; echo "$out"; exit 1; }
   if grep -qF "probe dirt" "$probe/dashboard/index.html"; then
-    echo "error: update-dashboard left the dirt in index.html"; exit 1;
+    echo "error: update dashboard left the dirt in index.html"; exit 1;
   fi
   [ -f "$probe/dashboard/vendor/marked.umd.js" ] ||
-    { echo "error: update-dashboard never restored the vendor asset"; exit 1; }
+    { echo "error: update dashboard never restored the vendor asset"; exit 1; }
   [ ! -e "$probe/dashboard/old-asset.js" ] ||
-    { echo "error: update-dashboard kept a file the template dropped"; exit 1; }
+    { echo "error: update dashboard kept a file the template dropped"; exit 1; }
   grep -qF "{\"probe\":1}" "$probe/dashboard/state.json" ||
-    { echo "error: update-dashboard ate the live snapshot"; exit 1; }
-  grep -qF "VERDICT = r\"PROBE\"" "$probe/scripts/dashboard.py" ||
-    { echo "error: update-dashboard dropped the VERDICT answer"; exit 1; }
+    { echo "error: update dashboard ate the live snapshot"; exit 1; }
+  cmp template/scripts/dashboard.py "$probe/scripts/dashboard.py" ||
+    { echo "error: update dashboard left dashboard.py adrift from the template"; exit 1; }
   grep -qF "probe-task" "$probe/dashboard.toml" ||
-    { echo "error: update-dashboard touched dashboard.toml"; exit 1; }
+    { echo "error: update dashboard touched the toml tasks"; exit 1; }
+  probe_dashboard_verdict "$probe" "PROBE-(OK|FAIL)" ||
+    { echo "error: update dashboard dropped the toml verdict"; exit 1; }
   probe_dashboard_modes "$probe" || exit 1'
+
+# A pre-toml VERDICT answer still living in the shipped file moves into
+# dashboard.toml, and the file comes back byte-identical: the one migration
+# this command exists to perform, exactly once.
+step "update dashboard moves a pre-toml VERDICT answer into dashboard.toml" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed on the old VERDICT"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "moved this project'"'"'s VERDICT pattern into dashboard.toml" ||
+    { echo "error: update dashboard never said it moved the verdict"; echo "$out"; exit 1; }
+  grep -qF "pattern = '"'"'PROBE-(OK|FAIL)'"'"'" "$probe/dashboard.toml" ||
+    { echo "error: update dashboard never wrote the verdict into the toml"; exit 1; }
+  cmp template/scripts/dashboard.py "$probe/scripts/dashboard.py" ||
+    { echo "error: update dashboard left dashboard.py adrift from the template"; exit 1; }
+  probe_dashboard_verdict "$probe" "PROBE-(OK|FAIL)" ||
+    { echo "error: the moved verdict is not what the dashboard serves"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: the second run failed"; echo "$out"; exit 1; }
+  [ "$(grep -c "^pattern = " "$probe/dashboard.toml")" -eq 1 ] ||
+    { echo "error: the second run duplicated the verdict"; exit 1; }'
+
+# The toml wins when both claim an answer: the shipped file is overwritten and
+# says so, rather than silently keeping a fork the toml already replaced.
+step "update dashboard keeps the toml verdict over a stale file answer" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  printf "[verdict]\npattern = '"'"'TOML-(WINS|LOSES)'"'"'\n" >> "$probe/dashboard.toml" ||
+    { echo "error: cannot set the toml verdict"; exit 1; }
+  plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "already set a verdict" ||
+    { echo "error: update dashboard never said the toml won"; echo "$out"; exit 1; }
+  probe_dashboard_verdict "$probe" "TOML-(WINS|LOSES)" ||
+    { echo "error: update dashboard let the file answer win"; exit 1; }'
+
+# A [verdict] table with no usable pattern is already broken — the dashboard
+# complains about it on every poll — so the move refuses rather than appending
+# a second table, which would trap the answer in an unparseable file. Nothing
+# is written and the file answer survives for the hand fix.
+step "update dashboard fails loudly on a verdict table with no pattern" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
+  printf "[verdict]\n# a bare table, no pattern key\n" >> "$probe/dashboard.toml" ||
+    { echo "error: cannot plant the bare table"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) &&
+    { echo "error: update dashboard passed a patternless verdict table"; exit 1; }
+  echo "$out" | grep -q "no usable pattern" ||
+    { echo "error: update dashboard never said what was wrong"; echo "$out"; exit 1; }
+  grep -q "VERDICT = " "$probe/scripts/dashboard.py" ||
+    { echo "error: update dashboard deleted the answer it refused to move"; exit 1; }'
+
+# A pattern with the wrong group shape never reaches the reader: log_ok pulls
+# the verdict word out of exactly one group, so zero groups serve permanent
+# red and two hand back tuples, which have no .upper. The toml keeps serving
+# the default instead, with the complaint on stderr.
+step "update dashboard keeps the default over a misshapen verdict pattern" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  printf "[verdict]\npattern = '"'"'(BUILD|TEST) (OK|FAIL)'"'"'\n" >> "$probe/dashboard.toml" ||
+    { echo "error: cannot plant the bad pattern"; exit 1; }
+  probe_dashboard_verdict "$probe" "(?!)" ||
+    { echo "error: a two-group pattern reached the reader"; exit 1; }'
+
+# A stranded answer — in the file, not yet in the toml — is named by the plain
+# report and left stale by --apply: converging it would delete the answer, and
+# the dashboard updater is the one that moves it.
+step "update leaves a stranded VERDICT answer stale and names the mover" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed a stranded VERDICT"; exit 1; }
+  echo "$out" | grep -q "harness update dashboard" ||
+    { echo "error: update never named the mover"; echo "$out"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) &&
+    { echo "error: apply passed a stranded VERDICT"; exit 1; }
+  grep -q "VERDICT = " "$probe/scripts/dashboard.py" ||
+    { echo "error: apply converged the file and deleted the answer"; exit 1; }'
 
 # Acknowledged dashboard forks are left alone, like --apply leaves them: the
 # blunt tool must not delete a fork it was told is deliberate.
-step "update-dashboard leaves diverged dashboard files alone" bash -c '
+step "update dashboard leaves diverged dashboard files alone" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "\n<!-- probe chip -->\n" >> "$probe/dashboard/index.html" ||
     { echo "error: cannot fork the probe dashboard"; exit 1; }
   printf "dashboard/index.html\n" >> "$probe/harness/diverged.txt" ||
     { echo "error: cannot acknowledge the fork"; exit 1; }
-  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
-    { echo "error: update-dashboard failed on a diverged dashboard"; echo "$out"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed on a diverged dashboard"; echo "$out"; exit 1; }
   echo "$out" | grep -q "diverged" ||
-    { echo "error: update-dashboard never said diverged"; echo "$out"; exit 1; }
+    { echo "error: update dashboard never said diverged"; echo "$out"; exit 1; }
   grep -qF "probe chip" "$probe/dashboard/index.html" ||
-    { echo "error: update-dashboard wrote an acknowledged fork"; exit 1; }'
+    { echo "error: update dashboard wrote an acknowledged fork"; exit 1; }'
 
-# A diverged entry for a file that needs no acknowledgment — dashboard.py is
-# FILL THIS IN, so `harness update` fails loudly on the entry — is ignored
-# here with a note rather than honored: honoring it while update rejects it
-# would give contradictory orders, and the fork it claims to protect is one
+# dashboard.py is byte-identical everywhere now, so acknowledging it is
+# meaningful and honored — unlike a vendor asset, which is data.
+step "update dashboard leaves a diverged dashboard.py alone" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  printf "\n# probe fork\n" >> "$probe/scripts/dashboard.py" ||
+    { echo "error: cannot fork dashboard.py"; exit 1; }
+  printf "scripts/dashboard.py\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot acknowledge the fork"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed on a diverged dashboard.py"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "diverged" ||
+    { echo "error: update dashboard never said diverged"; echo "$out"; exit 1; }
+  grep -qF "probe fork" "$probe/scripts/dashboard.py" ||
+    { echo "error: update dashboard wrote an acknowledged fork"; exit 1; }'
+
+# A diverged entry for a file that needs no acknowledgment — vendor assets are
+# data, so `harness update` fails loudly on the entry — is ignored here with
+# a note rather than honored: honoring it while update rejects it would give
+# contradictory orders, and the fork it claims to protect is one
 # `harness diverge` itself refuses.
-step "update-dashboard ignores diverged entries that acknowledge nothing" bash -c '
+step "update dashboard ignores diverged entries that acknowledge nothing" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   dirty_probe_dashboard "$probe" || { echo "error: cannot dirty the probe dashboard"; exit 1; }
-  printf "scripts/dashboard.py\n" >> "$probe/harness/diverged.txt" ||
+  printf "dashboard/vendor/marked.umd.js\n" >> "$probe/harness/diverged.txt" ||
     { echo "error: cannot write the diverged entry"; exit 1; }
-  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
-    { echo "error: update-dashboard failed on a meaningless entry"; echo "$out"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed on a meaningless entry"; echo "$out"; exit 1; }
   echo "$out" | grep -q "acknowledge nothing" ||
-    { echo "error: update-dashboard never said it ignored the entry"; echo "$out"; exit 1; }
-  grep -qF "VERDICT = r\"PROBE\"" "$probe/scripts/dashboard.py" ||
-    { echo "error: update-dashboard left dashboard.py stale"; exit 1; }'
+    { echo "error: update dashboard never said it ignored the entry"; echo "$out"; exit 1; }
+  [ -f "$probe/dashboard/vendor/marked.umd.js" ] ||
+    { echo "error: update dashboard honored a meaningless entry"; exit 1; }'
 
 # A diverged entry naming a file the template no longer ships fails loudly and
 # deletes nothing: the entry is already dead — `harness update` fails on it
 # too — so both commands give the same order, fix the list.
-step "update-dashboard fails loudly on diverged entries for dropped files" bash -c '
+step "update dashboard fails loudly on diverged entries for dropped files" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "stale" > "$probe/dashboard/legacy.js" ||
     { echo "error: cannot plant the extra file"; exit 1; }
   printf "dashboard/legacy.js\n" >> "$probe/harness/diverged.txt" ||
     { echo "error: cannot write the diverged entry"; exit 1; }
-  out=$(bin/harness update-dashboard "$probe" 2>&1) &&
-    { echo "error: update-dashboard passed a dead diverged entry"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) &&
+    { echo "error: update dashboard passed a dead diverged entry"; exit 1; }
   echo "$out" | grep -q "no longer ships" ||
-    { echo "error: update-dashboard never said what was wrong"; echo "$out"; exit 1; }
+    { echo "error: update dashboard never said what was wrong"; echo "$out"; exit 1; }
   [ -f "$probe/dashboard/legacy.js" ] ||
-    { echo "error: update-dashboard deleted the file it refused to handle"; exit 1; }'
+    { echo "error: update dashboard deleted the file it refused to handle"; exit 1; }'
 
 # A directory where a shipped file goes fails loudly and keeps the directory:
 # without the guard the rename would move the new file inside it, report
 # success, and the delete half would then remove the evidence.
-step "update-dashboard fails loudly when a file path is a directory" bash -c '
+step "update dashboard fails loudly when a file path is a directory" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/dashboard/index.html" ||
@@ -351,28 +479,28 @@ step "update-dashboard fails loudly when a file path is a directory" bash -c '
     { echo "error: cannot plant the directory"; exit 1; }
   printf "note" > "$probe/dashboard/index.html/note.txt" ||
     { echo "error: cannot plant the note"; exit 1; }
-  out=$(bin/harness update-dashboard "$probe" 2>&1) &&
-    { echo "error: update-dashboard passed a directory at a file path"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) &&
+    { echo "error: update dashboard passed a directory at a file path"; exit 1; }
   echo "$out" | grep -q "is not a file" ||
-    { echo "error: update-dashboard never said what was wrong"; echo "$out"; exit 1; }
+    { echo "error: update dashboard never said what was wrong"; echo "$out"; exit 1; }
   [ -f "$probe/dashboard/index.html/note.txt" ] ||
-    { echo "error: update-dashboard destroyed the evidence"; exit 1; }'
+    { echo "error: update dashboard destroyed the evidence"; exit 1; }'
 
-# A project with no dashboard at all gets one: update-dashboard installs what
+# A project with no dashboard at all gets one: update dashboard installs what
 # is missing, so a partial install converges without a full re-add.
-step "update-dashboard installs a missing dashboard" bash -c '
+step "update dashboard installs a missing dashboard" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm -rf "$probe/dashboard" "$probe/scripts/dashboard.py" ||
     { echo "error: cannot remove the probe dashboard"; exit 1; }
-  out=$(bin/harness update-dashboard "$probe" 2>&1) ||
-    { echo "error: update-dashboard failed on a missing dashboard"; echo "$out"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed on a missing dashboard"; echo "$out"; exit 1; }
   [ -f "$probe/dashboard/index.html" ] ||
-    { echo "error: update-dashboard never installed index.html"; exit 1; }
+    { echo "error: update dashboard never installed index.html"; exit 1; }
   [ -f "$probe/scripts/dashboard.py" ] ||
-    { echo "error: update-dashboard never installed dashboard.py"; exit 1; }
+    { echo "error: update dashboard never installed dashboard.py"; exit 1; }
   grep -qF "name = \"verify\"" "$probe/dashboard.toml" ||
-    { echo "error: update-dashboard touched dashboard.toml"; exit 1; }'
+    { echo "error: update dashboard touched dashboard.toml"; exit 1; }'
 
 # Stack guidance reaches only the projects that use the stack: a Swift probe
 # gets swift.md and not web.md, a bare one gets neither, and each reads as

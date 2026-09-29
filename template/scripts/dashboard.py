@@ -374,13 +374,13 @@ def cached_stale():
     return _stale["n"]
 
 
-# ── FILL THIS IN ──────────────────────────────────────────────────────────
-# Your build tool's success/failure line, if it prints one — e.g. xcodebuild's
-# "** BUILD SUCCEEDED **" wants r"\*\* (?:BUILD|TEST) (SUCCEEDED|FAILED) \*\*".
-# Leave it as r"(?!)" — a pattern that matches nothing — if yours prints no
-# verdict; the error-line fallback below is what runs then.
-# ──────────────────────────────────────────────────────────────────────────
-VERDICT = r"(?!)"
+# Your build tool's success/failure line lives in dashboard.toml, beside the run
+# table — [verdict] pattern, e.g. '\*\* (?:BUILD|TEST) (SUCCEED|FAIL)[A-Z]* \*\*'
+# for xcodebuild. Missing means r"(?!)", a pattern that matches nothing, and the
+# error-line fallback in log_ok is what runs then. It lives in the toml rather
+# than here so this file stays byte-identical everywhere: per-project answers
+# belong in project-owned files, never in shipped ones.
+DEFAULT_VERDICT = r"(?!)"
 
 
 def ago_for(at):
@@ -407,10 +407,10 @@ def log_ok(text):
     """The text fallback for a step with no status file beside its log. A build
     tool's own verdict wins where it prints one. Counting "error:" lines does
     not work on its own: a passing test run logs dozens from the app's output,
-    and reading those as failures marks a green suite red. Add your toolchain's
-    verdict line to VERDICT. Empty still fails: a step that never ran must not
-    read green."""
-    verdict = re.findall(VERDICT, text)
+    and reading those as failures marks a green suite red. Set your toolchain's
+    verdict line as [verdict] pattern in dashboard.toml. Empty still fails: a
+    step that never ran must not read green."""
+    verdict = re.findall(verdict_pattern(), text)
     if verdict:
         return verdict[-1].upper() in ("SUCCEEDED", "PASSED", "OK")
     return bool(text.strip()) and not re.search(r"\berror:", text)
@@ -937,9 +937,13 @@ def move_bead(payload):
 
 
 # The loops a human still triggers by hand. They live in dashboard.toml beside
-# this file — project-owned, installed once, never touched by `harness update`
-# — so adding a button is a TOML edit, not a code edit, and this file stays
-# byte-identical everywhere. The table is still a fixed list, never anything
+# this file — project-owned, installed once, never touched by
+# `harness update dashboard` — so adding a button is a TOML edit, not a code
+# edit, and this file stays byte-identical everywhere.
+#
+# The build tool's verdict pattern lives in the same file, under [verdict].
+#
+# The table is still a fixed list, never anything a fixed list, never anything
 # the page names: the only commands this server will ever run are the ones
 # written there. It is also the only place a run button is described: label,
 # the label while it's going, and where on the page it belongs. The page draws
@@ -973,7 +977,8 @@ _TASK_WHERE = {"header", "gate"} | {
     f"lane:{k}" for k in
     ("ready", "blocked", "in_progress", "review", "done", "backlog", "staging", "worktree")}
 
-_toml = {"mtime": (0.0, 0), "reported": (0.0, 0), "tasks": None, "name": None}
+_toml = {"mtime": (0.0, 0), "reported": (0.0, 0), "tasks": None, "name": None,
+        "verdict": DEFAULT_VERDICT, "verdict_reported": (0.0, 0)}
 _toml_lock = threading.Lock()
 
 
@@ -1016,11 +1021,39 @@ def _check_tasks(doc):
     return tasks, name
 
 
+def _check_verdict(doc):
+    """dashboard.toml's [verdict] pattern, validated. Returns the default when
+    the file says nothing; raises ValueError when it says something unrunnable."""
+    section = doc.get("verdict", {})
+    if section is None:
+        return DEFAULT_VERDICT
+    if not isinstance(section, dict):
+        raise ValueError("[verdict] is not a table")
+    pattern = section.get("pattern", DEFAULT_VERDICT)
+    if not isinstance(pattern, str) or not pattern or len(pattern) > 500:
+        raise ValueError("[verdict].pattern must be a 1–500 character string")
+    try:
+        groups = re.compile(pattern).groups
+    except re.error as e:
+        raise ValueError(f"[verdict].pattern does not compile: {e}")
+    # log_ok reads the verdict word out of findall's last match: with no group
+    # the whole match is compared (never a bare SUCCEEDED), and with two or
+    # more findall hands back tuples, which have no .upper. Either shape would
+    # serve a permanent wrong answer instead of failing, so the shape is
+    # checked here, once, where the complaint names the fix.
+    if groups != 1:
+        raise ValueError("[verdict].pattern must hold exactly one (...) group — "
+                         "the verdict word; group the rest with (?:...)")
+    return pattern
+
+
 def _refresh_toml():
     """Re-read dashboard.toml when it changed. Missing file: the defaults,
-    silently. Broken file: keep serving the last good table and complain once
+    silently. Broken file: keep serving the last good values and complain once
     per change, not once per snapshot build — the stamp only advances past a
-    file that parsed, so a torn read retries instead of sticking."""
+    file that fully parsed, so a torn read retries instead of sticking. The
+    task table and the verdict pattern are read independently: one bad section
+    must not take the other one down with it."""
     global _toml
     try:
         st = (ROOT / "dashboard.toml").stat()
@@ -1031,25 +1064,65 @@ def _refresh_toml():
         if stamp == _toml["mtime"]:
             return
         if stamp == (0.0, 0):
-            _toml = {"mtime": stamp, "reported": stamp, "tasks": dict(DEFAULT_TASKS), "name": None}
+            _toml = {"mtime": stamp, "reported": stamp, "tasks": dict(DEFAULT_TASKS), "name": None,
+                     "verdict": DEFAULT_VERDICT, "verdict_reported": stamp}
             return
         try:
             with open(ROOT / "dashboard.toml", "rb") as f:
-                tasks, name = _check_tasks(tomllib.load(f))
-        except (OSError, tomllib.TOMLDecodeError, ValueError) as e:
-            if stamp != _toml["reported"]:
-                # Guarded: a detached server can outlive its stderr, and a
-                # logging print that raises would take the refresher thread —
-                # and every future snapshot — down with it.
-                try:
-                    print(f"dashboard: {e} — keeping last good table", file=sys.stderr)
-                except OSError:
-                    pass
-                _toml["reported"] = stamp
+                doc = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            _complain_once(_toml, stamp, f"dashboard: {e} — keeping last good table",
+                           "reported")
             if _toml["tasks"] is None:
                 _toml["tasks"] = dict(DEFAULT_TASKS)
             return
-        _toml = {"mtime": stamp, "reported": stamp, "tasks": tasks, "name": name}
+        fresh = dict(_toml)
+        try:
+            fresh["tasks"], fresh["name"] = _check_tasks(doc)
+        except ValueError as e:
+            _complain_once(fresh, stamp, f"dashboard: {e} — keeping last good table",
+                           "reported")
+            if fresh["tasks"] is None:
+                fresh["tasks"] = dict(DEFAULT_TASKS)
+        else:
+            fresh["reported"] = stamp
+        try:
+            fresh["verdict"] = _check_verdict(doc)
+        except ValueError as e:
+            _complain_once(fresh, stamp, f"dashboard: {e} — keeping last good verdict",
+                           "verdict_reported")
+        else:
+            fresh["verdict_reported"] = stamp
+        # The stamp advances only past a file that fully parsed; anything less
+        # retries on the next cycle instead of sticking.
+        if fresh["reported"] == stamp and fresh["verdict_reported"] == stamp:
+            fresh["mtime"] = stamp
+        _toml = fresh
+
+
+def _complain_once(scope, stamp, message, key):
+    """One section's once-per-change complaint: said out loud the first time a
+    stamp is seen broken, silent while it stays broken. Scope is _toml or the
+    in-progress fresh dict; key is which stamp it tracks."""
+    if stamp != scope[key]:
+        _complain_guarded(message)
+        scope[key] = stamp
+
+
+def _complain_guarded(message):
+    # A detached server can outlive its stderr, and a logging print that
+    # raises would take the refresher thread — and every future snapshot —
+    # down with it.
+    try:
+        print(message, file=sys.stderr)
+    except OSError:
+        pass
+
+
+def verdict_pattern():
+    """The [verdict] pattern from dashboard.toml, or the match-nothing default."""
+    _refresh_toml()
+    return _toml["verdict"]
 
 
 def tasks():

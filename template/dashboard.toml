@@ -31,3 +31,15 @@ command = ["git", "push"]
 label = "push"
 busy = "pushing…"
 where = "lane:staging"
+
+# Your build tool's success/failure line, if it prints one — e.g. xcodebuild's
+# "** BUILD SUCCEEDED **" wants pattern = '\*\* (?:BUILD|TEST) (SUCCEED|FAIL)[A-Z]* \*\*'.
+# Uncomment and set it; the dashboard reads this file on every snapshot build,
+# so a change lands on the next poll with no restart. Leave it commented out
+# if your tool prints no verdict — the error-line fallback is what runs then.
+# A TOML literal string (single quotes) takes the pattern as-is, backslashes
+# and all; it just can't hold a single quote itself. Exactly one (...)
+# group — the verdict word, SUCCEEDED or FAILED above; group the rest with
+# (?:...) — or the dashboard rejects it rather than serve a wrong answer.
+# [verdict]
+# pattern = '\*\* (?:BUILD|TEST) (SUCCEED|FAIL)[A-Z]* \*\*'

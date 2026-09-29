@@ -136,10 +136,13 @@ prints the follow-ups the merge still owes — rebuilding the generated agent
 copies, re-blessing, verifying. `harness add` runs the same check on what it
 skips, so a re-run says which of those skips were the install failing.
 
-Dashboard fixes ship without the guided merge: `harness update-dashboard`
+Dashboard fixes ship without the guided merge: `harness update dashboard`
 re-copies `dashboard/` and `scripts/dashboard.py` over the project, never
-touching `dashboard.toml`. The one answer a project may hold inside the
-shipped files — the `VERDICT` pattern in `dashboard.py` — is carried across.
+re-copying `dashboard.toml`. That file is where the project owns its answers —
+run buttons, the build tool's verdict pattern, the display name — so there is
+nothing to merge and the shipped files stay byte-identical everywhere. A
+`VERDICT` answer still living inside `dashboard.py` from before the move is
+lifted into the toml first; `harness update` names that move when it sees one.
 
 ## Adding a command
 
