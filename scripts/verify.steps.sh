@@ -100,6 +100,25 @@ PYEOF
 }
 export -f plant_old_verdict
 
+# The default verdict, served silently: a dashboard.toml with no [verdict]
+# section is the common case — every fresh install — so reading it must
+# neither complain nor serve anything but the match-nothing default. Fails on
+# any stderr, which is where a validator complaint would land.
+probe_dashboard_default_silent() {
+  local probe="$1" err
+  err="$(cd "$probe" && python3 - <<'PYEOF' 2>&1
+import importlib.util
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+got = db.verdict_pattern()
+assert got == db.DEFAULT_VERDICT, "default verdict %r" % (got,)
+PYEOF
+)"
+  [ -z "$err" ] || { echo "error: the default verdict complained: $err"; return 1; }
+}
+export -f probe_dashboard_default_silent
+
 # The verdict pattern the probe's dashboard serves, through the real reader —
 # importing the module runs only definitions, never the server.
 probe_dashboard_verdict() {
@@ -317,6 +336,16 @@ step "update dashboard refreshes the dashboard and leaves the toml alone" bash -
   probe_dashboard_verdict "$probe" "PROBE-(OK|FAIL)" ||
     { echo "error: update dashboard dropped the toml verdict"; exit 1; }
   probe_dashboard_modes "$probe" || exit 1'
+
+# No [verdict] section is the common case — every fresh install — so the
+# default must be served silently: no complaint on stderr, match-nothing
+# pattern from the reader.
+step "dashboard serves the default verdict silently with no verdict section" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  grep -q "^\\[verdict\\]" "$probe/dashboard.toml" &&
+    { echo "error: the fixture already has a verdict section"; exit 1; }
+  probe_dashboard_default_silent "$probe" || exit 1'
 
 # A pre-toml VERDICT answer still living in the shipped file moves into
 # dashboard.toml, and the file comes back byte-identical: the one migration

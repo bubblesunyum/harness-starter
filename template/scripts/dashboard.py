@@ -1029,7 +1029,15 @@ def _check_verdict(doc):
         return DEFAULT_VERDICT
     if not isinstance(section, dict):
         raise ValueError("[verdict] is not a table")
-    pattern = section.get("pattern", DEFAULT_VERDICT)
+    # No verdict section at all: the match-nothing default, silently — it is
+    # the fresh-install case and said nothing wrong. A table that sets keys
+    # but no pattern stays loud below: a typo'd key would otherwise read as
+    # no verdict forever, with no signal.
+    if not section:
+        return DEFAULT_VERDICT
+    if "pattern" not in section:
+        raise ValueError("[verdict] sets no pattern — delete the table or set pattern")
+    pattern = section["pattern"]
     if not isinstance(pattern, str) or not pattern or len(pattern) > 500:
         raise ValueError("[verdict].pattern must be a 1–500 character string")
     try:
