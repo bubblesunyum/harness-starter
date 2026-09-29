@@ -20,7 +20,7 @@
 # here carry no extension at all — a glob-by-suffix scope leaves the dispatcher
 # unreviewable, which is how it kept its path-traversal bug through a full pass.
 # The docs are in scope too: in this project the prose is half the product.
-SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'bin/*' 'commands/*' 'scripts/hooks/*'
+SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'bin/*' 'commands/*' 'scripts/hooks/*' '.gitignore'
        ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
 
 # Screenshots the design reviewer looks at. Whatever drives your app should

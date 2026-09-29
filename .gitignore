@@ -12,3 +12,6 @@ __pycache__/
 
 # Per-role models, naming what this machine happens to have — machine-local.
 harness/models.json
+
+# Agent scratch — created here, removed when done, never committed.
+.tmp/

@@ -242,6 +242,8 @@ append_ignore 'dashboard/state.json' \
   'The dashboard snapshot, rewritten on every poll — machine-local.'
 append_ignore 'harness/models.json' \
   'Per-role models, naming what this machine happens to have — machine-local.'
+append_ignore '.tmp/' \
+  'Agent scratch — created here, removed when done, never committed.'
 
 # Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
 # AGENTS.md. The import is what makes the contract always-loaded in both, rather

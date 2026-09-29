@@ -15,8 +15,10 @@
 # Add this project's own source globs. The docs are here from the start: a
 # CLAUDE.md or a skill that quietly stopped being true is a defect the reviewers
 # should see, and a suffix-only scope is also how a file with no extension at all
-# stays unreviewable — list such files by path.
-SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'scripts/hooks/*'
+# stays unreviewable — list such files by path. .gitignore is one: it decides
+# what gets committed, and an edit there once shipped inside a change whose
+# packet never listed it.
+SCOPE=('*.py' '*.sh' '*.md' '*.html' '*.json' 'scripts/hooks/*' '.gitignore'
        ':(exclude).beads/*' ':(exclude)dashboard/vendor/*')
 
 # Screenshots the design reviewer looks at. Whatever drives your app should
