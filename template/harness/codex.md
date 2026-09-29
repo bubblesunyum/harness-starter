@@ -24,10 +24,15 @@ point to `.claude/skills/`. Edit the shared source when changing the procedure.
 `.claude/agents/`; `check` detects drift. The writer leaves project hooks alone
 and refuses to replace a copied skill until its contents have been reconciled.
 
-For the review pass, use Codex subagents with the named reviewer roles. Inherit
-the host model; Claude model aliases in the shared instructions apply to Claude.
-If a role is unavailable in the current session, give a default subagent its
-`.claude/agents/<role>.md` prompt and the review packet. Use Codex's browser
+For the review pass, run each configured reviewer through `scripts/agent.py`.
+Start the applicable roles together so they independently inspect the same
+packet through OpenCode. A visual review requires an image-capable roster model;
+`scripts/agent.py` checks that capability before running it.
+If a role has no suitable model, or an OpenCode run exits non-zero, run it as a
+Codex subagent; a failed run is not a clean review. If a native role is
+unavailable, give a default subagent its `.claude/agents/<role>.md` prompt and
+the review packet.
+Use Codex's browser
 panel for dashboard URLs. Shared cost measurements describe Claude sessions.
 Keep the shared `.claude/memory-archive/` path. For handoffs, use Codex task tools
 only when the user requests a separate task; `claude --bg` is Claude-only.

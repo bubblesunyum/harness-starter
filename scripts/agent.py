@@ -107,6 +107,35 @@ def agent_for(role):
          f"or check the role name against harness/models.json")
 
 
+def require_image_model(model):
+    """Refuse a visual review unless OpenCode says its model accepts images."""
+    provider, separator, _ = model.partition("/")
+    if not separator:
+        fail(f"reviewer-design model {model} has no provider ID")
+    try:
+        out = subprocess.run(["opencode", "models", provider, "--verbose"],
+                             capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                             cwd=ROOT, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        fail(f"cannot verify image support for {model}; run reviewer-design natively")
+    if out.returncode != 0:
+        fail(f"cannot verify image support for {model}; run reviewer-design natively")
+    lines = out.stdout.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.rstrip("\r\n") != model:
+            continue
+        try:
+            details, _ = json.JSONDecoder().raw_decode("".join(lines[index + 1:]).lstrip())
+        except json.JSONDecodeError:
+            break
+        capabilities = details.get("capabilities", {}) if isinstance(details, dict) else {}
+        inputs = capabilities.get("input", {}) if isinstance(capabilities, dict) else {}
+        if isinstance(inputs, dict) and inputs.get("image") is True:
+            return
+        break
+    fail(f"cannot verify image support for {model}; run reviewer-design natively")
+
+
 def agent_config(agent):
     """OPENCODE_CONFIG_CONTENT that lets `opencode run --agent` use a generated
     agent, and lets it read what review.sh hands it.
@@ -251,6 +280,8 @@ def main(argv):
     if not model:
         fail(f"no model for {role} in harness/models.json — "
              f"run scripts/models.py ensure")
+    if role == "reviewer-design":
+        require_image_model(model)
 
     round_number = 1
     if session:

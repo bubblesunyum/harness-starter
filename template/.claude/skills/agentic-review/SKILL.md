@@ -17,8 +17,7 @@ scripts/verify.sh            # 1. it has to build and pass tests first
 scripts/review.sh            # 3. build the packet, prints its path
 ```
 
-Then spawn all three reviewers **in parallel, in one message**, each pointed at
-the packet path:
+Run the applicable reviewers against the same packet:
 
 - `reviewer-taste` — the project's own standards
 - `reviewer-correctness` — real defects
@@ -31,20 +30,22 @@ Give each one only the packet path and one line on what the change was meant to
 do. They read `CLAUDE.md` themselves. Don't paste the diff into the prompt —
 that's the packet's job, and pasting it doubles the cost.
 
-**Off the account, when the roster allows.** If `harness/models.json` names a
-model for `reviewer-taste` and `reviewer-correctness`, run those two through
-opencode instead of spawning them — each as its own background command, so
-the two run at once:
+**Off the account, when the roster allows.** Run each reviewer with a model in
+`harness/models.json` through opencode instead of spawning it — each as its own
+background command, so the applicable roles run at once. The design model must
+support image input:
 
 ```bash
 scripts/agent.py reviewer-taste "Review <packet> — <what it was meant to do>"
 scripts/agent.py reviewer-correctness "Review <packet> — <what it was meant to do>"
+scripts/agent.py reviewer-design "Review <packet> — <what it was meant to do>"
 ```
 
-Same prompts, same packet, different model and bill. A non-zero exit is a
-reviewer that didn't run, not one that found nothing — spawn it natively
-instead. `reviewer-design` stays native: it reads screenshots, and a roster
-model that can't see pixels would pass every one of them.
+Run `reviewer-design` only when the change affects the screen; it must inspect
+every listed capture. Each role gets its own prompt and the same packet, outside
+the calling session. A non-zero exit is a reviewer that didn't run, not one that
+found nothing — spawn it natively instead. Run a role with no suitable roster
+model natively too.
 
 Review a change that doesn't build yet and you'll get findings about the
 breakage instead of the design, so keep the order.

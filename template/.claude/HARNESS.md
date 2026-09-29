@@ -255,6 +255,9 @@ it:
   without it — including reads outside the project, which is where review.sh
   puts the packet. Reviewers are granted `/tmp`, and any other refusal makes
   the script exit non-zero rather than pass on a reply written blind.
+- `reviewer-design` checks `opencode models --verbose` for image input on its
+  selected model before running. Unknown or text-only models fail, leaving the
+  visual pass to the native reviewer instead of accepting a blind reply.
 
 The revision cap lives in the script rather than in the `delegate` skill's prose
 because guidance is what a long thread erodes first. It counts the session's

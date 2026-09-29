@@ -31,6 +31,11 @@ if sys.argv[1] == "export":
     n = int(os.environ.get("FAKE_ROUNDS", "1"))
     print(json.dumps({"messages": [{"info": {"role": "user"}}] * n}))
     sys.exit(0)
+if sys.argv[1] == "models":
+    print(os.environ.get("FAKE_MODEL", "go/vision"))
+    print(json.dumps({"capabilities": {"input": {
+        "image": os.environ.get("FAKE_IMAGE", "true") == "true"}}}))
+    sys.exit(int(os.environ.get("FAKE_MODELS_EXIT", "0")))
 sys.stdout.write(os.environ.get("FAKE_EVENTS", ""))
 sys.stderr.write(os.environ.get("FAKE_STDERR", ""))
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
@@ -58,11 +63,13 @@ class AgentTests(unittest.TestCase):
         (root / "harness").mkdir()
         (root / "harness/models.json").write_text(json.dumps({
             "reviewer-taste": {"model": "go/taste"},
+            "reviewer-design": {"model": "go/vision", "variant": "xhigh"},
             "implement": {"model": "go/impl", "variant": " xhigh "},
         }))
         (root / ".opencode/agent").mkdir(parents=True)
         (root / ".opencode/agent/reviewer-taste.md").write_text("---\nmode: subagent\n---\n")
         (root / ".opencode/agent/reviewer-correctness.md").write_text("---\nmode: subagent\n---\n")
+        (root / ".opencode/agent/reviewer-design.md").write_text("---\nmode: subagent\n---\n")
         bin_dir = root / "bin"
         bin_dir.mkdir()
         fake = bin_dir / "opencode"
@@ -124,6 +131,23 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--variant") + 1], "xhigh")
         self.agent("reviewer-taste", "go", events=text_event("ok"))
         self.assertNotIn("--variant", self.calls()[-1]["argv"])
+
+    def test_visual_reviewer_runs_only_with_an_image_capable_model(self):
+        out = self.agent("reviewer-design", "review", events=text_event("visual ok"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), "visual ok")
+        self.assertEqual([c["argv"][0] for c in self.calls()], ["models", "run"])
+        self.assertEqual(self.calls()[1]["argv"][7:9], ["--variant", "xhigh"])
+
+    def test_visual_reviewer_refuses_a_text_only_or_unknown_model(self):
+        for fake in ({"image": "false"}, {"model": "go/other"},
+                     {"models_exit": "1"}):
+            with self.subTest(fake=fake):
+                self.log.unlink(missing_ok=True)
+                out = self.agent("reviewer-design", "review", **fake)
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("cannot verify image support", out.stderr)
+                self.assertEqual([c["argv"][0] for c in self.calls()], ["models"])
 
     def test_a_message_starting_with_a_dash_is_not_a_flag(self):
         self.agent("reviewer-taste", "- fix naming", events=text_event("ok"))
