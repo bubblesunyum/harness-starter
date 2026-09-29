@@ -43,11 +43,16 @@ ROOT = Path(__file__).resolve().parent.parent
 def _bd_prefix():
     """The ledger's bead prefix, asked of the ledger itself at runtime — the
     installer used to bake it into this file, which made every copy differ and
-    un-updatable. The ledger is the one source of truth for it."""
+    un-updatable. The ledger is the one source of truth for it.
+
+    Read off `bd list`, never `bd config get` or `bd info`: both auto-import a
+    stale .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+    deleted beads (har-67c). `bd list` never imports."""
     try:
-        r = subprocess.run(["bd", "config", "get", "issue_prefix"],
+        r = subprocess.run(["bd", "list", "--json", "--all"],
                            capture_output=True, text=True, timeout=10, cwd=ROOT)
-        got = (r.stdout or "").strip()
+        ids = json.loads(r.stdout or "[]")
+        got = str((ids[0].get("id", "") if ids else "").split("-", 1)[0]) if ids else ""
         if r.returncode == 0 and re.fullmatch(r"[a-z0-9]{1,10}", got):
             return got
     except Exception:

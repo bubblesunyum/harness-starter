@@ -64,7 +64,10 @@ how the pieces fit together.
   per-write flush, so without this a session commits a file that still lists
   closed beads and misses new ones. Checked rather than regenerated — a gate
   that rewrote the file would still need the session to commit it, so it says
-  the command instead.
+  the command instead. The check runs before every other `bd` call in the
+  gate, because several of them auto-import a stale export when the ledger
+  looks stale — resurrecting deleted beads — and anything earlier would heal
+  the drift under test and report a match on resurrected state.
 - **Dashboard:** `scripts/dashboard.py` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in

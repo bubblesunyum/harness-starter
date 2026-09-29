@@ -35,7 +35,12 @@ base="${1:-}"
 _harness_prefix() {
   local p=""
   if command -v bd >/dev/null 2>&1; then
-    p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+    # Never `bd config get` or `bd info` here: both auto-import a stale
+    # .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+    # deleted beads (har-67c). `bd list` never imports, so the prefix comes
+    # from the first bead id instead; an empty ledger has no ids and falls
+    # through to the directory name below.
+    p="$(bd list --json --all 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); i=(d[0].get("id","") if d else ""); print(i.split("-",1)[0] if "-" in i else "")' 2>/dev/null)" || true
   fi
   if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
     # Physical path, matching what `harness add` derived at install time and what

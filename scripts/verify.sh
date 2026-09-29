@@ -27,7 +27,13 @@ cd "$ROOT"
 _harness_prefix() {
   local p=""
   if command -v bd >/dev/null 2>&1; then
-    p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+    # Never `bd config get` or `bd info` here: both auto-import a stale
+    # .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+    # deleted beads — and this lookup runs before the ledger-export check that
+    # exists to catch that drift, so it must never be the thing that heals it
+    # (har-67c). `bd list` never imports, so the prefix comes from the first
+    # bead id instead; an empty ledger has no ids and falls through below.
+    p="$(bd list --json --all 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); i=(d[0].get("id","") if d else ""); print(i.split("-",1)[0] if "-" in i else "")' 2>/dev/null)" || true
   fi
   if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
     # Physical path, matching what `harness add` derived at install time and what
@@ -72,34 +78,6 @@ step() {
 }
 
 echo "verify: $ROOT"
-
-step "codex support" python3 scripts/codex-support.py check
-step "codex regression" python3 scripts/test-codex-support.py
-step "agent runner" python3 scripts/test-agent.py
-
-# The knowledge layer gets the same treatment as the code. A doc that quietly
-# stopped being true is worse than a missing one, and it can't be caught by
-# reviewing a diff — the stale file isn't in the diff, the thing it describes is.
-# Runs first because it takes a second and needs no build.
-if context_out="$(scripts/context.py check 2>&1)"; then
-  echo "$context_out"
-else
-  failed=1
-  echo "$context_out"
-fi
-
-# The reviewers exist twice — .claude/agents/ for Claude Code, .opencode/agent/
-# generated from it — and the generated half drifts silently, because nothing
-# about editing the source makes opencode complain. Checked rather than
-# regenerated: a gate that quietly fixed this would pass every time and never
-# say the two had parted company.
-if agents_out="$(scripts/opencode-agents.py check 2>&1)"; then
-  echo "$agents_out"
-else
-  failed=1
-  echo "$agents_out"
-fi
-
 # The committed ledger export is the git transport for the beads: a fresh clone
 # hydrates from .beads/issues.jsonl, while the Dolt working set behind it is
 # gitignored. Nothing regenerates the file on mutation — auto-export is a timer,
@@ -108,6 +86,14 @@ fi
 # both directions: any created, updated, or deleted bead trips it, memories
 # included, which a plain export omits. Every path prints its one line, passes
 # included: at 2am a silent check is indistinguishable from one that never ran.
+#
+# This runs before every other bd call in the gate — the context check's brief
+# included. `bd config`, `bd info`, `bd stats` and friends auto-import a stale
+# .beads/issues.jsonl when the ledger looks stale to them, resurrecting deleted
+# beads (har-67c); anything that ran first would heal the drift this check
+# exists to catch, and the gate would report a match on resurrected state. The
+# only bd call before this point is the prefix lookup up top, which reads
+# `bd list` — a command that never imports.
 ledger_export_check() {
   if ! command -v bd >/dev/null 2>&1 || [ ! -d .beads/embeddeddolt ]; then
     # No live ledger: bd missing, or a fresh clone carrying the committed
@@ -190,6 +176,33 @@ if export_out="$(ledger_export_check 2>&1)"; then
 else
   failed=1
   echo "$export_out"
+fi
+
+step "codex support" python3 scripts/codex-support.py check
+step "codex regression" python3 scripts/test-codex-support.py
+step "agent runner" python3 scripts/test-agent.py
+
+# The knowledge layer gets the same treatment as the code. A doc that quietly
+# stopped being true is worse than a missing one, and it can't be caught by
+# reviewing a diff — the stale file isn't in the diff, the thing it describes is.
+# Runs early because it takes a second and needs no build.
+if context_out="$(scripts/context.py check 2>&1)"; then
+  echo "$context_out"
+else
+  failed=1
+  echo "$context_out"
+fi
+
+# The reviewers exist twice — .claude/agents/ for Claude Code, .opencode/agent/
+# generated from it — and the generated half drifts silently, because nothing
+# about editing the source makes opencode complain. Checked rather than
+# regenerated: a gate that quietly fixed this would pass every time and never
+# say the two had parted company.
+if agents_out="$(scripts/opencode-agents.py check 2>&1)"; then
+  echo "$agents_out"
+else
+  failed=1
+  echo "$agents_out"
 fi
 
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────

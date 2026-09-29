@@ -30,7 +30,13 @@ case "$message" in fixup!*|squash!*|amend!*) exit 0 ;; esac
 harness_prefix() {
   local p=""
   if command -v bd >/dev/null 2>&1; then
-    p="$(bd config get issue_prefix 2>/dev/null | tr -d '[:space:]')" || true
+    # Never `bd config get` or `bd info` here: both auto-import a stale
+    # .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+    # deleted beads — and this hook runs on every commit, the exact moment a
+    # deletion committed without a regen would come back (har-67c). `bd list`
+    # never imports, so the prefix comes from the first bead id instead; the
+    # per-id `bd show` check below is a quiet read and stays as is.
+    p="$(bd list --json --all 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); i=(d[0].get("id","") if d else ""); print(i.split("-",1)[0] if "-" in i else "")' 2>/dev/null)" || true
   fi
   if ! printf '%s' "$p" | grep -qE '^[a-z0-9]{1,10}$'; then
     # Physical path: git runs hooks from the toplevel, and -P matches what

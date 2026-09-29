@@ -64,12 +64,20 @@ def bd(*args):
         return []
 
 active = bd("list", "--status", "in_progress", "--json")
-# One `bd stats` replaces the open-issue list and a closed-issue list: each bd
-# call spins up an embedded Dolt engine (~half a second), so counts come from
-# the one query that already has them and lists are only fetched when the
-# titles get printed.
-stats = bd("stats", "--json")
-counts = stats.get("summary", {}) if isinstance(stats, dict) else {}
+# Counts come from one full `bd list`, not `bd stats --json`: stats (like `bd
+# config` and `bd info`) auto-imports a stale .beads/issues.jsonl when the
+# ledger looks stale to it, resurrecting deleted beads — and the brief runs
+# inside the gate, before the ledger-export check that exists to catch that
+# drift (har-67c). `bd list` never imports. Each bd call spins up an embedded
+# Dolt engine (~half a second), so the one query's rows are counted locally
+# and lists are only fetched when the titles get printed.
+counts = {}
+all_issues = bd("list", "--json", "--all")
+if isinstance(all_issues, list):
+    for issue in all_issues:
+        if isinstance(issue, dict):
+            key = "%s_issues" % (issue.get("status") or "open")
+            counts[key] = counts.get(key, 0) + 1
 # The map carries bd's own bookkeeping alongside the memories — schema_version is
 # an int in there — so keep only the entries whose value is actual prose.
 memories = bd("memories", "--json")

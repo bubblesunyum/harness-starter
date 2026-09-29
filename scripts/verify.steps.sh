@@ -67,6 +67,20 @@ await_bead_closed() {
 }
 export -f await_bead_closed
 
+# Waits until a deleted probe bead stops resolving: rapid bd invocations can
+# read a snapshot from before the mutation landed, so an unasserted fixture
+# would read as a probe that cannot see staleness. A delete that never lands
+# fails loudly here rather than passing vacuously below.
+await_bead_gone() {
+  local dir="$1" bid="$2" tries=0
+  while (cd "$dir" && bd show "$bid" >/dev/null 2>&1); do
+    tries=$((tries + 1))
+    [ "$tries" -ge 15 ] && { echo "error: the probe bead $bid still resolves after delete"; return 1; }
+    sleep 2
+  done
+}
+export -f await_bead_gone
+
 # Dirties a probe's dashboard the way real drift looks: a touched shipped file,
 # a deleted vendor asset, a file the template no longer ships, a live snapshot
 # to keep, and project-owned toml answers (a task and a verdict) to leave
@@ -1029,10 +1043,17 @@ step "a fresh install hydrates the committed ledger export" bash -c '
 # file fails the gate naming it, and the regen command from the message clears
 # it. Setup polls for settle with a deadline - rapid bd invocations can read a
 # snapshot from before the mutation landed, and an unasserted fixture would read
-# as a probe that cannot see staleness. The delete path is covered manually:
-# bd delete sometimes reports success without applying, and bd dolt commit
-# auto-imports .beads/issues.jsonl, resurrecting a deletion - neither belongs
-# in a deterministic fixture.
+# as a probe that cannot see staleness. The delete path has its own probe
+# below: bare `bd delete` only previews (exit 0, har-67c), so the fixture
+# asserts the preview leaves the bead listed before deleting with --force.
+# The deeper find from that bead: `bd config` and `bd info` auto-import a
+# stale .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+# deleted beads — no timestamp guard can apply to a row that is missing
+# locally. Closes only ever drift the other way (a stale row is skipped unless
+# strictly newer), which is why the close probe above stayed green while a
+# delete drift healed itself. Every harness prefix lookup now reads `bd list`
+# instead, and the probe below trips if a future bd starts healing under those
+# commands too.
 step "a stale ledger export fails the gate naming the bead" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
@@ -1060,6 +1081,41 @@ step "a stale ledger export fails the gate naming the bead" bash -c '
     { echo "error: the failure never named the closed bead"; echo "$out"; exit 1; }
   echo "$out" | grep -q "bd export --include-memories" ||
     { echo "error: the failure never said how to regen"; echo "$out"; exit 1; }
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot regen the probe export"; exit 1; }
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  echo "$out" | grep -q "ok    ledger export" ||
+    { echo "error: the gate still fails after a regen"; echo "$out"; exit 1; }'
+
+# The delete half of the drift the export check exists for: a deleted bead
+# still sitting in the committed file fails the gate naming it, and the regen
+# clears it. Opens by pinning the har-67c trap — bare `bd delete` only
+# previews and exits 0, so the bead must still resolve there — then deletes
+# with --force and polls until it stops resolving before asserting anything.
+step "a deleted bead still exported fails the gate naming the bead" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  (cd "$probe" && bd q "probe bead for a deleted export" >/dev/null 2>&1) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  bid=$(probe_json_field "$probe" id) || exit 1
+  [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot write the probe export"; exit 1; }
+  grep -qF "$bid" "$probe/.beads/issues.jsonl" ||
+    { echo "error: the probe export missed the bead"; exit 1; }
+  (cd "$probe" && bd delete "$bid" >/dev/null 2>&1) ||
+    { echo "error: the preview delete failed"; exit 1; }
+  (cd "$probe" && bd show "$bid" >/dev/null 2>&1) ||
+    { echo "error: the preview delete deleted — bd changed its delete UX, update the skill rule"; exit 1; }
+  (cd "$probe" && bd delete "$bid" --force >/dev/null 2>&1) ||
+    { echo "error: cannot delete the probe bead"; exit 1; }
+  await_bead_gone "$probe" "$bid" || exit 1
+  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  echo "$out" | grep -q "FAIL  ledger export" || {
+    echo "error: the gate passed a deleted bead still in the export";
+    echo "$out"; exit 1; }
+  echo "$out" | grep -qF "$bid" ||
+    { echo "error: the failure never named the deleted bead"; echo "$out"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot regen the probe export"; exit 1; }
   out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)

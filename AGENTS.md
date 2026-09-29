@@ -47,6 +47,10 @@ one. Then move its status as the work actually moves. A bead still `open` while
 you're mid-implementation, or still `in_progress` after you've closed the
 matching commit, is a ledger that's lying.
 
+`bd delete` needs `--force` — without it the command only previews and still
+exits 0. Regen the export right after deleting: some `bd` commands auto-import
+a stale `.beads/issues.jsonl`, resurrecting the bead.
+
 ## Memory that another session can find
 
 `bd remember` / `bd recall` is the durable, cross-tool memory: every agent here
