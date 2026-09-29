@@ -19,7 +19,8 @@ written without what it asked for.
 This is how a session in any tool — Claude Code included — hands work to a
 model that isn't its own: the packet or the brief is read in a separate
 opencode process, off the caller's context, on whatever model
-harness/models.json names for the role.
+harness/models.json names for the role. (Reviewers are the exception: under
+opencode they always run as native subagents, never through this script.)
 
 Roles with an agent in .opencode/agent/ (the reviewers, the librarian) run that
 agent. `implement` runs opencode's own build agent behind a short contract,

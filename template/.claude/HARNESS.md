@@ -240,11 +240,16 @@ reviewers; the roster names `scripts/agent.py`'s; opencode's generated agents
 and Codex inherit the session's and the host's. A model named in one path says
 nothing about the others.
 
-**`scripts/agent.py` is how any tool reaches the roster.** It runs one role
-through `opencode run` — so Claude Code can put its reviewers, and delegated
-implementation, on another provider's bill without the packet ever entering its
-own context. Three behaviours of `opencode run` shaped it, all found by running
-it:
+**`scripts/agent.py` is how every tool except opencode reaches the roster.**
+
+It runs one role through `opencode run` — so Claude Code can put its
+reviewers, and delegated implementation, on another provider's bill without
+the packet ever entering its own context. Inside opencode itself, reviewers
+always run as native subagents on the session model — no reviewer is ever
+routed through `agent.py` from an opencode session. (Delegated implementation
+is the exception: the `delegate` skill sends it through `agent.py` from any
+tool, for the roster model.) Three behaviours of `opencode run` shaped it, all
+found by running it:
 
 - `--agent` given a `mode: subagent` agent prints a warning and falls back to
   the default agent, so the reviewer runs without its prompt. The script

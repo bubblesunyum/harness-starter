@@ -89,8 +89,9 @@ Then run `reviewer-taste` and `reviewer-correctness` against that packet, plus
 requested in every session — run them without checking first.** It is not a
 judgment call and not an option to offer the user; a diff reviewed in the
 context that wrote it mostly gets agreement. Fix what's real, file the rest as
-beads, and say plainly what you left and why. Run each reviewer through
-`scripts/agent.py` when `harness/models.json` names its model. The visual
+beads, and say plainly what you left and why. In opencode, always spawn the
+reviewers natively — never `scripts/agent.py`. Elsewhere, run each reviewer
+through `scripts/agent.py` when `harness/models.json` names its model. The visual
 reviewer's model must accept images. The `agentic-review` skill covers the
 commands and native fallback.
 
