@@ -166,6 +166,17 @@ gone = sorted(committed - fresh)
 if not (missing or gone):
     sys.exit(0)
 print("  FAIL  ledger export")
+# har-dp5: bd's pre-commit hook rewrites the file as a plain issues-only
+# export when export.auto=true and .beads paths are staged, dropping every
+# memory from the working copy. A stale file is usually missing a bead or
+# two; a file holding zero memories while the ledger has them is that hook.
+fresh_mem = {l for l in fresh if re.search(r'"_type"\s*:\s*"memory"', l)}
+committed_mem = {l for l in committed if re.search(r'"_type"\s*:\s*"memory"', l)}
+if fresh_mem and not committed_mem:
+    print("        note: the ledger holds %d memories and the file holds none —" % len(fresh_mem))
+    print("        that is the shape of bd's pre-commit plain rewrite, not ordinary drift.")
+    print("        regen with --include-memories, and consider export.auto=false,")
+    print("        which disarms the hook's export (proven on bd 1.1.2).")
 if missing:
     print("        error: %d line(s) not in the committed export — created or updated since:" % len(missing))
     for l in missing[:8]:
