@@ -22,6 +22,7 @@ its own polling. The snapshot form exists for the Stop hook, which leaves
 a readable file behind even when nothing is serving.
 """
 
+import datetime
 import http.server
 import json
 import os
@@ -284,11 +285,20 @@ def ledger_state():
     # Neither is claimable: backlog is work deliberately not being done next,
     # and a needs-human bead is one a session already declined to guess at.
     # Both stay out of ready for the same reason they stay out of the brief.
-    ready = bd_json("ready", "--exclude-label", "backlog",
-                    "--exclude-label", "needs-human")
-    ready_ids = {i["id"] for i in ready}
+    #
+    # One engine spin, not three: `bd list --all` already carries the labels,
+    # dependencies, parents and sparse flags ready-ness and staleness judge
+    # on, so both derive from its payload. Each derivation declines exotic
+    # graphs by returning None, and the old spawn answers those instead —
+    # a second Dolt engine is cheaper than a confident wrong board.
+    all_issues = bd_json("list", "--all", "--limit", "0")
+    ready_ids = derive_ready_ids(all_issues)
+    if ready_ids is None:
+        ready = bd_json("ready", "--exclude-label", "backlog",
+                        "--exclude-label", "needs-human")
+        ready_ids = {i["id"] for i in ready}
     issues = []
-    counts = {"open": 0, "ready": len(ready), "in_progress": 0, "closed": 0, "blocked": 0}
+    counts = {"open": 0, "ready": len(ready_ids), "in_progress": 0, "closed": 0, "blocked": 0}
 
     def blockers(issue, parent):
         """The ids this issue waits on. Belonging to an epic is not being blocked
@@ -297,19 +307,20 @@ def ledger_state():
         child looks stuck."""
         out = []
         for d in issue.get("dependencies") or []:
-            got = d.get("depends_on_id") or d.get("id") or "" if isinstance(d, dict) else d
+            got = _dep_target(d)
             if got and got != parent:
                 out.append(got)
         return out
 
     # One call, not four. `bd list --all` returns closed alongside everything
     # else and carries labels, description, design and notes inline — which is
-    # also what retired the separate `--label review` query. Each bd invocation
+    # also what retired the separate `--label review` query, and now the
+    # `bd ready` and `bd stale` ones too. Each bd invocation
     # spins up an embedded Dolt engine, and that cost is what once made the
     # server fall behind its own polling.
     # --limit 0, because bd's default is 50 and the board silently losing beads
     # past that would look like work disappearing rather than a truncated query.
-    for i in bd_json("list", "--all", "--limit", "0"):
+    for i in all_issues:
         status = i.get("status", "open")
         counts[status] = counts.get(status, 0) + 1
         parent = i.get("parent") or ""
@@ -363,8 +374,174 @@ def ledger_state():
     # closed beads would then suggest nothing — so the full set rides along.
     # Computed before the closed-bead trim below, which is what would hide them.
     all_labels = sorted({l for i in issues for l in (i.get("labels") or [])})
-    return {"counts": counts, "issues": issues, "stale": cached_stale(),
+    return {"counts": counts, "issues": issues, "stale": cached_stale(all_issues),
             "all_labels": all_labels}
+
+
+# Dependency types that never block. Proved inert against bd 1.1.2 on scratch
+# ledgers, and excluded from the blocking predicate bd itself promises not
+# to widen (issueops/blockedstate.go: only blocks/conditional-blocks edges,
+# parent-child inheritance and waits-for gates block). Anything unlisted
+# here makes the derivation decline rather than guess.
+INERT_DEP_TYPES = frozenset({
+    "parent-child", "related", "tracks", "supersedes", "validates",
+    "caused-by", "discovered-from", "relates-to", "until",
+})
+
+# Issue types `bd ready` never returns: workflow machinery (gate, molecule),
+# its review/rig plumbing (merge-request, rig), and the infra beads
+# `bd list --include-infra` names (agent, role, message). Read off the
+# ready-work WHERE clause (internal/storage/sqlbuild/ready.go).
+READY_EXCLUDE_TYPES = frozenset({
+    "merge-request", "gate", "molecule", "rig", "agent", "role", "message",
+})
+
+# The labels ledger_state keeps out of ready, the same pair the `bd ready`
+# fallback is spawned with.
+READY_EXCLUDE_LABELS = frozenset({"backlog", "needs-human"})
+
+# Stored statuses bd 1.x uses. Anything else is a custom status, which `bd
+# ready` may treat as ready-eligible — derivation cannot judge it, so it
+# does not try.
+READY_KNOWN_STATUSES = frozenset({"open", "in_progress", "closed", "blocked", "deferred"})
+
+# `bd ready` answers at most 100 rows and `bd stale` 50 unless told
+# otherwise; past that a derived set and a spawned one stop agreeing, so
+# the derivation declines and the spawn answers.
+READY_LIMIT = 100
+STALE_LIMIT = 50
+
+# Days of silence before the board calls a bead stale. Kept beside the
+# derivation so it cannot drift from the `bd stale --days` fallback.
+STALE_DAYS = 14
+
+
+def _bd_time(value):
+    """Epoch seconds for a bd timestamp, or None when it cannot be read. bd
+    writes RFC 3339 (`...Z`) through the CLI and bare SQL
+    (`YYYY-MM-DD HH:MM:SS`, always UTC) through the back door."""
+    if not value:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(str(value).strip())
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
+
+
+def _dep_target(dep):
+    if isinstance(dep, dict):
+        return dep.get("depends_on_id") or dep.get("id") or ""
+    return dep or ""
+
+
+def _parent_ids(issue):
+    """Who this bead hangs under. The parent column and the parent-child
+    edges agree in practice; either alone would miss a half-written row."""
+    out = set()
+    if issue.get("parent"):
+        out.add(issue["parent"])
+    for d in issue.get("dependencies") or []:
+        if isinstance(d, dict) and d.get("type") == "parent-child":
+            target = _dep_target(d)
+            if target:
+                out.add(target)
+    return out
+
+
+def derive_ready_ids(all_issues):
+    """Ready ids from one `bd list --all` payload, or None when it holds
+    something only `bd ready` can judge. Mirrors the ready-work WHERE clause
+    and the blocking predicate behind it: bd derives is_blocked per mutation
+    and never ships it in list JSON, so it is recomputed here from the edges
+    — a blocks-edge onto a live target, inherited down the hierarchy.
+    Verified against bd 1.1.2 on scratch ledgers, exotic corners included
+    (related/until/deferred/pinned/ephemeral/parent-child)."""
+    by_id = {i["id"]: i for i in all_issues}
+    now = time.time()
+    deferred = set()
+    for i in all_issues:
+        if i.get("status") not in READY_KNOWN_STATUSES:
+            return None
+        due = i.get("defer_until")
+        if due:
+            at = _bd_time(due)
+            if at is None:
+                return None
+            if at > now:
+                deferred.add(i["id"])
+    blocked = set()
+    for i in all_issues:
+        for d in i.get("dependencies") or []:
+            dtype = d.get("type") if isinstance(d, dict) else "blocks"
+            if dtype in INERT_DEP_TYPES:
+                continue
+            if dtype != "blocks":
+                # conditional-blocks, waits-for and whatever comes next block
+                # on terms this payload cannot see.
+                return None
+            target = _dep_target(d)
+            if not target or target not in by_id:
+                # external: refs and dangling edges resolve inside bd.
+                return None
+            seen = by_id[target]
+            if seen.get("status") not in READY_KNOWN_STATUSES:
+                return None
+            if seen.get("status") == "closed" or seen.get("pinned"):
+                continue
+            blocked.add(i["id"])
+            break
+    parents = {i["id"]: _parent_ids(i) for i in all_issues}
+    grown = True
+    while grown:
+        grown = False
+        for bead, pls in parents.items():
+            if bead not in blocked and pls & blocked:
+                blocked.add(bead)
+                grown = True
+    ready = set()
+    for i in all_issues:
+        if i.get("status") != "open":
+            continue
+        if i.get("pinned") or i.get("ephemeral"):
+            continue
+        if i["id"] in deferred or parents[i["id"]] & deferred:
+            continue
+        if i.get("issue_type") in READY_EXCLUDE_TYPES:
+            continue
+        if READY_EXCLUDE_LABELS & set(i.get("labels") or []):
+            continue
+        if i["id"] in blocked:
+            continue
+        ready.add(i["id"])
+    if len(ready) > READY_LIMIT:
+        return None
+    return ready
+
+
+def derive_stale_count(all_issues):
+    """What `bd stale --days STALE_DAYS` would count, or None when the payload cannot
+    say. bd's stale scope is open plus in_progress older than the cutoff,
+    minus ephemeral rows. bd 1.1.2 has no leases table, so there is no
+    heartbeat clause to mirror — if a later bd stales around heartbeats,
+    this is where that divergence would show."""
+    cutoff = time.time() - STALE_DAYS * 86400
+    n = 0
+    for i in all_issues:
+        if i.get("status") not in ("open", "in_progress"):
+            continue
+        if i.get("ephemeral"):
+            continue
+        at = _bd_time(i.get("updated_at"))
+        if at is None:
+            return None
+        if at < cutoff:
+            n += 1
+    if n >= STALE_LIMIT:
+        return None
+    return n
 
 
 # How long a stale count is reused before another `bd stale` is spawned.
@@ -372,9 +549,12 @@ STALE_TTL = 300.0
 _stale = {"n": 0, "at": 0.0}
 
 
-def cached_stale():
+def cached_stale(all_issues):
     if time.time() - _stale["at"] > STALE_TTL:
-        _stale["n"] = len(bd_json("stale", "--days", "14"))
+        # Counted off the listing already in hand; the spawn survives only
+        # for graphs the derivation declines to judge.
+        n = derive_stale_count(all_issues)
+        _stale["n"] = n if n is not None else len(bd_json("stale", "--days", str(STALE_DAYS)))
         _stale["at"] = time.time()
     return _stale["n"]
 
