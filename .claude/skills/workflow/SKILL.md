@@ -45,6 +45,11 @@ bd ready → claim → build → scripts/verify.sh → review → commit → clo
    the packet and the `agentic-review` skill runs it past agents that didn't
    write it.
    `bd label remove <id> review` when the findings are dealt with.
+   Batch before you gate: collect every reviewer's findings first, apply them
+   in one revision, then run the gate once on a frozen tree — no edits until
+   it reports. A gate per revision round multiplies slow probe runs for no new
+   signal, and editing mid-run manufactures phantom failures (a probe split
+   across an edit reads as drift that isn't there).
 6. **Close it.** `bd close <id> --reason "<what actually happened>"`, and commit.
    Commit often — CLAUDE.md means it. The reason is where the outcome lives when
    it differs from the plan, which is most of the time.

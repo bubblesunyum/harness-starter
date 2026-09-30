@@ -4,7 +4,7 @@
     ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
     ".claude/agents/reviewer-design.md": "99919f9da1b9b4c5",
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
-    ".claude/skills/workflow/SKILL.md": "1d9c9b01ab64d5de",
+    ".claude/skills/workflow/SKILL.md": "b0d1c23e3b294f10",
     "doc": "d1155e1d87765957",
     "scripts/agent.py": "9d06600351b2f27f",
     "scripts/brief.sh": "0c178578e538e6c8",
@@ -30,11 +30,11 @@
     "scripts/brief.sh": "0c178578e538e6c8"
   },
   ".claude/skills/workflow/SKILL.md": {
-    "doc": "1d9c9b01ab64d5de",
+    "doc": "b0d1c23e3b294f10",
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "b9808242c551631b",
+    "doc": "0d8ec4bb62b0e16d",
     "scripts/brief.sh": "0c178578e538e6c8",
     "scripts/review.sh": "b1c750897c2e4f66",
     "scripts/verify.sh": "bab6bc040bb3ff03"
