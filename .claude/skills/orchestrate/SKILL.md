@@ -60,14 +60,14 @@ else. One message per worker:
 
 ## Phase 3 — Spawn implementers
 
-Spawn one implementer per partition, in parallel, native to your tool:
-opencode — native background subagents (never `scripts/agent.py` for a
-round); Claude Code — native subagents via the Task tool; Codex — its
-native agent mechanism. `scripts/agent.py` with the `harness/models.json`
-roster is the single-implementer or cross-tool path (one writer per tree,
-ledger-adjacent); a parallel same-tree round needs the stricter contract
-below, which is why it goes native. (If a future roster supports parallel
-same-tree work, prefer it; until then, do not duplicate that contract
+Spawn one implementer per partition, in parallel, all on opencode — the same
+rule reviewers already follow. Inside opencode, spawn native background
+subagents. From Claude Code or Codex, run them through the opencode CLI
+(`scripts/agent.py` with the `harness/models.json` roster — never the
+host-native Task/agent mechanism for a round). The parallel same-tree
+contract below travels in every brief regardless of tool. (The roster needs
+an implement role carrying that contract; until it has one, the CLI call
+must pass the brief through as-is — do not duplicate the contract
 here — this skill *is* it.)
 
 **Parallel same-tree contract** (in every brief, no exceptions):
