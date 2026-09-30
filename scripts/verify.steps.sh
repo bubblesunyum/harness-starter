@@ -740,6 +740,68 @@ EOF
   (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1) ||
     { echo "error: check failed with no roster — the fresh-clone case"; exit 1; }'
 
+# A .opencode/opencode.json without instructions shadows the root file —
+# opencode reads only the deeper one — so update fails naming the shadow, the
+# same way a stale contract file fails. Each half asserts its setup, so a
+# plant that never landed reads as failure rather than a silent pass.
+probe_step "update flags a shadow opencode.json without instructions" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  grep -q "instructions" "$probe/opencode.json" ||
+    { echo "error: the fixture root opencode.json carries no instructions"; exit 1; }
+  mkdir -p "$probe/.opencode" || { echo "error: cannot make .opencode"; exit 1; }
+  printf "{\"plugin\":[\"probe-plugin\"]}\n" > "$probe/.opencode/opencode.json" ||
+    { echo "error: cannot plant the shadow"; exit 1; }
+  grep -q "probe-plugin" "$probe/.opencode/opencode.json" ||
+    { echo "error: the fixture never planted the shadow"; exit 1; }
+  if grep -q "instructions" "$probe/.opencode/opencode.json"; then
+    echo "error: the fixture shadow carries instructions"; exit 1;
+  fi
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed a shadow without instructions"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "shadows opencode.json" ||
+    { echo "error: update never named the shadow"; echo "$out"; exit 1; }'
+
+# `harness add` merges the root instructions into an existing shadow instead
+# of leaving AGENTS.md unloaded: the shadow keeps its own entries and its
+# plugin, and gains whatever root entries it was missing. Add never
+# overwrites, so the planted shadow survives the copy loop to be merged.
+probe_step "add merges root instructions into a shadowing opencode.json" bash -c '
+  fresh_probe || exit 1
+  mkdir -p "$probe/.opencode" || { echo "error: cannot make .opencode"; exit 1; }
+  printf "{\"instructions\":[\"CLAUDE.md\",\"LOCAL.md\"],\"plugin\":[\"probe-plugin\"]}\n" \
+    > "$probe/.opencode/opencode.json" || { echo "error: cannot plant the shadow"; exit 1; }
+  grep -q "LOCAL.md" "$probe/.opencode/opencode.json" ||
+    { echo "error: the fixture never planted the shadow"; exit 1; }
+  if grep -q "AGENTS.md" "$probe/.opencode/opencode.json"; then
+    echo "error: the fixture shadow already carries every instruction"; exit 1;
+  fi
+  out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "merged instructions" ||
+    { echo "error: add never said it merged"; echo "$out"; exit 1; }
+  grep -q "AGENTS.md" "$probe/.opencode/opencode.json" ||
+    { echo "error: add never merged the missing instruction"; exit 1; }
+  grep -q "LOCAL.md" "$probe/.opencode/opencode.json" ||
+    { echo "error: add dropped the shadow own entry"; exit 1; }
+  grep -q "probe-plugin" "$probe/.opencode/opencode.json" ||
+    { echo "error: add dropped the shadow plugin"; exit 1; }'
+
+# Plugin entries in .opencode/tui.json split the source of truth with the
+# root opencode.json, where the contract check never compares them — so update
+# fails naming the file, next to the shadow check above.
+probe_step "update flags plugin entries in tui.json" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  mkdir -p "$probe/.opencode" || { echo "error: cannot make .opencode"; exit 1; }
+  printf "{\"theme\":\"probe\",\"plugin\":[\"probe-plugin\"]}\n" > "$probe/.opencode/tui.json" ||
+    { echo "error: cannot plant tui.json"; exit 1; }
+  grep -q "probe-plugin" "$probe/.opencode/tui.json" ||
+    { echo "error: the fixture never planted tui.json"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) &&
+    { echo "error: update passed a tui.json carrying plugin"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "carries plugin" ||
+    { echo "error: update never said plugin"; echo "$out"; exit 1; }'
+
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
 probe_step "add initialises a missing git repository" bash -c '
@@ -1241,4 +1303,59 @@ probe_step "a clone with no live ledger skips the export check" bash -c '
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
 fi
+
+# Beads queued for a local model carry their own spec — --design and
+# --acceptance filled in, plus a `local-ok` label — because a small model
+# executes well only when the bead says what done looks like. `bd ready
+# --label local-ok` is that queue. A fast step, not a probe: one read-only
+# `bd list`, the same command the prefix lookup in verify.sh already trusts
+# never to import. Never export, config or info here, which auto-import a
+# stale export and would heal the drift the ledger-export check exists to
+# catch. Closed beads are history, not queue, so only open work is judged.
+step "local-ok beads carry design and acceptance" bash -c '
+  python3 - <<PYEOF || exit 1
+import json
+import os
+import subprocess
+import sys
+try:
+    out = subprocess.run(
+        ["bd", "list", "--json", "--all", "--limit", "0"],
+        capture_output=True, text=True)
+except FileNotFoundError:
+    print("no bd here, skipping")
+    sys.exit(0)
+if out.returncode != 0:
+    if not os.path.isdir(".beads/embeddeddolt"):
+        print("no live ledger, skipping")
+        sys.exit(0)
+    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
+    print("error: cannot list the beads: " + err)
+    sys.exit(1)
+try:
+    issues = json.loads(out.stdout or "[]")
+except ValueError:
+    print("error: cannot read the bead list")
+    sys.exit(1)
+bad = []
+for issue in issues:
+    if "local-ok" not in (issue.get("labels") or []):
+        continue
+    if (issue.get("status") or "open") == "closed":
+        continue
+    missing = []
+    if not (issue.get("design") or "").strip():
+        missing.append("design")
+    acceptance = issue.get("acceptance_criteria", issue.get("acceptance"))
+    if not (acceptance or "").strip():
+        missing.append("acceptance")
+    if missing:
+        bad.append("%s lacks %s" % (issue.get("id", "?"), " and ".join(missing)))
+if bad:
+    print("error: local-ok beads without their own spec, no local model can execute these:")
+    for line in bad:
+        print("  - " + line)
+    print("fill --design and --acceptance, or drop the local-ok label")
+    sys.exit(1)
+PYEOF'
 

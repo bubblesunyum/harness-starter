@@ -53,6 +53,12 @@ matching commit, is a ledger that's lying.
 exits 0. Regen the export right after deleting: some `bd` commands auto-import
 a stale `.beads/issues.jsonl`, resurrecting the bead.
 
+**A bead queued for a local model carries its own spec.** Small models execute
+well only when the bead says what done looks like: `--design` and
+`--acceptance` filled in, plus a `local-ok` label. `bd ready --label local-ok`
+is the local queue, and the gate fails a `local-ok` bead missing either — fill
+both in, or drop the label.
+
 ### How the ledger reaches git
 
 The ledger lives in a local Dolt database under `.beads/`, which git ignores —
