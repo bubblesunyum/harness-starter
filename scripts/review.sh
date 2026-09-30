@@ -51,7 +51,11 @@ _harness_prefix() {
   fi
   printf '%s\n' "$p"
 }
-packet=/tmp/$(_harness_prefix)-review-packet.md
+packet=/tmp/$(_harness_prefix)-review-packet-$$.md
+# Namespaced by PID, not just by project prefix: two sessions in one checkout
+# — a Claude Code session and an opencode session, the exact scenario this
+# cross-app effort is built for — otherwise overwrite each other's packet
+# mid-review, and the reviewer reports on work nobody asked about.
 
 # No base given: review what isn't committed yet, and fall back to the last
 # commit when the tree is clean — "review my work" almost never means "review

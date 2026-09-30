@@ -21,6 +21,7 @@ argument is cheap.
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -266,7 +267,7 @@ def digest():
     out.append(f"\n## Memories ({len(entries)})\n")
     out += [f"\n### {k}\n{v}" for k, v in sorted(entries.items())]
 
-    packet = Path(f"/tmp/{_bd_prefix()}-knowledge-digest.md")
+    packet = Path(f"/tmp/{_bd_prefix()}-knowledge-digest-{os.getpid()}.md")
     packet.write_text("\n".join(out) + "\n")
     print(packet)
 

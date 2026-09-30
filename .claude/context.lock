@@ -8,9 +8,9 @@
     "doc": "d1155e1d87765957",
     "scripts/agent.py": "9d06600351b2f27f",
     "scripts/brief.sh": "0c178578e538e6c8",
-    "scripts/context.py": "859afb6a48628c94",
+    "scripts/context.py": "57de2a6ebb1adea9",
     "scripts/opencode-agents.py": "838b979d27801c74",
-    "scripts/review.sh": "1de13eeec4494b9e",
+    "scripts/review.sh": "b1c750897c2e4f66",
     "scripts/verify.sh": "bab6bc040bb3ff03"
   },
   ".claude/skills/agentic-review/SKILL.md": {
@@ -19,7 +19,7 @@
     ".claude/agents/reviewer-taste.md": "36c5a0e401d3d0f6",
     "doc": "ce2ea257bcab319e",
     "scripts/agent.py": "9d06600351b2f27f",
-    "scripts/review.sh": "1de13eeec4494b9e"
+    "scripts/review.sh": "b1c750897c2e4f66"
   },
   ".claude/skills/delegate/SKILL.md": {
     "doc": "73e5637e16ffd9a3",
@@ -36,7 +36,7 @@
   "AGENTS.md": {
     "doc": "b9808242c551631b",
     "scripts/brief.sh": "0c178578e538e6c8",
-    "scripts/review.sh": "1de13eeec4494b9e",
+    "scripts/review.sh": "b1c750897c2e4f66",
     "scripts/verify.sh": "bab6bc040bb3ff03"
   }
 }
