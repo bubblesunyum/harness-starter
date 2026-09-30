@@ -1,18 +1,21 @@
 # Your project's gate steps: build, test, smoke — whatever proves the work.
-# Sourced by scripts/verify.sh, which defines `step`, `mode`, `LOGS`, and the
-# pass/fail footer around this file, so use those rather than redefining them.
+# Sourced by scripts/verify.sh, which defines `step`, `probe_step`, `mode`,
+# `LOGS`, and the pass/fail footer around this file, so use those rather than
+# redefining them.
 #
 # This file is yours. The harness installs it once and never compares or
 # overwrites it — `harness update` stays silent about it, and scaffolding fixes
 # still arrive in scripts/verify.sh. Keep every check going through `step
 # <name> <cmd...>`: it swallows the log and prints one line, which is the whole
-# point of the gate.
+# point of the gate. A check too slow for every few minutes — throwaway-repo
+# probes, heavy suites — goes through `probe_step` instead: same contract,
+# but skipped in the --quick lane, which is what keeps iteration fast.
 
 # There is no compiler here, so the gate is what a compiler would have caught:
 # every script parses, and the CLI can still list its own commands. Cheap enough
 # that there's no excuse for skipping it.
 
-step "codex install context" python3 scripts/test-codex-install.py
+probe_step "codex install context" python3 scripts/test-codex-install.py
 
 step "shell parses" bash -c '
   set -e
@@ -184,7 +187,7 @@ export -f probe_dashboard_modes
 # A template file that still says {{PROJECT}} after substitution is one the
 # installer missed — and the placeholder only shows up at the far end, in an
 # installed project, long after anyone would connect it to this change.
-step "placeholders substitute" bash -c '
+probe_step "placeholders substitute" bash -c '
   # Each step checked on its own. An && chain here reports ok when its own setup
   # failed: probe would be empty, the install would never run, grep would find
   # nothing to complain about, and the gate would pass vacuously — which is the
@@ -209,7 +212,7 @@ step "placeholders substitute" bash -c '
 # than no warning. This caught it once already: the installer's own post-copy
 # edits to AGENTS.md and .claude/settings.json read as drift until the comparison
 # learned to normalise them away.
-step "a fresh install reads as current" bash -c '
+probe_step "a fresh install reads as current" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   out=$(bin/harness update "$probe" 2>&1) || {
@@ -219,7 +222,7 @@ step "a fresh install reads as current" bash -c '
 # template asks the project to name its look there, so a filled-in file is the
 # harness working. Asserted through the exit code, which is the part a project
 # would act on.
-step "an edited design file reads as customised" bash -c '
+probe_step "an edited design file reads as customised" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/.claude/agents/reviewer-design.md" ] || { echo "error: install produced no design file"; exit 1; }
@@ -233,7 +236,7 @@ step "an edited design file reads as customised" bash -c '
 # `update --apply` converges a stale contract file back to the template and
 # leaves customised files alone. Asserted by re-running update, which is the
 # same check a project sees.
-step "update --apply converges contract files" bash -c '
+probe_step "update --apply converges contract files" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/.claude/skills/workflow/SKILL.md" ] || { echo "error: install produced no workflow skill"; exit 1; }
@@ -253,7 +256,7 @@ step "update --apply converges contract files" bash -c '
 # A contract file carrying bd's managed block plus real drift is left for a
 # hand merge: the template has no copy of that block, so overwriting would
 # delete it. The block survives and the file stays stale, loudly.
-step "update --apply keeps off files with a beads block" bash -c '
+probe_step "update --apply keeps off files with a beads block" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/AGENTS.md" ] || { echo "error: install produced no AGENTS.md"; exit 1; }
@@ -269,7 +272,7 @@ step "update --apply keeps off files with a beads block" bash -c '
 # A stale contract reviewer source comes with its follow-ups: the merge is half
 # the job, and the generated copies, the hashes, and the gate are the other
 # half. librarian.md is the contract agent — the named reviewers are customised.
-step "update names follow-ups for reviewer sources" bash -c '
+probe_step "update names follow-ups for reviewer sources" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/.claude/agents/librarian.md" ] || { echo "error: install produced no librarian file"; exit 1; }
@@ -284,7 +287,7 @@ step "update names follow-ups for reviewer sources" bash -c '
 # A customised-only difference points at the generated-copy checks instead of
 # ordering a rebuild — that order would nag on every install that ever filled
 # its reviewers in.
-step "update points customised sources at the copy checks" bash -c '
+probe_step "update points customised sources at the copy checks" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/.claude/agents/reviewer-taste.md" ] || { echo "error: install produced no taste file"; exit 1; }
@@ -299,7 +302,7 @@ step "update points customised sources at the copy checks" bash -c '
 
 # An acknowledged fork stops failing the check but stays visible: the warning
 # nobody can clear is the one that stops being read. --apply never writes it.
-step "update respects acknowledged forks" bash -c '
+probe_step "update respects acknowledged forks" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   [ -f "$probe/scripts/review.sh" ] || { echo "error: install produced no review file"; exit 1; }
@@ -324,7 +327,7 @@ step "update respects acknowledged forks" bash -c '
 # pieces — the toml tasks and verdict, the live snapshot — survive.
 # Each half asserts its setup, so a fixture that never dirtied reads as failure
 # rather than a probe that cannot see staleness.
-step "update dashboard refreshes the dashboard and leaves the toml alone" bash -c '
+probe_step "update dashboard refreshes the dashboard and leaves the toml alone" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   dirty_probe_dashboard "$probe" || { echo "error: cannot dirty the probe dashboard"; exit 1; }
@@ -354,7 +357,7 @@ step "update dashboard refreshes the dashboard and leaves the toml alone" bash -
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
 # pattern from the reader.
-step "dashboard serves the default verdict silently with no verdict section" bash -c '
+probe_step "dashboard serves the default verdict silently with no verdict section" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   grep -q "^\\[verdict\\]" "$probe/dashboard.toml" &&
@@ -364,7 +367,7 @@ step "dashboard serves the default verdict silently with no verdict section" bas
 # A pre-toml VERDICT answer still living in the shipped file moves into
 # dashboard.toml, and the file comes back byte-identical: the one migration
 # this command exists to perform, exactly once.
-step "update dashboard moves a pre-toml VERDICT answer into dashboard.toml" bash -c '
+probe_step "update dashboard moves a pre-toml VERDICT answer into dashboard.toml" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
@@ -385,7 +388,7 @@ step "update dashboard moves a pre-toml VERDICT answer into dashboard.toml" bash
 
 # The toml wins when both claim an answer: the shipped file is overwritten and
 # says so, rather than silently keeping a fork the toml already replaced.
-step "update dashboard keeps the toml verdict over a stale file answer" bash -c '
+probe_step "update dashboard keeps the toml verdict over a stale file answer" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "[verdict]\npattern = '"'"'TOML-(WINS|LOSES)'"'"'\n" >> "$probe/dashboard.toml" ||
@@ -402,7 +405,7 @@ step "update dashboard keeps the toml verdict over a stale file answer" bash -c 
 # complains about it on every poll — so the move refuses rather than appending
 # a second table, which would trap the answer in an unparseable file. Nothing
 # is written and the file answer survives for the hand fix.
-step "update dashboard fails loudly on a verdict table with no pattern" bash -c '
+probe_step "update dashboard fails loudly on a verdict table with no pattern" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
@@ -419,7 +422,7 @@ step "update dashboard fails loudly on a verdict table with no pattern" bash -c 
 # the verdict word out of exactly one group, so zero groups serve permanent
 # red and two hand back tuples, which have no .upper. The toml keeps serving
 # the default instead, with the complaint on stderr.
-step "update dashboard keeps the default over a misshapen verdict pattern" bash -c '
+probe_step "update dashboard keeps the default over a misshapen verdict pattern" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "[verdict]\npattern = '"'"'(BUILD|TEST) (OK|FAIL)'"'"'\n" >> "$probe/dashboard.toml" ||
@@ -430,7 +433,7 @@ step "update dashboard keeps the default over a misshapen verdict pattern" bash 
 # A stranded answer — in the file, not yet in the toml — is named by the plain
 # report and left stale by --apply: converging it would delete the answer, and
 # the dashboard updater is the one that moves it.
-step "update leaves a stranded VERDICT answer stale and names the mover" bash -c '
+probe_step "update leaves a stranded VERDICT answer stale and names the mover" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   plant_old_verdict "$probe" || { echo "error: cannot plant the old VERDICT"; exit 1; }
@@ -445,7 +448,7 @@ step "update leaves a stranded VERDICT answer stale and names the mover" bash -c
 
 # Acknowledged dashboard forks are left alone, like --apply leaves them: the
 # blunt tool must not delete a fork it was told is deliberate.
-step "update dashboard leaves diverged dashboard files alone" bash -c '
+probe_step "update dashboard leaves diverged dashboard files alone" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "\n<!-- probe chip -->\n" >> "$probe/dashboard/index.html" ||
@@ -461,7 +464,7 @@ step "update dashboard leaves diverged dashboard files alone" bash -c '
 
 # dashboard.py is byte-identical everywhere now, so acknowledging it is
 # meaningful and honored — unlike a vendor asset, which is data.
-step "update dashboard leaves a diverged dashboard.py alone" bash -c '
+probe_step "update dashboard leaves a diverged dashboard.py alone" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "\n# probe fork\n" >> "$probe/scripts/dashboard.py" ||
@@ -480,7 +483,7 @@ step "update dashboard leaves a diverged dashboard.py alone" bash -c '
 # a note rather than honored: honoring it while update rejects it would give
 # contradictory orders, and the fork it claims to protect is one
 # `harness diverge` itself refuses.
-step "update dashboard ignores diverged entries that acknowledge nothing" bash -c '
+probe_step "update dashboard ignores diverged entries that acknowledge nothing" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   dirty_probe_dashboard "$probe" || { echo "error: cannot dirty the probe dashboard"; exit 1; }
@@ -496,7 +499,7 @@ step "update dashboard ignores diverged entries that acknowledge nothing" bash -
 # A diverged entry naming a file the template no longer ships fails loudly and
 # deletes nothing: the entry is already dead — `harness update` fails on it
 # too — so both commands give the same order, fix the list.
-step "update dashboard fails loudly on diverged entries for dropped files" bash -c '
+probe_step "update dashboard fails loudly on diverged entries for dropped files" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   printf "stale" > "$probe/dashboard/legacy.js" ||
@@ -513,7 +516,7 @@ step "update dashboard fails loudly on diverged entries for dropped files" bash 
 # A directory where a shipped file goes fails loudly and keeps the directory:
 # without the guard the rename would move the new file inside it, report
 # success, and the delete half would then remove the evidence.
-step "update dashboard fails loudly when a file path is a directory" bash -c '
+probe_step "update dashboard fails loudly when a file path is a directory" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/dashboard/index.html" ||
@@ -531,7 +534,7 @@ step "update dashboard fails loudly when a file path is a directory" bash -c '
 
 # A project with no dashboard at all gets one: update dashboard installs what
 # is missing, so a partial install converges without a full re-add.
-step "update dashboard installs a missing dashboard" bash -c '
+probe_step "update dashboard installs a missing dashboard" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm -rf "$probe/dashboard" "$probe/scripts/dashboard.py" ||
@@ -548,7 +551,7 @@ step "update dashboard installs a missing dashboard" bash -c '
 # Stack guidance reaches only the projects that use the stack: a Swift probe
 # gets swift.md and not web.md, a bare one gets neither, and each reads as
 # current. Guidance for someone else's platform is the failure this prevents.
-step "stack guidance installs only where detected" bash -c '
+probe_step "stack guidance installs only where detected" bash -c '
   fresh_probe || exit 1
   touch "$probe/Package.swift" || { echo "error: cannot mark the probe as swift"; exit 1; }
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
@@ -567,7 +570,7 @@ step "stack guidance installs only where detected" bash -c '
 # stacks.txt is the project's once written: a re-run of add installs what an
 # edit added and never re-detects over it — or a wrong guess could never be
 # corrected for good.
-step "an edited stacks.txt survives a re-add" bash -c '
+probe_step "an edited stacks.txt survives a re-add" bash -c '
   fresh_probe || exit 1
   touch "$probe/Package.swift" || { echo "error: cannot mark the probe as swift"; exit 1; }
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
@@ -580,7 +583,7 @@ step "an edited stacks.txt survives a re-add" bash -c '
 # A stack name with no guidance behind it, or an install from before stacks
 # existed, fails update loudly — either way reviewers are missing checks and
 # nothing else would say so.
-step "update fails loudly on unknown or unrecorded stacks" bash -c '
+probe_step "update fails loudly on unknown or unrecorded stacks" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   # Web: a case-insensitive disk finds web.md for it, yet nothing installs.
@@ -598,7 +601,7 @@ step "update fails loudly on unknown or unrecorded stacks" bash -c '
 # A diverged entry that acknowledges nothing — typo, removed file, or one
 # already quiet — fails loudly: the list is harness configuration, and a typo
 # there silently un-acknowledges the fork it meant.
-step "update fails loudly on diverged entries that acknowledge nothing" bash -c '
+probe_step "update fails loudly on diverged entries that acknowledge nothing" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   echo "nope/nothing.py" >> "$probe/harness/diverged.txt" ||
@@ -611,7 +614,7 @@ step "update fails loudly on diverged entries that acknowledge nothing" bash -c 
 # An unreadable diverged list fails loudly rather than reading as empty: empty
 # would silently un-acknowledge every fork, which is the false alarm the list
 # exists to prevent.
-step "update fails loudly on an unreadable diverged list" bash -c '
+probe_step "update fails loudly on an unreadable diverged list" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   chmod 000 "$probe/harness/diverged.txt" ||
@@ -624,7 +627,7 @@ step "update fails loudly on an unreadable diverged list" bash -c '
 
 # `harness diverge` validates before writing: only a real, differing contract
 # file lands in the list. Asserted through the exit code and the list itself.
-step "harness diverge validates before acknowledging" bash -c '
+probe_step "harness diverge validates before acknowledging" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   root="$PWD"
@@ -640,7 +643,7 @@ step "harness diverge validates before acknowledging" bash -c '
 # A role's packet budget is its explicit "context", else a heuristic from the
 # model id — Claude-pattern ids read as 200000, anything else as 8192 — and an
 # unconfigured role has no budget at all rather than a guessed one.
-step "models.py budget resolves explicit, pattern, and default budgets" bash -c '
+probe_step "models.py budget resolves explicit, pattern, and default budgets" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   cat > "$probe/harness/models.json" <<EOF ||
@@ -662,7 +665,7 @@ EOF
 
 # An over-budget packet refuses with the binding role and the narrower command
 # — a truncated packet reporting confidently on its first pages is the failure.
-step "review.sh refuses a packet over the smallest reviewer budget" bash -c '
+probe_step "review.sh refuses a packet over the smallest reviewer budget" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   cat > "$probe/harness/models.json" <<EOF ||
@@ -682,7 +685,7 @@ EOF
 
 # A packet within budget still prints its path — the refusal must not fire on
 # ordinary changes.
-step "review.sh passes a packet within budget" bash -c '
+probe_step "review.sh passes a packet within budget" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   cat > "$probe/harness/models.json" <<EOF ||
@@ -702,7 +705,7 @@ EOF
 # carry it: a model line baked in here passes check on this machine and fails
 # it on every fresh clone. Asserted both ways — a populated roster leaks
 # nothing into the output, and check passes with the roster removed.
-step "generated opencode agents ignore the roster" bash -c '
+probe_step "generated opencode agents ignore the roster" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   cat > "$probe/harness/models.json" <<EOF ||
@@ -726,7 +729,7 @@ EOF
 
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
-step "add initialises a missing git repository" bash -c '
+probe_step "add initialises a missing git repository" bash -c '
   probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
   trap "rm -rf \"$probe\"" EXIT
   out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
@@ -738,7 +741,7 @@ step "add initialises a missing git repository" bash -c '
 # parent, rather than leaving a repository inside a repository. Asserted on the
 # parent path itself — the target path contains it, so matching the target
 # would pass even a refusal that named nothing.
-step "add refuses a subdirectory of a repository" bash -c '
+probe_step "add refuses a subdirectory of a repository" bash -c '
   fresh_probe || exit 1
   mkdir "$probe/sub" || { echo "error: mkdir failed"; exit 1; }
   parent="$(cd "$probe" && pwd -P)" || { echo "error: pwd failed"; exit 1; }
@@ -750,7 +753,7 @@ step "add refuses a subdirectory of a repository" bash -c '
 
 # A .git entry git itself rejects — half a `git init`, a stray file — refuses
 # rather than installing a harness onto a repository that doesn't work.
-step "add refuses a broken .git entry" bash -c '
+probe_step "add refuses a broken .git entry" bash -c '
   probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
   trap "rm -rf \"$probe\"" EXIT
   mkdir "$probe/.git" || { echo "error: mkdir failed"; exit 1; }
@@ -763,7 +766,7 @@ step "add refuses a broken .git entry" bash -c '
 # A bare repository has no working tree to install into: refuse, and leave it
 # alone. `rev-parse --show-toplevel` fails there, so without this the install
 # would sail past the nesting guard and git init a .git inside the bare repo.
-step "add refuses a bare repository" bash -c '
+probe_step "add refuses a bare repository" bash -c '
   probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
   trap "rm -rf \"$probe\"" EXIT
   git init -q --bare "$probe/b.git" || { echo "error: git init --bare failed"; exit 1; }
@@ -775,7 +778,7 @@ step "add refuses a bare repository" bash -c '
 
 # A linked worktree is a repository already — .git is a file, not a directory —
 # so it installs rather than refusing with the directory as its own parent.
-step "add accepts a linked worktree" bash -c '
+probe_step "add accepts a linked worktree" bash -c '
   fresh_probe || exit 1
   trap '"'"'rm -rf "$probe" "$probe-wt"'"'"' EXIT
   (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init) ||
@@ -805,7 +808,7 @@ step "contract scripts match the template byte for byte" bash -c '
 # Overlay files are the project's to edit, so an edited one must read as
 # current, not stale — a warning nobody can clear is the one that stops being
 # read, and then the real drift hides behind it.
-step "overlay edits stay quiet under update" bash -c '
+probe_step "overlay edits stay quiet under update" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   echo "# local steps" >> "$probe/scripts/verify.steps.sh" ||
@@ -821,7 +824,7 @@ step "overlay edits stay quiet under update" bash -c '
 # The scope file is wired in, not decorative: a review that ignored it would
 # keep reading the old inline scope, and the packet would carry files the
 # project excluded — silently unreviewable in the other direction.
-step "review honors the scope overlay" bash -c '
+probe_step "review honors the scope overlay" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   # --no-verify: the probe commit is scaffolding in a throwaway repo, and add
@@ -845,7 +848,7 @@ step "review honors the scope overlay" bash -c '
 # A gate with no project steps must not pass: "ok" from a suite that ran
 # nothing is the silent success this project exists to avoid, in the check
 # meant to catch it.
-step "a missing steps overlay fails the gate loudly" bash -c '
+probe_step "a missing steps overlay fails the gate loudly" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the steps file"; exit 1; }
@@ -856,7 +859,7 @@ step "a missing steps overlay fails the gate loudly" bash -c '
 
 # --apply converges stale bases and leaves overlays alone: the fix arrives and
 # the project's answers survive in the same run.
-step "apply converges base scripts but keeps overlays" bash -c '
+probe_step "apply converges base scripts but keeps overlays" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   echo "# local fork" >> "$probe/scripts/verify.sh" || { echo "error: cannot fork the base"; exit 1; }
@@ -875,7 +878,7 @@ step "apply converges base scripts but keeps overlays" bash -c '
 
 # Overlays need no acknowledgment — there is nothing to fork. Accepting one
 # would let a dead-weight entry sit in the diverged list looking meaningful.
-step "diverge refuses overlay files" bash -c '
+probe_step "diverge refuses overlay files" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   root="$PWD"
@@ -890,7 +893,7 @@ step "diverge refuses overlay files" bash -c '
 # The migration itself: a pre-split project recovers its inline blocks into
 # overlay files on --apply, and the lifted steps actually run. Without this the
 # converge above would delete answers only the project has.
-step "apply lifts pre-split blocks into overlays" bash -c '
+probe_step "apply lifts pre-split blocks into overlays" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/scripts/verify.steps.sh" "$probe/scripts/review.scope.sh" ||
@@ -925,7 +928,7 @@ PYEOF
 # project's own answers win over the template's placeholders. Without this a
 # re-add would install placeholder overlays beside real inline answers, and the
 # next --apply would converge the base and strand them.
-step "add lifts pre-split blocks before installing overlays" bash -c '
+probe_step "add lifts pre-split blocks before installing overlays" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the overlay"; exit 1; }
@@ -949,7 +952,7 @@ PYEOF
 # A block with no end marker lifts to end-of-file — converging over that would
 # delete everything after the start line. Decline instead: the file stays stale
 # and says whose job it is, and no overlay is written.
-step "apply leaves marker-damaged scripts stale and loud" bash -c '
+probe_step "apply leaves marker-damaged scripts stale and loud" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the overlay"; exit 1; }
@@ -973,7 +976,7 @@ PYEOF
 
 # Same for a duplicated block: lifting would merge both copies with markers
 # inside, so it declines the same loud way.
-step "apply leaves duplicated blocks stale and loud" bash -c '
+probe_step "apply leaves duplicated blocks stale and loud" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/scripts/review.scope.sh" || { echo "error: cannot remove the overlay"; exit 1; }
@@ -999,7 +1002,7 @@ PYEOF
 # A stale pointer block carries no answers — lifting its comments would strand
 # a step-less overlay the gate then passes vacuously. Converge the base, write
 # nothing, and let `add` install the template overlay.
-step "apply converges answer-less blocks without writing overlays" bash -c '
+probe_step "apply converges answer-less blocks without writing overlays" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the overlay"; exit 1; }
@@ -1025,7 +1028,7 @@ PYEOF
 # configured remote starts an empty database without reading the committed
 # export. So add imports it on fresh init — issues and memories both, and only
 # then. Seeded here with one of each; recall proves the memories arrived.
-step "a fresh install hydrates the committed ledger export" bash -c '
+probe_step "a fresh install hydrates the committed ledger export" bash -c '
   fresh_probe || exit 1
   mkdir -p "$probe/.beads" || { echo "error: cannot seed the export"; exit 1; }
   printf "%s\n" "{\"_type\":\"issue\",\"id\":\"probe-1\",\"title\":\"seeded\",\"status\":\"open\"}" \
@@ -1054,7 +1057,7 @@ step "a fresh install hydrates the committed ledger export" bash -c '
 # delete drift healed itself. Every harness prefix lookup now reads `bd list`
 # instead, and the probe below trips if a future bd starts healing under those
 # commands too.
-step "a stale ledger export fails the gate naming the bead" bash -c '
+probe_step "a stale ledger export fails the gate naming the bead" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   (cd "$probe" && bd q "probe bead for a stale export" >/dev/null 2>&1) ||
@@ -1097,7 +1100,7 @@ step "a stale ledger export fails the gate naming the bead" bash -c '
 # clears it. Opens by pinning the har-67c trap — bare `bd delete` only
 # previews and exits 0, so the bead must still resolve there — then deletes
 # with --force and polls until it stops resolving before asserting anything.
-step "a deleted bead still exported fails the gate naming the bead" bash -c '
+probe_step "a deleted bead still exported fails the gate naming the bead" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   (cd "$probe" && bd q "probe bead for a deleted export" >/dev/null 2>&1) ||
@@ -1135,7 +1138,7 @@ step "a deleted bead still exported fails the gate naming the bead" bash -c '
 # The har-l5a path: an export with matching content but no git tracking reaches
 # no fresh clone, so the gate fails saying untracked with the fix — and a
 # `git add` clears it.
-step "an untracked ledger export fails the gate saying to track it" bash -c '
+probe_step "an untracked ledger export fails the gate saying to track it" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   (cd "$probe" && bd q "probe bead for an untracked export" >/dev/null 2>&1) ||
@@ -1158,7 +1161,7 @@ step "an untracked ledger export fails the gate saying to track it" bash -c '
 
 # An empty install has no export and nothing to carry: the probe passes rather
 # than failing a project that did nothing wrong.
-step "an empty install passes the ledger export check" bash -c '
+probe_step "an empty install passes the ledger export check" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
@@ -1171,7 +1174,7 @@ step "an empty install passes the ledger export check" bash -c '
 # A fresh clone carries the committed export without the gitignored Dolt
 # working set behind it. The probe skips that shape out loud instead of failing
 # on an export command that cannot work before hydration.
-step "a clone with no live ledger skips the export check" bash -c '
+probe_step "a clone with no live ledger skips the export check" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
   (cd "$probe" && bd q "probe bead" >/dev/null 2>&1) ||

@@ -62,8 +62,8 @@ itself in `bd remember`.
 ## Prove it with the gate
 
 ```bash
-scripts/verify.sh          # build + tests
-scripts/verify.sh --quick  # build only
+scripts/verify.sh          # build + tests + throwaway-repo probes
+scripts/verify.sh --quick  # fast lane only, no probes — iterate here
 scripts/verify.sh --full   # + slow checks and any smoke run
 ```
 

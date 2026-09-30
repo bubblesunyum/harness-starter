@@ -11,7 +11,7 @@
     "scripts/context.py": "859afb6a48628c94",
     "scripts/opencode-agents.py": "1b55c0b1b177666f",
     "scripts/review.sh": "1de13eeec4494b9e",
-    "scripts/verify.sh": "ee5b83acc12e91ab"
+    "scripts/verify.sh": "85a39ebf8e1a62bf"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
@@ -34,9 +34,9 @@
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "e397934ede2d216e",
+    "doc": "b9808242c551631b",
     "scripts/brief.sh": "0c178578e538e6c8",
     "scripts/review.sh": "1de13eeec4494b9e",
-    "scripts/verify.sh": "ee5b83acc12e91ab"
+    "scripts/verify.sh": "85a39ebf8e1a62bf"
   }
 }

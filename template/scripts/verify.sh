@@ -4,7 +4,14 @@
 #
 #   scripts/verify.sh           # build + tests
 #   scripts/verify.sh --full    # + slower checks and any smoke test
-#   scripts/verify.sh --quick   # build only
+#   scripts/verify.sh --quick   # fast lane only: no throwaway-repo probes
+#
+# Two lanes, one contract. The probe steps below each build a throwaway repo
+# and cost seconds apiece, which prices a full run in minutes — too slow for
+# the edit-and-check loop. --quick runs only the steps that prove the tree as
+# it stands (parses, staleness, contract match, unit checks) and skips the
+# probes loudly rather than silently. Run it while iterating, the full gate
+# before committing: a quick green is a signal, not proof.
 #
 # Output is deliberately tiny. A build tool prints tens of thousands of lines
 # and an agent that pipes that into its context has spent a chunk of the day's
@@ -14,8 +21,9 @@
 #
 # Everything in scripts/verify.steps.sh is yours to replace with your project's
 # real build and test commands. Everything here works as-is: keep checks going
-# through `step`, which swallows the log and reports one line — that is the
-# whole point of the gate.
+# through `step` (`probe_step` for checks too slow for the --quick lane),
+# which swallows the log and reports one line — that is the whole point of
+# the gate.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,6 +54,11 @@ _harness_prefix() {
 }
 LOGS=/tmp/$(_harness_prefix)-verify
 mkdir -p "$LOGS"
+# Per-step seconds for the last run, in run order (`sort -rn` for
+# slowest-first): har-ckm showed the gate's total cost with no breakdown, so
+# the next slowdown gets measured rather than guessed at. Truncated here so
+# the file describes one run.
+rm -f "$LOGS/timings"
 
 mode="${1:---default}"
 failed=0
@@ -69,12 +82,26 @@ report() {
 step() {
   local name="$1"; shift
   local log="$LOGS/${name// /-}.log"
+  local t0=$SECONDS
   "$@" > "$log" 2>&1
   local status=$?
   # The exit code alongside the log, so readers need not guess the verdict
   # from the text: a passing step often logs nothing at all.
   echo "$status" > "$log.status"
+  echo "$((SECONDS - t0)) $name" >> "$LOGS/timings"
   report "$name" "$log" $status
+}
+
+# A step too slow for the --quick lane: throwaway-repo probes and heavy
+# suites. Skipped there, loudly: a green suite that silently ran nothing is
+# the failure the steps file warns about, so skips print as skips. Everything
+# else about the step is unchanged.
+probe_step() {
+  if [ "$mode" = "--quick" ]; then
+    echo "  skip  $1 (--quick lane)"
+    return 0
+  fi
+  step "$@"
 }
 
 echo "verify: $ROOT"
