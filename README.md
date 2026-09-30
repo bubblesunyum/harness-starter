@@ -27,6 +27,11 @@ Requires `bash`, `python3`, `git`, and [beads](https://github.com/steveyegge/bea
 overwrites an existing file, so re-running it is a safe way to pick up pieces
 added later.
 
+The ledger reaches git on its own ref (`refs/dolt/data`, via `bd dolt push`)
+— a plain `git push` of the code does not carry it, and `.beads/issues.jsonl`
+is a passive export, not the source of truth. Details are under "How the
+ledger reaches git" in `AGENTS.md`.
+
 ## What you get
 
 | | |

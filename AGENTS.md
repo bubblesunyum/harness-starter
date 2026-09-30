@@ -51,6 +51,15 @@ matching commit, is a ledger that's lying.
 exits 0. Regen the export right after deleting: some `bd` commands auto-import
 a stale `.beads/issues.jsonl`, resurrecting the bead.
 
+### How the ledger reaches git
+
+The ledger lives in a local Dolt database under `.beads/`, which git ignores —
+a normal `git push` carries none of it. It travels on its own ref
+(`refs/dolt/data`), moved only by `bd dolt push` and fetched back with
+`bd dolt pull`; `scripts/ledger-push.sh` is the session-close step that runs
+the push. `.beads/issues.jsonl` is a passive export for human-readable diffs,
+not the source of truth.
+
 ## Memory that another session can find
 
 `bd remember` / `bd recall` is the durable, cross-tool memory: every agent here
