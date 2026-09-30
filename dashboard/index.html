@@ -318,7 +318,7 @@
           border-color 0.15s,
           color 0.15s;
       }
-      .mini:hover:not(:disabled) {
+      .mini:hover:not(:disabled):not([aria-disabled='true']) {
         border-color: var(--accent);
         color: var(--accent);
       }
@@ -331,6 +331,12 @@
       }
       .mini:disabled {
         cursor: progress;
+      }
+      /* The current lane's button: aria-disabled keeps it in tab order (unlike
+      disabled) while reading dimmed, so keyboard users still find it. */
+      .mini[aria-disabled='true'] {
+        opacity: 0.45;
+        cursor: not-allowed;
       }
       .mini.failed {
         border-color: var(--fail);
@@ -1043,9 +1049,25 @@
       .seg button:hover {
         color: var(--accent);
       }
-      .seg button[aria-pressed='true'] {
+      .seg button[aria-checked='true'] {
         background: var(--accent);
         color: var(--panel);
+      }
+      /* The sheet's keyboard move path: plain buttons in a wrapping row, so it
+      reads as actions rather than another segmented setting. */
+      .move-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      /* One visible focus ring for every keyboard path this page adds — the
+      composer inputs signal focus with an accent border instead, so these
+      name it rather than relying on each browser's default. */
+      .card:focus-visible,
+      .seg button:focus-visible,
+      .mini:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
       }
       /* The label field owns its suggestions: the dropdown hangs off the field
       rather than the row, so a narrow lane doesn't squeeze it. */
@@ -1068,7 +1090,7 @@
         box-shadow: var(--shadow);
         padding: 4px;
       }
-      .suggest button {
+      .suggest [role='option'] {
         display: block;
         width: 100%;
         text-align: left;
@@ -1082,7 +1104,10 @@
         padding: 5px 8px;
         cursor: pointer;
       }
-      .suggest button:hover {
+      /* :hover is the pointer's position; aria-selected is the keyboard's (the
+      focus itself never leaves the label field — see activedescendant). */
+      .suggest [role='option']:hover,
+      .suggest [role='option'][aria-selected='true'] {
         background: color-mix(in srgb, var(--accent) 12%, transparent);
         color: var(--accent);
       }
@@ -2185,7 +2210,8 @@
         const segs = [0, 1, 2, 3, 4]
           .map(
             (p) =>
-              `<button type="button" data-prio="${p}" aria-pressed="${draft.priority === p}" title="P${p}">P${p}</button>`,
+              `<button type="button" role="radio" data-prio="${p}" aria-checked="${draft.priority === p}"
+                tabindex="${draft.priority === p ? '0' : '-1'}" title="P${p}">P${p}</button>`,
           )
           .join('')
         return `
@@ -2197,11 +2223,12 @@
             <div class="composer-row">
               <div class="labels-wrap">
                 <input id="composerLabels" type="text" placeholder="labels, comma-separated" value="${esc(draft.labels)}"
-                  aria-label="Labels" autocomplete="off" aria-expanded="false" aria-controls="composerSuggest"
+                  aria-label="Labels" autocomplete="off" role="combobox" aria-autocomplete="list"
+                  aria-expanded="false" aria-controls="composerSuggest"
                   ${composerSaving ? 'disabled' : ''} />
                 <div class="suggest" id="composerSuggest" role="listbox" aria-label="Label suggestions" hidden></div>
               </div>
-              <div class="seg" role="group" aria-label="Priority">${segs}</div>
+              <div class="seg" role="radiogroup" aria-label="Priority">${segs}</div>
             </div>
             <div class="composer-row actions">
               <span class="form-error">${esc(composerError)}</span>
@@ -2222,6 +2249,11 @@
         return [...seen].sort()
       }
 
+      /* Which suggestion the keyboard has armed. Focus never leaves the label
+      field — the input's aria-activedescendant names the armed option, and
+      Enter picks it. -1 is nothing armed: arrows from there land on an end. */
+      let suggestActive = -1
+
       function renderSuggestions(input) {
         const box = $('composerSuggest')
         if (!input || !box) return
@@ -2231,26 +2263,87 @@
         const matches = allLabels()
           .filter((l) => !used.has(l.toLowerCase()) && (!token || l.toLowerCase().includes(token)))
           .slice(0, 8)
+        // A fresh list arms nothing — the reader's next arrow says where to go.
+        suggestActive = -1
         if (!matches.length) {
           box.hidden = true
           box.innerHTML = ''
           input.setAttribute('aria-expanded', 'false')
+          input.removeAttribute('aria-activedescendant')
           return
         }
         box.innerHTML = matches
-          .map((m) => `<button type="button" role="option" data-suggest="${esc(m)}">${esc(m)}</button>`)
+          .map(
+            (m, ix) =>
+              `<div role="option" id="composerSuggest-${ix}" aria-selected="false" data-suggest="${esc(m)}">${esc(m)}</div>`,
+          )
           .join('')
         box.hidden = false
         input.setAttribute('aria-expanded', 'true')
+        input.removeAttribute('aria-activedescendant')
+      }
+
+      /* The armed option, repainted in place — a re-render here would cost
+      nothing visually, but rebuilding the list under the reader's arrows is
+      how focus gets lost mid-gesture. */
+      function markSuggestionActive(input) {
+        const box = $('composerSuggest')
+        if (!input || !box) return
+        const opts = [...box.querySelectorAll('[role="option"]')]
+        opts.forEach((o, ix) => o.setAttribute('aria-selected', String(ix === suggestActive)))
+        const armed = opts[suggestActive]
+        if (armed) {
+          input.setAttribute('aria-activedescendant', armed.id)
+          armed.scrollIntoView({block: 'nearest'})
+        } else {
+          input.removeAttribute('aria-activedescendant')
+        }
+      }
+
+      /* The typed fragment is the last segment; a pick replaces it and the
+      field keeps the comma-separated shape it already had. Shared by the
+      pointer press and the keyboard's Enter, so both land in the same place. */
+      function pickSuggestion(value) {
+        const input = $('composerLabels')
+        if (!input) return
+        const kept = input.value
+          .split(',')
+          .slice(0, -1)
+          .map((s) => s.trim())
+          .filter(Boolean)
+        kept.push(value)
+        input.value = kept.join(', ')
+        draft.labels = input.value
+        renderSuggestions(input)
+        input.focus()
       }
 
       function hideSuggestions() {
+        suggestActive = -1
         const box = $('composerSuggest')
         if (box) {
           box.hidden = true
           box.innerHTML = ''
         }
-        $('composerLabels')?.setAttribute('aria-expanded', 'false')
+        const input = $('composerLabels')
+        if (input) {
+          input.setAttribute('aria-expanded', 'false')
+          input.removeAttribute('aria-activedescendant')
+        }
+      }
+
+      /* One press picks the priority, and the pressed segment fills like
+      .mini's. Roving tabindex: the checked segment is the group's one tab
+      stop, and arrows move both the check and the focus together. */
+      function setPriority(p, focus = false) {
+        draft.priority = p
+        const btns = [...document.querySelectorAll('#composer .seg [data-prio]')]
+        btns.forEach((b) => {
+          const on = +b.dataset.prio === p
+          b.setAttribute('aria-checked', String(on))
+          b.tabIndex = on ? 0 : -1
+          if (on && focus) b.focus()
+        })
       }
 
       function openComposer() {
@@ -2420,8 +2513,7 @@
         // here makes it a no-op there.
         lastDragEnd = Date.now()
         if (!to || from === to) return paintNow()
-        fetch('beads/move', {method: 'POST', body: JSON.stringify({id, lane: to})})
-          .then((r) => r.json())
+        postMove(id, to)
           .then((r) => {
             if (!r.ok) toast(r.error || 'move failed')
             tick()
@@ -2715,10 +2807,64 @@
       const WIDE_SHEET = new Set(['diff'])
       let subject = null
 
+      /* The lanes a sheet can file its bead into. Staging reports derived
+      state rather than holding beads, so it lends its label here to done —
+      the one place a bead can actually be. Kept in step with DROP_LANES and
+      the server's MOVE_LANES: a lane added in one place needs adding in all
+      three. */
+      const MOVE_TARGETS = [
+        ...BEAD_LANES.filter(([k]) => k !== 'staging'),
+        ['done', 'done'],
+        ['backlog', 'backlog'],
+      ]
+
+      /* Where the sheet's bead stands, so its own button can read
+      aria-disabled — focusable, unlike disabled, so keyboard users still find
+      it. Backlog isn't a laneOf — it's a flag on the bead — and staging isn't
+      a place a bead can be moved to, so both fold onto the move targets. */
+      function beadLane(i) {
+        if (i.backlog) return 'backlog'
+        const raw = ledger.laneOf ? ledger.laneOf(i) : i.status
+        return raw === 'staging' ? 'done' : raw
+      }
+
+      /* One POST both move paths share — the drop handler and the sheet's
+      buttons differ only in what follows it (see call sites for tick). */
+      async function postMove(id, lane) {
+        return (
+          await fetch('beads/move', {method: 'POST', body: JSON.stringify({id, lane})})
+        ).json()
+      }
+
+      /* The keyboard path for lane moves: drag-and-drop stays as the pointer
+      gesture, and these buttons POST the same move the drop handler does. The
+      button arrives disabled in flight and stays that way on success (the poll
+      rebuilds the row); on failure it is re-enabled so retry survives without
+      reopening the sheet. */
+      async function moveBead(id, lane, btn) {
+        try {
+          const r = await postMove(id, lane)
+          if (!r.ok) {
+            toast(r.error || 'move failed')
+            if (btn) btn.disabled = false
+          } else tick()
+        } catch {
+          toast("nothing is serving this page, so the move didn't go through")
+          if (btn) btn.disabled = false
+        }
+      }
+
       function beadSheet(i) {
         const kids = (i.children || []).map((id) => ledger.byId[id]).filter(Boolean)
         const commits = i.commits || []
         const block = (label, text) => (text ? `<section><h4>${esc(label)}</h4><p>${esc(text)}</p></section>` : '')
+        const here = beadLane(i)
+        const moveRow = `<section><h4>move to</h4><div class="move-row" role="group" aria-label="Move to">${MOVE_TARGETS.map(
+          ([key, label]) =>
+            `<button class="mini" type="button" data-move="${esc(key)}" data-bead-id="${esc(i.id)}"${
+              key === here ? ' aria-disabled="true" title="Already here"' : ''
+            }>${esc(label)}</button>`,
+        ).join('')}</div></section>`
 
         return `
           <h3 class="title" id="sheetTitle">${esc(i.title)}</h3>
@@ -2730,6 +2876,7 @@
             ${(i.labels || []).map((l) => `<span class="chip epic">${esc(l)}</span>`).join('')}
             ${i.owner ? `<code>@${esc(i.owner)}</code>` : ''}
           </div>
+          ${moveRow}
           ${block('description', i.description)}
           ${block('design', i.design)}
           ${block('notes', i.notes)}
@@ -2992,34 +3139,23 @@
         }
         const prio = e.target.closest('[data-prio]')
         if (prio) {
-          draft.priority = +prio.dataset.prio
           // Marked in place: a repaint here would drop the title's focus.
-          document
-            .querySelectorAll('#composer .seg button')
-            .forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.prio === draft.priority)))
+          setPriority(+prio.dataset.prio)
           return
         }
         const sug = e.target.closest('[data-suggest]')
-        if (sug) {
-          const input = $('composerLabels')
-          if (input) {
-            // The typed fragment is the last segment; a pick replaces it and
-            // the field keeps the comma-separated shape it already had.
-            const kept = input.value
-              .split(',')
-              .slice(0, -1)
-              .map((s) => s.trim())
-              .filter(Boolean)
-            kept.push(sug.dataset.suggest)
-            input.value = kept.join(', ')
-            draft.labels = input.value
-            renderSuggestions(input)
-            input.focus()
-          }
-          return
-        }
+        if (sug) return pickSuggestion(sug.dataset.suggest)
         if (e.target.closest('[data-composer-save]')) return saveComposer()
         if (e.target.closest('[data-composer-cancel]')) return cancelComposer()
+        // The sheet's keyboard move path — the same POST a drop makes, filed
+        // from a button instead of a gesture. Disabled while in flight rather
+        // than silently swallowing a second press on it.
+        const move = e.target.closest('[data-move]')
+        if (move) {
+          if (move.disabled || move.getAttribute('aria-disabled') === 'true' || !move.dataset.beadId || !move.dataset.move) return
+          move.disabled = true
+          return moveBead(move.dataset.beadId, move.dataset.move, move)
+        }
         // The caret sits inside its card's button, so it claims its press before
         // the card-level handler below ever sees it — expanding must not also
         // open the sheet. Forced: a repaint has to answer the press at once,
@@ -3139,10 +3275,61 @@
         closeRevertConfirm()
         closeFileMenu()
         closeCommitCompose()
+        // Suggestions own the first Escape while open — the draft behind them
+        // stays, and the composer it belongs to stays with it.
+        const suggestionsOpen = composerOpen && $('composerSuggest') && !$('composerSuggest').hidden
         hideSuggestions()
         // A sheet on top owns the press; the composer behind it stays as it was.
-        if (composerOpen && !subject) cancelComposer()
+        if (composerOpen && !subject && !suggestionsOpen) cancelComposer()
         if (subject) closeSheet()
+      })
+
+      /* The composer's own keys. The priority radiogroup answers arrows, Home
+      and End like a native radio group; the label field answers up/down by
+      arming a suggestion and Enter by picking the armed one. Escape is owned
+      by the handler above. */
+      document.addEventListener('keydown', (e) => {
+        const radio = e.target.closest?.('[data-prio]')
+        if (
+          radio &&
+          ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)
+        ) {
+          e.preventDefault()
+          const order = [...document.querySelectorAll('#composer .seg [data-prio]')]
+          if (!order.length) return
+          let ix = order.indexOf(radio)
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ix = (ix + 1) % order.length
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+            ix = (ix - 1 + order.length) % order.length
+          else if (e.key === 'Home') ix = 0
+          else ix = order.length - 1
+          setPriority(+order[ix].dataset.prio, true)
+          return
+        }
+        if (
+          e.target.id === 'composerLabels' &&
+          ['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)
+        ) {
+          const box = $('composerSuggest')
+          const opts = box && !box.hidden ? [...box.querySelectorAll('[role="option"]')] : []
+          if (!opts.length) return
+          if (e.key === 'Enter') {
+            const armed = opts[suggestActive]
+            // Nothing armed is nothing to confirm — the field keeps its text.
+            if (!armed) return
+            e.preventDefault()
+            pickSuggestion(armed.dataset.suggest)
+            return
+          }
+          e.preventDefault()
+          suggestActive =
+            e.key === 'ArrowDown'
+              ? Math.min(suggestActive + 1, opts.length - 1)
+              : suggestActive <= 0
+                ? opts.length - 1
+                : suggestActive - 1
+          markSuggestionActive(e.target)
+        }
       })
 
       /* ---- work tree interactions --------------------------------------------- */
