@@ -141,7 +141,9 @@ aspirational. Before spawning: record each worker's cap (from the
 brief size and the bead's scope — a rename costs less than a design
 call) and the round cap (sum of workers plus gate plus reviewers;
 reviewers are the cheapest line — ~15k tokens total across a full
-pass is normal). During the round: track spend per worker; a worker
+pass is normal). Default when the user names no budget: 30k tokens per
+worker, 100k for the round. Only do something different when explicitly
+asked. During the round: track spend per worker; a worker
 past its cap stops and reports, and the orchestrator decides —
 continue (raise the cap deliberately), re-scope (split the bead), or
 take back (finish by hand). A cap raised without the note is a cap
