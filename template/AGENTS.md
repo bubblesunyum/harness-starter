@@ -106,8 +106,8 @@ bead; the commit-msg hook enforces it.
 ## Keep scratch inside the repo
 
 Temp and scratch files you create live in `./.tmp/` (gitignored), never in
-`/tmp` or other directories outside this folder — and they're removed when
-done. The only exception is paths owned by the tools themselves: the gate's
+`/tmp`, `$TMPDIR`, or other directories outside this folder — and they're
+removed when done. The only exception is paths owned by the tools themselves: the gate's
 logs, the review packet, and screenshots in `/tmp` stay where those scripts
 put them, because a packet inside the tree would ride along in the next
 `git add -A`.

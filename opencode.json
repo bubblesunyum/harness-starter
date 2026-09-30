@@ -8,7 +8,17 @@
     },
     "edit": {
       "/tmp/*": "deny",
-      "/private/tmp/*": "deny"
+      "/private/tmp/*": "deny",
+      "/var/folders/*": "deny",
+      "/private/var/folders/*": "deny"
+    },
+    "bash": {
+      "*": "allow",
+      "*>*/tmp/*": "deny",
+      "*>*/private/tmp/*": "deny",
+      "*>*/var/folders/*": "deny",
+      "*>*/private/var/folders/*": "deny",
+      "*>*TMPDIR*": "deny"
     }
   }
 }
