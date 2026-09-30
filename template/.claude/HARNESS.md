@@ -288,6 +288,17 @@ not in the list: it is the rationale, read when the pieces are being rearranged,
 and always-loading it in one tool and not the other would put the two sessions
 on different budgets while `context.py` counted neither.
 
+The root `opencode.json` is the single source of truth for both keys —
+`instructions` and any `plugin` entries. A `.opencode/opencode.json` shadows
+it: opencode reads only the deeper file when both exist, so a copy carrying a
+plugin but no `instructions` silently unloads `AGENTS.md`, and a copy
+duplicating either key hides drift the contract check never compares, because
+it tracks only the root file. `harness update` fails the check on both — a missing
+`instructions` list, or a copy duplicating either key — and `harness add` merges the root
+instructions into an existing shadow. `.opencode/tui.json` carries UI
+overrides only and must not hold plugin entries; plugin configuration lives in
+the root file.
+
 ## Staleness is the failure review can't catch
 
 A doc declares what it describes in a `<!-- tracks: … -->` comment; hashes live

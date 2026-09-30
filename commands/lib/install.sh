@@ -515,6 +515,146 @@ harness_current() {
   return "$result"
 }
 
+# The shadow state of a target's .opencode/opencode.json, on stdout: absent,
+# ok, shadow, duplicate, or unknown. opencode reads the deeper file instead of
+# the root opencode.json when both exist — and reads only the winner — so a
+# copy carrying a plugin but no instructions silently unloads AGENTS.md, and a
+# copy duplicating either key hides drift the contract check never compares,
+# because it tracks only the root file. The root opencode.json is the single
+# source of truth for both keys. Never writes; `add` merges, `update` reports.
+harness_opencode_shadow() {
+  # Two statements: one `local a=... b=$a...` expands both words before either
+  # is assigned, leaving b built from the old (empty) a.
+  local target="$1"
+  local shadow="$target/.opencode/opencode.json"
+  [ -f "$shadow" ] || { printf 'absent\n'; return 0; }
+  command -v python3 >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
+  python3 - "$target/opencode.json" "$shadow" <<'PYEOF' || printf 'unknown\n'
+import json
+import sys
+
+
+def load(path):
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def same(first, second):
+    # Order and duplication carry no meaning — opencode loads every entry —
+    # so lists compare as sets. Comparing raw (or sorted) lists would warn
+    # forever on exactly the order merge produces (shadow entries first,
+    # missing appended), with merge calling the same file "already carries",
+    # and would never converge on duplicates merge only appends past
+    # (root [A,B] vs [A,A] merges to [A,A,B], still duplicate).
+    if isinstance(first, list) and isinstance(second, list):
+        key = lambda value: json.dumps(value, sort_keys=True)
+        return set(map(key, first)) == set(map(key, second))
+    return first == second
+
+
+root, shadow = load(sys.argv[1]), load(sys.argv[2])
+if not isinstance(shadow, dict):
+    print("unknown")
+elif not shadow.get("instructions"):
+    print("shadow")
+elif not isinstance(root, dict):
+    # No root file to agree with — update already flags the missing contract
+    # file, so a shadow carrying anything of its own is duplication by default.
+    print("duplicate")
+else:
+    wanted = root.get("instructions", [])
+    have = shadow.get("instructions", [])
+    if (isinstance(wanted, list) and isinstance(have, list)
+            and any(entry not in have for entry in wanted)):
+        # A non-empty subset still unloads part of the contract through the
+        # deeper file, and merging restores it — so this is the fail-closed
+        # shadow state, never a warning that exits 0.
+        print("shadow")
+    # Absent keys read as None via .get on both sides, so a shadow missing
+    # the root's plugin disagrees (None vs the entries) instead of passing
+    # silently while dropping the plugin.
+    elif any(not same(shadow.get(key), root.get(key))
+             for key in ("instructions", "plugin")):
+        print("duplicate")
+    else:
+        print("ok")
+PYEOF
+}
+
+# Merge the root instructions into an existing .opencode/opencode.json, on
+# stdout what happened. A plugin-only copy there would silently unload
+# AGENTS.md — opencode reads only the deeper file — so the missing entries are
+# appended while the shadow's own entries and its plugin stay untouched. Fails
+# when there is nothing sound to merge from or with, so the caller can say so
+# loudly instead of leaving the shadow: no python3, no root file, or an
+# unparseable shadow. Silent with success when there is no shadow at all.
+harness_merge_opencode() {
+  local target="$1"
+  [ -f "$target/.opencode/opencode.json" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 1
+  [ -f "$target/opencode.json" ] || return 1
+  python3 - "$target/opencode.json" "$target/.opencode/opencode.json" <<'PYEOF'
+import json
+import sys
+
+root = json.load(open(sys.argv[1]))
+shadow = json.load(open(sys.argv[2]))
+# Fail loud instead of char-splitting or crashing after a write: a string
+# `wanted` would split into per-character "missing" entries, a non-dict
+# shadow has no keys to merge into, and non-string entries TypeError on
+# ", ".join only after the file was already written.
+if not isinstance(shadow, dict):
+    sys.exit(1)
+wanted = root.get("instructions", []) if isinstance(root, dict) else None
+if not isinstance(wanted, list):
+    sys.exit(1)
+have = shadow.get("instructions", [])
+if not isinstance(have, list):
+    have = []
+if not all(isinstance(entry, str) for entry in wanted):
+    sys.exit(1)
+if not all(isinstance(entry, str) for entry in have):
+    sys.exit(1)
+missing = [entry for entry in wanted if entry not in have]
+if missing:
+    shadow["instructions"] = have + missing
+    with open(sys.argv[2], "w") as handle:
+        json.dump(shadow, handle, indent=2)
+        handle.write("\n")
+    print("merged instructions into .opencode/opencode.json (%s)" % ", ".join(missing))
+else:
+    print(".opencode/opencode.json already carries the instructions")
+PYEOF
+}
+
+# The plugin state of a target's .opencode/tui.json, on stdout: absent, ok,
+# plugin, or unknown. tui.json carries UI overrides only — plugin configuration lives
+# in the root opencode.json — so a plugin entry there splits the source of
+# truth and hides plugin drift the contract check never compares. Never
+# writes; `update` reports. Unparseable JSON and no python3 read as unknown,
+# like the shadow check: the harness cannot see a plugin it cannot parse,
+# so update fails closed and says to check by hand.
+harness_opencode_tui() {
+  local target="$1"
+  local tui="$target/.opencode/tui.json"
+  [ -f "$tui" ] || { printf 'absent\n'; return 0; }
+  command -v python3 >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
+  python3 - "$tui" <<'PYEOF' || printf 'unknown\n'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("unknown")
+else:
+    print("plugin" if isinstance(data, dict) and data.get("plugin") else "ok")
+PYEOF
+}
+
 # The project's acknowledged forks, one path per line, comments and blanks
 # stripped, on stdout. Fails when the file exists but can't be read: an
 # unreadable list silently un-acknowledging every fork is the false alarm this

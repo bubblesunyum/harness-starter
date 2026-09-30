@@ -19,6 +19,8 @@ standards and taste. Read it too. Neither file repeats the other.
 scripts/brief.sh
 ```
 
+> opencode: your first action every session is `bash scripts/brief.sh` — you must run it yourself before anything else.
+
 The seat and what it's for, the last session's note, the ready work, the known
 traps, in about 500 tokens. Claude Code runs it as a SessionStart hook and opencode loads this file
 through `opencode.json`, but the brief is *state* rather than a static file, so

@@ -1427,6 +1427,64 @@
       details.panel > summary .n {
         color: inherit;
       }
+      /* Pills that sit on the bars themselves take the bar's fixed dark ink,
+      not the page's adaptive tokens: --bg/--dim/--line go pale-on-pale in
+      light mode and flip dark in dark mode, while the bars stay light in
+      both. Direct children only — a tip hanging off a lane name carries its
+      own panel fill, so minis inside it keep the page treatment. */
+      details.panel > summary > .mini,
+      details.panel > summary > .add-bead {
+        color: #14150f;
+        background: color-mix(in srgb, #14150f 9%, transparent);
+        border-color: color-mix(in srgb, #14150f 32%, transparent);
+      }
+      details.panel > summary > .mini:hover:not(:disabled):not([aria-disabled='true']),
+      details.panel > summary > .add-bead:hover {
+        color: #14150f;
+        background: color-mix(in srgb, #14150f 17%, transparent);
+        border-color: color-mix(in srgb, #14150f 65%, transparent);
+      }
+      /* Status hues stay hues, pinned to their light-mode values so they hold
+      on the fill in either mode — the adaptive tokens go pastel in dark mode
+      and would wash out on the bars. */
+      details.panel > summary > .mini.ok {
+        color: #2e7d55;
+        border-color: color-mix(in srgb, #2e7d55 55%, transparent);
+      }
+      details.panel > summary > .mini.failed,
+      details.panel > summary > .mini.danger {
+        color: #b3352c;
+        border-color: color-mix(in srgb, #b3352c 55%, transparent);
+      }
+      /* The two creation controls read as buttons before any hover: a fuller
+      border at rest, solid ink on hover so the press lands before it happens.
+      Colours only — size and border width are untouched, so nothing shifts. */
+      details.panel > summary > .add-bead,
+      details.panel > summary > .mini[data-commit-toggle] {
+        border-color: color-mix(in srgb, #14150f 55%, transparent);
+      }
+      details.panel > summary > .add-bead:hover,
+      details.panel > summary > .mini[data-commit-toggle]:hover:not(:disabled) {
+        background: #14150f;
+        border-color: #14150f;
+        color: #fffffe;
+      }
+      /* Pressed still reads pressed: without this the bar tint above would win
+      on specificity and an open composer/popover would look unpressed. */
+      details.panel > summary > .mini[aria-expanded='true'],
+      details.panel > summary > .add-bead[aria-expanded='true'] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--panel);
+      }
+      /* The accent ring goes faint on the pale fills; the bar's own ink holds. */
+      details.panel > summary > .mini:focus-visible {
+        outline-color: #14150f;
+      }
+      details.panel > summary > .add-bead:focus-visible {
+        outline: 2px solid #14150f;
+        outline-offset: 2px;
+      }
       /* Rows, like the lanes below it — the backlog is read the same way the rest
      of the ledger is, and it's behind a disclosure, so its length costs nothing
      until it's opened. */

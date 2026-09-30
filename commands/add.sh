@@ -12,8 +12,11 @@
 # Never overwrites a file that already exists in the target, and prints what it
 # skipped, so a re-run is a safe way to pick up pieces added since. The one place
 # it refuses to be quiet is a file carrying the harness contract that exists and
-# differs — there, a skip means the fix never arrived. `harness update` is the
-# same check on its own, for a project that isn't being re-added to.
+# differs — there, a skip means the fix never arrived — unless the project
+# acknowledged the fork in harness/diverged.txt, which this honors the same way
+# `harness update` does: shown for the record, never warned about as stale.
+# `harness update` is the same check on its own, for a project that isn't
+# being re-added to.
 set -euo pipefail
 
 # Derived from this file's own location, never from the environment. The
@@ -43,8 +46,9 @@ project that already has a ledger keeps the prefix it already has. Needs beads
 Never overwrites a file that already exists, so re-running is a safe way to
 pick up pieces added to the starter since. Files carrying the harness contract
 are warned about loudly when they exist but differ from the template — that is
-the one case where skipping quietly would hide a failed install. See
-'harness update' for the same check without installing anything.
+the one case where skipping quietly would hide a failed install — unless the
+file is acknowledged in harness/diverged.txt, which is shown for the record
+instead. See 'harness update' for the same check without installing anything.
 EOF
 }
 
@@ -102,6 +106,21 @@ echo
 
 files="$(harness_files_for "$HERE" "$target")"
 
+# Acknowledged local forks. A contract file listed in the project's
+# harness/diverged.txt differs on purpose, so a re-add shows it for the record
+# instead of warning that the install is stale — the same acknowledgment
+# `harness update` honors, read through the same helper. An unreadable list
+# warns and reads as empty rather than failing the install: every difference
+# then warns as stale, which is the loud direction, and `update` still fails
+# on the list itself.
+diverged_want=""
+if [ -f "$target/harness/diverged.txt" ]; then
+  diverged_want="$(harness_diverged_want "$target")" || {
+    echo "  ! harness/diverged.txt exists but is not readable — acknowledged forks can't be honored; every difference warns as stale." >&2
+    diverged_want=""
+  }
+fi
+
 # Pre-split projects carry their gate steps and review scope inline in
 # scripts/verify.sh / scripts/review.sh. This runs before the copy loop so the
 # project's own answers win over the template's placeholders: a re-add never
@@ -122,7 +141,7 @@ for rel in scripts/verify.sh scripts/review.sh; do
 done
 [ -n "$moved_all" ] && { printf '%s' "$moved_all"; echo; }
 
-copied=0; skipped=0; stale=0
+copied=0; skipped=0; stale=0; diverged=0
 while IFS= read -r rel; do
   src="$TEMPLATE/$rel"
   dst="$target/$rel"
@@ -130,10 +149,17 @@ while IFS= read -r rel; do
     # Never overwritten — that is what makes a re-run safe. But for the files
     # carrying the harness contract, silence here is the install failing: the
     # project keeps a stale AGENTS.md, the skip line scrolls past among thirty
-    # others, and nothing ever says the fix didn't arrive.
+    # others, and nothing ever says the fix didn't arrive. Acknowledged forks
+    # are the exception: those differ on purpose, so they are shown for the
+    # record instead of counted as stale.
     if harness_is_contract "$rel" "$src" && ! harness_current "$rel" "$src" "$dst"; then
-      echo "  ⚠ $rel exists and differs from the template"
-      stale=$((stale + 1))
+      if harness_in_diverged_list "$diverged_want" "$rel"; then
+        echo "  diverged  $rel (acknowledged in harness/diverged.txt)"
+        diverged=$((diverged + 1))
+      else
+        echo "  ⚠ $rel exists and differs from the template"
+        stale=$((stale + 1))
+      fi
     else
       echo "  skip  $rel (already there)"
     fi
@@ -155,6 +181,11 @@ if [ "$stale" -gt 0 ]; then
   echo "    fully installed here. Merging is yours, because this never overwrites."
   echo "    What changed:"
   echo "      harness update --diff $target"
+fi
+if [ "$diverged" -gt 0 ]; then
+  echo
+  echo "  $diverged diverged file(s) above differ — acknowledged in harness/diverged.txt,"
+  echo "    shown for the record. This never overwrites them; delete the line to un-acknowledge."
 fi
 # The hook logic lives in scripts/ and is pointed at, rather than copied into
 # a hooks directory — beads rewrites .beads/hooks on upgrade and would eat it.
@@ -491,6 +522,17 @@ else
   echo "$agents_out" >&2
   echo "  ! couldn't generate .opencode/agent/ — fix the above and run" >&2
   echo "    scripts/opencode-agents.py. opencode has no reviewers until you do." >&2
+fi
+
+# A .opencode/opencode.json shadows the root one — opencode reads only the
+# deeper file — so a plugin-only copy there would silently unload AGENTS.md.
+# The root instructions are merged in; the shadow's own entries stay.
+if merged="$(harness_merge_opencode "$target")"; then
+  if [ -n "$merged" ]; then echo "  $merged"; fi
+else
+  echo "  ! .opencode/opencode.json exists but the instructions couldn't be merged in." >&2
+  echo "    opencode reads it instead of opencode.json, so without them AGENTS.md never loads." >&2
+  echo "    Copy the instructions list from opencode.json by hand." >&2
 fi
 
 (cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true

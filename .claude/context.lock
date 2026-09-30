@@ -29,12 +29,19 @@
     "doc": "7fec5b9a76db6581",
     "scripts/brief.sh": "0c178578e538e6c8"
   },
+  ".claude/skills/orchestrate/SKILL.md": {
+    "doc": "eb5530ed4b53cb9c",
+    "scripts/agent.py": "9d06600351b2f27f",
+    "scripts/brief.sh": "0c178578e538e6c8",
+    "scripts/review.sh": "b1c750897c2e4f66",
+    "scripts/verify.sh": "bab6bc040bb3ff03"
+  },
   ".claude/skills/workflow/SKILL.md": {
     "doc": "b0d1c23e3b294f10",
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "0d8ec4bb62b0e16d",
+    "doc": "1b376157a2fda3a5",
     "scripts/brief.sh": "0c178578e538e6c8",
     "scripts/review.sh": "b1c750897c2e4f66",
     "scripts/verify.sh": "bab6bc040bb3ff03"

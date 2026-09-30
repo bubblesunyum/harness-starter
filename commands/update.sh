@@ -289,6 +289,65 @@ while IFS= read -r want; do
   fi
 done <<< "$diverged_want"
 
+# A .opencode/opencode.json shadows the root opencode.json — opencode reads
+# only the deeper file — so one without instructions silently unloads AGENTS.md
+# and one duplicating either key hides drift the loop above never compares.
+# Read here, before the verdict below, so a shadow fails the check the same
+# way a stale contract file does.
+shadow_state="absent"
+if [ -f "$target/.opencode/opencode.json" ]; then
+  shadow_state="$(harness_opencode_shadow "$target")"
+fi
+case "$shadow_state" in
+  absent|ok) ;;
+  shadow)
+    stale="$stale  .opencode/opencode.json (shadows opencode.json — no instructions)"$'\n'
+    echo "✗ .opencode/opencode.json shadows opencode.json and carries no instructions"
+    echo "  opencode reads the deeper file instead of the root one, so AGENTS.md never loads."
+    echo "  Merge the instructions list from opencode.json — 'harness add $target' does it."
+    echo
+    ;;
+  duplicate)
+    # Stale, not a warning: the deeper file hides drift the loop above never
+    # compares, so exiting 0 would report "current" while the contract drifts.
+    stale="$stale  .opencode/opencode.json (duplicates instructions/plugin from opencode.json)"$'\n'
+    echo "✗ .opencode/opencode.json duplicates instructions/plugin from opencode.json"
+    echo "  The root file is the single source of truth — opencode reads only the deeper"
+    echo "  file, so drift here never shows above. Move plugin entries to opencode.json"
+    echo "  and keep the instructions identical."
+    echo
+    ;;
+  *)
+    stale="$stale  .opencode/opencode.json (unreadable — check it by hand)"$'\n'
+    echo "✗ .opencode/opencode.json exists but couldn't be read — it shadows opencode.json,"
+    echo "  so opencode may be running without AGENTS.md. Check it by hand."
+    echo
+    ;;
+esac
+
+# A plugin entry in .opencode/tui.json splits the source of truth with the
+# root opencode.json, hiding plugin drift the loop above never compares.
+# Reported here, next to the shadow check, so it fails the same way.
+tui_state="absent"
+if [ -f "$target/.opencode/tui.json" ]; then
+  tui_state="$(harness_opencode_tui "$target")"
+fi
+case "$tui_state" in
+  absent|ok) ;;
+  plugin)
+    stale="$stale  .opencode/tui.json (carries plugin — move it to opencode.json)"$'\n'
+    echo "✗ .opencode/tui.json carries plugin entries"
+    echo "  tui.json holds UI overrides only — plugin configuration lives in the root"
+    echo "  opencode.json. Move the entries there."
+    echo
+    ;;
+  *)
+    stale="$stale  .opencode/tui.json (unreadable — check it by hand)"$'\n'
+    echo "✗ .opencode/tui.json exists but couldn't be read — check it by hand."
+    echo
+    ;;
+esac
+
 if [ -n "$stale" ]; then
   echo "⚠ $(harness_tally "$stale") contract file(s) exist and differ from the template"
   printf '%s' "$stale"

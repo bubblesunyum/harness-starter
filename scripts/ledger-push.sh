@@ -107,5 +107,16 @@ if push_out="$(bd dolt push 2>&1)"; then
 else
   echo "$push_out" >&2
   echo "✗ the ledger did not reach git — the beads are still only on this machine." >&2
+  # The push has failed before as a host-side rejection (GitHub answering
+  # HTTP 400 on the table-file upload while plain `git push` to the same
+  # origin kept working) that cleared on a later retry with nothing changed
+  # here — so retry this script first. A working `git push` proves nothing
+  # about this path either way: the ledger travels on its own Dolt ref, not
+  # on any branch git pushes.
+  echo "  Retry scripts/ledger-push.sh — a transient host rejection clears on its own." >&2
+  echo "  If it persists, separate the read path from the write path:" >&2
+  echo "      bd dolt pull                    # the read path; usually still works" >&2
+  echo "      bd dolt remote list             # the ref this pushes to" >&2
+  echo "      scripts/ledger-push.sh --check  # how far behind the push is" >&2
   exit 1
 fi
