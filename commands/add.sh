@@ -263,12 +263,37 @@ else
 fi
 
 if command -v bd >/dev/null 2>&1; then
+  # A zero exit from `bd init` is not a working ledger — that is how a project
+  # reached a state where every session printed a healthy brief while the
+  # ledger had no usable database behind it. Verified with `bd list`, never
+  # `bd config`/`bd info`/`bd stats`/`bd doctor`: those auto-import a stale
+  # .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+  # deleted beads (har-67c) — and doctor refuses embedded mode entirely, which
+  # is what this installer produces.
+  harness_verify_ledger() {
+    local err
+    if [ ! -d "$target/.beads/embeddeddolt" ]; then
+      echo "  ! ledger has no database behind it (.beads/embeddeddolt missing) — the install did not take." >&2
+      echo "    Run 'bd init --prefix $prefix' in $target and check the error." >&2
+      return 1
+    fi
+    if ! err="$(cd "$target" && bd list --json --all 2>&1 >/dev/null)"; then
+      echo "  ! ledger initialised but unusable — 'bd list' fails in $target." >&2
+      [ -n "$err" ] && printf '%s\n' "$err" | head -5 | sed -e 's/^/    /' >&2
+      echo "    Run 'bd list' there yourself and check the error." >&2
+      return 1
+    fi
+  }
   # Keyed on whether a prefix came back above, not on `.beads` existing: the
   # directory can be there with no database behind it, and reporting that as an
   # initialised ledger is how you find out later, one failing `bd` at a time.
   if [ -n "$existing_prefix" ]; then
-    echo "  ledger already initialised ($prefix-)"
-    ledger=1
+    if harness_verify_ledger; then
+      echo "  ledger already initialised ($prefix-)"
+      ledger=1
+    else
+      unset ledger
+    fi
   elif (cd "$target" && bd init --prefix "$prefix" >/dev/null 2>&1); then
     echo "  initialised the ledger ($prefix-)"
     ledger=1
@@ -290,6 +315,13 @@ if command -v bd >/dev/null 2>&1; then
       echo "  ! couldn't import .beads/issues.jsonl — the ledger starts empty." >&2
       echo "$import_out" | sed -e 's/^/    /' >&2
       echo "    Once the ledger is up, run 'bd import .beads/issues.jsonl' yourself." >&2
+    fi
+    # The exit above says init ran; this says the ledger works. Without it a
+    # half-initialised database reports success and every later `bd` fails one
+    # at a time — with it the Dolt-remote block below stays gated on a ledger
+    # that actually answers.
+    if ! harness_verify_ledger; then
+      unset ledger
     fi
   else
     echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
