@@ -84,6 +84,19 @@ await_bead_gone() {
 }
 export -f await_bead_gone
 
+# Waits until a freshly filed probe bead resolves: rapid bd invocations can
+# read a snapshot from before the mutation landed, so committing against an
+# unasserted fixture would blame the hook for a bead the ledger can't see yet.
+await_bead_ready() {
+  local dir="$1" bid="$2" tries=0
+  while ! (cd "$dir" && bd show "$bid" >/dev/null 2>&1); do
+    tries=$((tries + 1))
+    [ "$tries" -ge 15 ] && { echo "error: the probe bead $bid never resolves"; return 1; }
+    sleep 2
+  done
+}
+export -f await_bead_ready
+
 # Dirties a probe's dashboard the way real drift looks: a touched shipped file,
 # a deleted vendor asset, a file the template no longer ships, a live snapshot
 # to keep, and project-owned toml answers (a task and a verdict) to leave
@@ -789,6 +802,35 @@ probe_step "add accepts a linked worktree" bash -c '
   if echo "$out" | grep -q "initialised a git repository"; then
     echo "error: add claimed to initialise a worktree"; echo "$out"; exit 1;
   fi'
+
+# Every other probe commit sidesteps the commit-msg hook — scaffolding commits
+# use --no-verify — so a broken hook regex ships silently. This commits
+# bead-less content in a wired probe and expects rejection, then proves the
+# hook still accepts a commit naming a real bead, so a hook that rejects
+# everything doesn't pass either.
+probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
+  fresh_probe || exit 1
+  bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
+  [ -x "$probe/scripts/hooks/commit-msg" ] || { echo "error: install produced no hook logic"; exit 1; }
+  [ -f "$probe/.git/hooks/commit-msg" ] || { echo "error: add never wired the hook"; exit 1; }
+  echo "probe" > "$probe/probe.txt" || { echo "error: cannot dirty a probe file"; exit 1; }
+  (cd "$probe" && git add probe.txt >/dev/null 2>&1) ||
+    { echo "error: cannot stage the probe file"; exit 1; }
+  # Pinned like the identity flags below it: a global core.hooksPath would run
+  # hooks from elsewhere, and the bead-less commit would sail through a hook
+  # that never ran — failing the probe on a correct tree.
+  hook="core.hooksPath=$probe/.git/hooks"
+  out=$(cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe commit with no bead" 2>&1) &&
+    { echo "error: the hook accepted a bead-less commit"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "names no bead" ||
+    { echo "error: the refusal never said why"; echo "$out"; exit 1; }
+  (cd "$probe" && bd q "probe bead for the hook" >/dev/null 2>&1) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  bid=$(probe_json_field "$probe" id) || exit 1
+  [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
+  await_bead_ready "$probe" "$bid" || exit 1
+  (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe commit for $bid" >/dev/null 2>&1) ||
+    { echo "error: the hook rejected a commit naming $bid"; exit 1; }'
 
 # The starter eats its own dogfood: its working tree reads as current against
 # its own template. A stale contract file here means the split already slipped —
