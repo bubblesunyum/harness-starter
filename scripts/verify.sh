@@ -238,6 +238,7 @@ fi
 step "codex support" python3 scripts/codex-support.py check
 step "codex regression" python3 scripts/test-codex-support.py
 step "agent runner" python3 scripts/test-agent.py
+step "model probes" python3 scripts/test-models-probe.py
 step "opencode permissions" python3 scripts/test-opencode-permissions.py
 
 # The knowledge layer gets the same treatment as the code. A doc that quietly

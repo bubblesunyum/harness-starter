@@ -10,8 +10,12 @@ harness/models.json maps roles to models. It is machine-local and gitignored:
 it names models this machine happens to have, which no commit should carry.
 Missing on first run, `ensure` detects backends (opencode's configured
 providers, `ollama list`, `claude` on PATH), prompts once per role, and writes
-the file. Present, it stays silent — including when there is no terminal, where
-prompting would hang a hook or a gate.
+the file. Each distinct pick is probed first with a trivial run: a candidate
+that can't run here — a bad id, a hosted model whose region isn't enabled —
+fails at prompt time with opencode's own error, and the pick is retried;
+picking it again keeps it on trust. Present,
+the roster stays silent — including when there is no terminal, where prompting
+would hang a hook or a gate.
 
 Roles cover more than reviewers: the librarian audits monthly, and future
 implement/summarize roles resolve through this same file.
@@ -26,9 +30,11 @@ roster; `budget` never prompts, so review.sh can call it from hooks and gates.
 
 A role may also name a "variant" — the provider's reasoning effort (minimal,
 low, medium, high, xhigh, max; which exist depends on the model, and
-`opencode models --verbose` lists them). It reaches opencode as agent.py's
-`--variant` — the only path; no generated file carries one. Absent, the
-model's own default applies.
+`opencode models --verbose` lists them). It reaches opencode on the run's -m
+flag as provider/model#variant — the only path; no generated file carries one.
+Absent, the model's own default applies. The ensure probe doesn't cover it:
+it sends a bare -m, so a variant problem surfaces at runtime, not at prompt
+time.
 """
 
 import json
@@ -57,6 +63,73 @@ def run(*args, timeout=15):
         return out.stdout if out.returncode == 0 else ""
     except Exception:
         return ""
+
+
+# Long enough for a cold hosted model to answer two words; short enough that
+# a dead candidate fails fast at prompt time rather than hanging the setup.
+PROBE_TIMEOUT_SECONDS = 120
+
+PROBE_PROMPT = "Reply with the word ok and nothing else."
+
+
+def probe_error(stdout, returncode, stderr):
+    """The failure line from `opencode run --format json` output — None when
+    the run answered. Only the error is read: a probe's reply is discarded."""
+    errors, texts = [], []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "error":
+            error = event.get("error", {})
+            if isinstance(error, dict):
+                data = error.get("data", {})
+                message = data.get("message") if isinstance(data, dict) else None
+                message = (message or error.get("message")
+                           or error.get("name") or str(error))
+                errors.append(message)
+            else:
+                errors.append(str(error))
+        elif event.get("type") == "text":
+            part = event.get("part", {})
+            text = part.get("text", "") if isinstance(part, dict) else ""
+            if isinstance(text, str) and text.strip():
+                texts.append(text)
+    if errors:
+        return errors[0]
+    if returncode == 0 and texts:
+        return None
+    lines = (stderr or stdout).strip().splitlines()[-3:]
+    detail = "with no reply" if returncode == 0 else f"exited {returncode}"
+    suffix = " — " + " / ".join(t.strip() for t in lines if t.strip()) if lines else ""
+    return f"opencode run {detail}{suffix}"
+
+
+def probe_model(model):
+    """None when a trivial run on the model answers, else the failure line.
+
+    A dead-on-arrival candidate is caught here at prompt time, not mid-review.
+    Bare -m by design: the probe certifies the model answers, nothing more.
+    Variants ride on -m as model#variant once the runner speaks it (har-2em
+    ports agent.py); until then a variant problem can't surface here, and the
+    probe doesn't pretend otherwise. opencode missing is a backstop only —
+    `ensure` skips probing entirely then, and says so once, rather than
+    failing every pick."""
+    try:
+        out = subprocess.run(["opencode", "run", "--format", "json",
+                              "-m", model, "--", PROBE_PROMPT],
+                             capture_output=True, text=True,
+                             stdin=subprocess.DEVNULL, cwd=ROOT,
+                             timeout=PROBE_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        return "opencode is not on PATH — cannot probe; pick again to keep on trust"
+    except subprocess.TimeoutExpired:
+        return (f"no reply in {PROBE_TIMEOUT_SECONDS}s — the model may be slow "
+                f"rather than dead; picking it again keeps it anyway")
+    return probe_error(out.stdout, out.returncode, out.stderr)
 
 
 def detect():
@@ -186,6 +259,44 @@ def ask(role, hint, candidates, default):
             return raw
 
 
+def prompt_choice(role, hint, candidates, default):
+    """A model id for the role from the terminal, or "" to leave it unset.
+    One branch for the first pick and every re-pick: the prompt names both
+    the situation and the empty escape, so neither call site rewords it."""
+    if candidates:
+        choice = ask(role, hint, candidates, default)
+        return choice, choice
+    try:
+        choice = input(f"\n{role} ({hint}) — no backends detected, type a "
+                       f"model id (empty leaves it unset): ").strip()
+    except EOFError:
+        choice = ""
+    return choice, default
+
+
+def probe_choice(role, hint, choice, candidates, default, probed, failed):
+    """A model id for the role that either probed clean or was re-picked after
+    a failed probe — or "" when the role is left unset. Returns the choice and
+    the default, which chains like `ensure`'s: a re-pick becomes the next
+    role's default."""
+    while choice and choice not in probed:
+        if choice in failed:
+            # Failed once and explicitly re-picked: theirs, on trust — and
+            # trusted for the roles below that inherit it.
+            print(f"  keeping {choice} despite the failed probe — on trust.")
+            probed.add(choice)
+            break
+        error = probe_model(choice)
+        if error is None:
+            probed.add(choice)
+            break
+        failed.add(choice)
+        print(f"  ! probe of {choice} failed: {error}")
+        print("    pick another model, or the same one to keep it anyway.")
+        choice, default = prompt_choice(role, hint, candidates, default)
+    return choice, default
+
+
 def ensure(again=False):
     state = roster_state()
     if state == "ok" and not again:
@@ -208,6 +319,11 @@ def ensure(again=False):
     # entry it replaces: re-picking one model shouldn't reset every role's
     # budget and reasoning effort without a word.
     previous = load() if state in ("ok", "empty") else {}
+    can_probe = shutil.which("opencode") is not None
+    if not can_probe:
+        print("no opencode on PATH — writing choices without probing them.")
+    probed = set()  # models already seen answering
+    failed = set()   # models already failed; picking one again keeps it
     roster, default = {}, None
     for role, hint in ROLES.items():
         if candidates:
@@ -215,18 +331,17 @@ def ensure(again=False):
                 # The cheap reviewer defaults cheap: first free id, else first.
                 default = next((c for c in candidates if "free" in c),
                                candidates[0])
-            choice = ask(role, hint, candidates, default)
-            default = choice
-        else:
-            try:
-                choice = input(f"\n{role} ({hint}) — no backends detected, "
-                               f"type a model id: ").strip()
-            except EOFError:
-                choice = ""
-            if not choice:
-                print("left unset; re-run with --again to fill it in.")
-                continue
+        choice, default = prompt_choice(role, hint, candidates, default)
+        if not choice:
+            print("left unset; re-run with --again to fill it in.")
+            continue
         kept = previous.get(role)
+        if can_probe:
+            choice, default = probe_choice(role, hint, choice, candidates,
+                                           default, probed, failed)
+        if not choice:
+            print("left unset; re-run with --again to fill it in.")
+            continue
         roster[role] = {**(kept if isinstance(kept, dict) else {}), "model": choice}
     ROSTER.parent.mkdir(parents=True, exist_ok=True)
     ROSTER.write_text(json.dumps(roster, indent=2, sort_keys=True) + "\n")
