@@ -62,7 +62,7 @@ def translate(source):
     bake one machine's answers into every clone's committed files — and a
     fresh clone with an empty roster would generate model-free files that
     fail check against them. The roster still reaches opencode where it
-    matters: scripts/agent.py passes -m/--variant on the command line, and a
+    matters: scripts/agent.py passes -m provider/model#variant on the command line, and a
     native spawn inherits the session's model and always resolves. Claude's
     tier names (haiku, sonnet) are aliases opencode does not resolve anyway —
     and codex-support.py likewise never translates a model line."""

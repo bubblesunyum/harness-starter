@@ -274,7 +274,7 @@ roster still picks the model everywhere a model is actually chosen:
 `scripts/agent.py` passes it as `-m`.
 
 A role's roster entry may add a `variant` — the provider's reasoning effort,
-such as `xhigh` — which becomes agent.py's `--variant`. Only there: no
+such as `xhigh` — which agent.py sends as `-m provider/model#variant`. Only there: no
 generated file carries one, and `implement` runs opencode's own build agent,
 which has no generated file at all.
 
@@ -306,13 +306,14 @@ found by running it:
   without it — including reads outside the project, which is where review.sh
   puts the packet. Reviewers are granted `/tmp`, and any other refusal makes
   the script exit non-zero rather than pass on a reply written blind.
-- `reviewer-design` checks `opencode models --verbose` for image input on its
-  selected model before running. Unknown or text-only models fail, leaving the
-  visual pass to the native reviewer instead of accepting a blind reply.
+- `reviewer-design` checks its selected model for image input before running:
+  the legacy `opencode models --verbose` lookup first, then opencode's cached
+  models.dev catalog (v2 dropped the flag). Unknown or text-only models fail,
+  leaving the visual pass to the native reviewer instead of accepting a blind reply.
 
 The revision cap lives in the script rather than in the `delegate` skill's prose
 because guidance is what a long thread erodes first. It counts the session's
-messages back out of `opencode export`, so there is no counter file to lose.
+messages back out of `opencode session export`, so there is no counter file to lose.
 
 **There is no session-start hook to write.** opencode's plugin hooks are
 `event`, `chat.message`, `chat.params`, `chat.headers`, `chat.completion`,

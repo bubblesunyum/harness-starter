@@ -10,6 +10,7 @@ probe sends, and the pick-again-or-keep loop around it.
 """
 
 import json
+import io
 import os
 import sys
 import tempfile
@@ -102,6 +103,7 @@ class ProbeModelTests(unittest.TestCase):
         argv = self.calls()[0]
         self.assertIn("-m", argv)
         self.assertEqual(argv[argv.index("-m") + 1], "go/fine")
+        self.assertIn("--standalone", argv)
         self.assertNotIn("--variant", argv)
         self.assertEqual(argv[-1], models.PROBE_PROMPT)
 
@@ -119,7 +121,12 @@ class ProbeModelTests(unittest.TestCase):
         self.assertEqual(models.probe_error(out, 1, ""), "Model unavailable: x/y")
 
     def test_missing_opencode_keeps_on_trust(self):
-        with mock.patch.dict(os.environ, {"PATH": self.temp.name}):
+        # An empty HOME so the ~/.opencode/bin fallback misses too: without
+        # it the test reads this machine's real install instead of nothing.
+        home = Path(self.temp.name) / "home"
+        home.mkdir()
+        with mock.patch.dict(os.environ, {"PATH": self.temp.name,
+                                           "HOME": str(home)}):
             err = models.probe_model("go/whatever")
         self.assertIn("cannot probe", err)
 
@@ -188,6 +195,89 @@ class EnsureLoopTests(unittest.TestCase):
                                     which=None, candidates=("m1",))
         self.assertTrue(all(entry["model"] == "m1" for entry in roster.values()))
         self.assertEqual(calls, [])
+
+    def test_first_default_skips_free_tier_ids(self):
+        # Free-tier ids refuse every custom agent, so the chained default
+        # starts at the first paid id — free stays pickable by number.
+        roster, _ = self.ensure(["", "", "", "", "", ""],
+                                candidates=("m1-free", "m2"))
+        self.assertTrue(all(entry["model"] == "m2" for entry in roster.values()))
+
+    def test_all_free_candidates_still_default_to_first(self):
+        roster, _ = self.ensure(["", "", "", "", "", ""],
+                                candidates=("m1-free",))
+        self.assertTrue(all(entry["model"] == "m1-free"
+                            for entry in roster.values()))
+
+    def test_explicit_free_pick_for_a_reviewer_warns(self):
+        buf = io.StringIO()
+        with mock.patch("sys.stdout", buf):
+            roster, _ = self.ensure(["1", "", "", "", "", ""],
+                                    candidates=("m1-free", "m2"))
+        self.assertTrue(all(entry["model"] == "m1-free"
+                            for entry in roster.values()))
+        self.assertIn("free-tier", buf.getvalue())
+
+
+class BudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="models budget ")
+        self.addCleanup(self.temp.cleanup)
+        self.fake_root = Path(self.temp.name)
+        self.roster = self.fake_root / "harness" / "models.json"
+        self.xdg = self.fake_root / "cache"
+
+    def budget(self, role, roster, catalog="absent"):
+        self.roster.parent.mkdir(parents=True, exist_ok=True)
+        self.roster.write_text(json.dumps(roster))
+        if catalog != "absent":
+            cache_file = self.xdg / "opencode" / "models.json"
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(catalog) if not isinstance(catalog, str)
+                                  else catalog)
+        with mock.patch.object(models, "ROOT", self.fake_root), \
+             mock.patch.object(models, "ROSTER", self.roster), \
+             mock.patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.xdg)}):
+            return models.budget_for(role)
+
+    def catalog(self, context):
+        return {"p": {"models": {"m": {"limit": {"context": context}}}}}
+
+    def test_explicit_context_wins_over_the_catalog(self):
+        roster = {"reviewer-taste": {"model": "p/m", "context": 99}}
+        self.assertEqual(self.budget("reviewer-taste", roster,
+                                     self.catalog(1048576)), 99)
+
+    def test_catalog_limit_replaces_the_8192_fallback(self):
+        roster = {"reviewer-taste": {"model": "p/m"}}
+        self.assertEqual(self.budget("reviewer-taste", roster,
+                                     self.catalog(1048576)), 1048576)
+
+    def test_missing_cache_falls_back_to_the_heuristic(self):
+        self.assertEqual(self.budget("reviewer-taste",
+                                     {"reviewer-taste": {"model": "p/m"}}), 8192)
+        self.assertEqual(self.budget("reviewer-taste",
+                                     {"reviewer-taste": {"model": "anthropic/sonnet"}}),
+                         200000)
+
+    def test_misshapen_cache_falls_back_to_the_heuristic(self):
+        roster = {"reviewer-taste": {"model": "p/m"}}
+        for catalog in ("not json", {}, {"p": {}},
+                        {"p": {"models": {}}},
+                        {"p": {"models": {"m": {}}}},
+                        self.catalog(0), self.catalog(-5),
+                        self.catalog("1048576"), self.catalog(True),
+                        {"p": {"models": {"other": {"limit": {"context": 1}}}}}):
+            with self.subTest(catalog=catalog):
+                self.assertEqual(self.budget("reviewer-taste", roster, catalog), 8192)
+
+    def test_model_without_a_provider_misses_the_catalog(self):
+        self.assertEqual(self.budget("reviewer-taste",
+                                     {"reviewer-taste": {"model": "bare"}},
+                                     self.catalog(1048576)), 8192)
+
+    def test_role_without_a_model_has_no_budget(self):
+        self.assertEqual(self.budget("reviewer-taste", {}), 0)
 
 
 if __name__ == "__main__":

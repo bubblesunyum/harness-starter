@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from models import model_for, variant_for
+from models import catalog_entry, model_for, opencode_bin, variant_for
 
 MAX_ROUNDS = 3
 # Long enough for an implementer that runs the gate twice; short enough that a
@@ -81,6 +81,34 @@ def fail(message, code=1):
     sys.exit(code)
 
 
+def require_opencode_v2():
+    """Refuse opencode 1.x, which can't read the DB the 2.x app migrates and
+    lacks the flags this script uses (--standalone, -m model#variant). Brew's
+    `opencode` formula is still 1.x; v2 is the official install script or a
+    separate formula, so `brew upgrade opencode` alone stays broken."""
+    try:
+        out = subprocess.run([opencode_bin(), "--version"], capture_output=True,
+                             text=True, stdin=subprocess.DEVNULL, cwd=ROOT,
+                             timeout=30)
+    except FileNotFoundError:
+        fail("opencode is not on PATH or in ~/.opencode/bin — install it, set OPENCODE_BIN, "
+             "or spawn the role natively")
+    except OSError as exc:
+        fail(f"opencode can't be run ({exc}) — check the install")
+    except subprocess.TimeoutExpired:
+        fail("`opencode --version` hung — check the install")
+    raw = out.stdout.strip() or out.stderr.strip()
+    version = raw.split()[-1].lstrip("v") if raw else ""
+    major = version.split(".")[0] if version else ""
+    if out.returncode != 0 or not major.isdigit() or int(major) < 2:
+        found = version or "unknown"
+        fail(f"opencode {found} is too old — this harness needs opencode 2 "
+             f"(the 2.x app migrates the session DB that 1.x can't read). "
+             f"Install it with `curl -fsSL https://opencode.ai/v2/install | bash` "
+             f"or `brew install anomalyco/tap/opencode-v2` "
+             f"(uninstall brew's 1.x `opencode` first — they conflict)")
+
+
 def parse_args(argv):
     """(role, session or None, message)."""
     if len(argv) < 2 or argv[0] in ("-h", "--help"):
@@ -108,18 +136,32 @@ def agent_for(role):
          f"or check the role name against harness/models.json")
 
 
+def catalog_accepts_images(model):
+    """Whether opencode's cached models.dev catalog lists `model` as taking
+    images. opencode 2 dropped `models --verbose`; the catalog it refreshes
+    is what's left to ask."""
+    entry = catalog_entry(model)
+    if entry is None:
+        return False
+    modalities = entry.get("modalities", {})
+    inputs = modalities.get("input") if isinstance(modalities, dict) else None
+    return isinstance(inputs, list) and "image" in inputs
+
+
 def require_image_model(model):
     """Refuse a visual review unless OpenCode says its model accepts images."""
     provider, separator, _ = model.partition("/")
     if not separator:
         fail(f"reviewer-design model {model} has no provider ID")
     try:
-        out = subprocess.run(["opencode", "models", provider, "--verbose"],
+        out = subprocess.run([opencode_bin(), "models", provider, "--verbose"],
                              capture_output=True, text=True, stdin=subprocess.DEVNULL,
                              cwd=ROOT, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         fail(f"cannot verify image support for {model}; run reviewer-design natively")
     if out.returncode != 0:
+        if catalog_accepts_images(model):
+            return
         fail(f"cannot verify image support for {model}; run reviewer-design natively")
     lines = out.stdout.splitlines(keepends=True)
     for index, line in enumerate(lines):
@@ -180,27 +222,31 @@ def rounds_so_far(session):
     """User messages already in a session, read back from opencode itself so
     the cap can't be dodged by losing a counter file."""
     try:
-        out = subprocess.run(["opencode", "export", session], capture_output=True,
+        out = subprocess.run([opencode_bin(), "session", "export", session], capture_output=True,
                              text=True, stdin=subprocess.DEVNULL, cwd=ROOT,
                              timeout=EXPORT_TIMEOUT_SECONDS)
     except FileNotFoundError:
-        fail("opencode is not on PATH — install it, or spawn the role natively")
+        fail("opencode is not on PATH or in ~/.opencode/bin — install it, set OPENCODE_BIN, "
+             "or spawn the role natively")
     except subprocess.TimeoutExpired:
-        fail(f"`opencode export {session}` hung for {EXPORT_TIMEOUT_SECONDS}s — "
+        fail(f"`opencode session export {session}` hung for {EXPORT_TIMEOUT_SECONDS}s — "
              f"the round count can't be checked, so nothing was sent")
     try:
         messages = json.loads(out.stdout)["messages"]
     except (json.JSONDecodeError, KeyError, TypeError):
         fail(f"can't read session {session} back from opencode "
-             f"(`opencode export {session}` exited {out.returncode}) — "
+             f"(`opencode session export {session}` exited {out.returncode}) — "
              f"check the id; a revision needs the session it revises")
-    return sum(1 for m in messages if m.get("info", {}).get("role") == "user")
+    return sum(1 for m in messages if m.get("type") == "user")
 
 
 def explain(error):
     """One line for an opencode error event, with the fix where one is known."""
-    data = error.get("data", {}) if isinstance(error, dict) else {}
-    message = data.get("message") or error.get("name") or str(error)
+    if not isinstance(error, dict):
+        return str(error)
+    data = error.get("data", {})
+    message = data.get("message") if isinstance(data, dict) else None
+    message = message or error.get("message") or error.get("name") or str(error)
     if "free tier can only be used from within OpenCode" in message:
         return (f"{message}\n  OpenCode's free models refuse every agent but "
                 f"opencode's built-in ones. Point this role at a paid model "
@@ -231,13 +277,15 @@ def parse_events(stdout, session):
 def run_agent(agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
     fail loudly."""
-    command = ["opencode", "run", "--format", "json", "--agent", agent,
-               "-m", model]
-    if variant:
-        # No generated file carries it, so the flag is the whole mechanism —
-        # including for `implement`, which runs opencode's own build agent
-        # with no file of ours at all.
-        command += ["--variant", variant]
+    # No generated file carries the variant, so the model suffix is the whole
+    # mechanism — including for `implement`, which runs opencode's own build
+    # agent with no file of ours at all. opencode 2 dropped `--variant` for
+    # `-m provider/model#variant`.
+    # `--standalone`: opencode 2 otherwise hands the run to a shared background
+    # service, which never sees this process's OPENCODE_CONFIG_CONTENT (so no
+    # agent promotion and no /tmp grant) and interrupts runs sharing it.
+    command = [opencode_bin(), "run", "--standalone", "--format", "json", "--agent", agent,
+               "-m", f"{model}#{variant}" if variant else model]
     if session:
         command += ["--session", session]
     env = dict(os.environ)
@@ -249,7 +297,8 @@ def run_agent(agent, model, variant, session, prompt):
                              stdin=subprocess.DEVNULL, cwd=ROOT, env=env,
                              timeout=TIMEOUT_SECONDS)
     except FileNotFoundError:
-        fail("opencode is not on PATH — install it, or spawn the role natively")
+        fail("opencode is not on PATH or in ~/.opencode/bin — install it, set OPENCODE_BIN, "
+             "or spawn the role natively")
     except subprocess.TimeoutExpired:
         fail(f"no reply after {TIMEOUT_SECONDS // 60} minutes — "
              f"`opencode session list` shows where it got to")
@@ -276,6 +325,7 @@ def run_agent(agent, model, variant, session, prompt):
 
 def main(argv):
     role, session, message = parse_args(argv)
+    require_opencode_v2()
     agent = agent_for(role)
     model = model_for(role)
     if not model:
