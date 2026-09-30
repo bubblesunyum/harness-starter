@@ -987,7 +987,8 @@
         border-bottom: 1px solid var(--line);
       }
       .composer input[type='text'],
-      .composer textarea {
+      .composer textarea,
+      .sheet input[type='text'] {
         width: 100%;
         box-sizing: border-box;
         font: inherit;
@@ -999,7 +1000,8 @@
         padding: 7px 10px;
       }
       .composer input[type='text']:focus,
-      .composer textarea:focus {
+      .composer textarea:focus,
+      .sheet input[type='text']:focus {
         outline: none;
         border-color: var(--accent);
       }
@@ -1019,6 +1021,20 @@
         justify-content: flex-end;
       }
       .composer .form-error {
+        margin-right: auto;
+        font-size: 11px;
+        color: var(--fail);
+      }
+      /* The sheet's edit and close rows: the same controls as the composer,
+      stacked in a sheet section rather than a lane. */
+      .edit-row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .sheet .form-error {
         margin-right: auto;
         font-size: 11px;
         color: var(--fail);
@@ -1309,6 +1325,19 @@
       }
       .lane-name.hoverable:hover .tip,
       .lane-name.hoverable:focus-visible .tip {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+      }
+      /* The capture hook (see SHOT_ACTIONS): headless Chrome can't hover, so a
+      ?shot=<name> capture holds the same tips open instead. Same declarations
+      as the hover rules above, one selector each. Gate and pulse repaint their
+      own classes on every poll, so theirs key off the document, which no
+      repaint touches; lane tips rebuild only on signature change, so a class
+      on the lane itself survives there. */
+      html[data-shot='gate'] .gate .tip,
+      html[data-shot='pulse'] .pulse .tip,
+      .lane-name.hoverable.shot .tip {
         opacity: 1;
         visibility: visible;
         transform: translateY(0);
@@ -2129,15 +2158,20 @@
 
       function drawBoard(d, force = false) {
         lastLedger = d
-        const all = d.ledger.issues
+        // No `bd` on PATH is not an empty ledger — it is no ledger. The lanes
+        // vanish rather than standing there saying "nothing", and the work-tree
+        // lane (which comes from git, not bd) is the only one allowed through.
+        const noLedger = !d.ledger || d.ledger.available === false
+        const all = (d.ledger && d.ledger.issues) || []
         ledger.byId = Object.fromEntries(all.map((i) => [i.id, i]))
         ledger.epicName = (id) => (ledger.byId[id] || {}).title || ''
-        // Review outranks the others: a bead being reviewed is in review, whatever
-        // else is true of it. Staging is a subset of closed, not every bead named in
-        // an unpushed commit — a handoff note that mentions a still-open bead for
-        // context shouldn't drag it out of its real lane.
         const pushedPending = new Set(d.git.unpushed_beads || [])
-        const lane = (i) =>
+        // A bead's own lane, before its children get a say. Review outranks
+        // the others: a bead being reviewed is in review, whatever else is
+        // true of it. Staging is a subset of closed, not every bead named in
+        // an unpushed commit — a handoff note that mentions a still-open bead
+        // for context shouldn't drag it out of its real lane.
+        const own = (i) =>
           i.status === 'closed' && pushedPending.has(i.id)
             ? 'staging'
             : i.status === 'closed'
@@ -2149,6 +2183,58 @@
                   : i.ready
                     ? 'ready'
                     : 'blocked'
+
+        // A parent's lane is its family's: children travel with the parent
+        // sheet, so a card that ignored them would show ready with zero ready
+        // children, or ready while a child is already in progress. The parent's
+        // own ready never promotes it — an open+ready parent with no ready
+        // children reads blocked, not ready. With live (non-closed) children:
+        // own in review first (review outranks everything), then any child in
+        // progress, then own in progress, then any child ready, then any child
+        // review, else blocked. When every child is closed the card is done
+        // (or staging, per pushedPending as a closed bead would be), unless
+        // the parent itself is in review or in progress, which still reads.
+        // Depth-first, so a child that is itself a parent carries its own
+        // subtree's vote. A card with no children keeps its own lane, and
+        // backlog/staging semantics are untouched: this only ever lifts an
+        // open card toward the live work under it.
+        const lane = (i, seen = new Set()) => {
+          if (i.status === 'closed' || seen.has(i.id)) return own(i)
+          seen.add(i.id)
+          let anyChild = false
+          let allClosed = true
+          let childInProgress = false
+          let childReady = false
+          let childReview = false
+          for (const id of i.children || []) {
+            const k = ledger.byId[id]
+            if (!k || seen.has(k.id)) continue
+            anyChild = true
+            const l = lane(k, seen)
+            if (l === 'done' || l === 'staging') continue
+            allClosed = false
+            if (l === 'in_progress') childInProgress = true
+            else if (l === 'ready') childReady = true
+            else if (l === 'review') childReview = true
+          }
+          // All children closed (and at least one child): the family's work
+          // is finished, so the card reads done — unless the parent itself
+          // carries a live state, which still shows.
+          if (anyChild && allClosed) {
+            if (i.in_review) return 'review'
+            if (i.status === 'in_progress') return 'in_progress'
+            return pushedPending.has(i.id) ? 'staging' : 'done'
+          }
+          if (anyChild) {
+            if (i.in_review) return 'review'
+            if (childInProgress) return 'in_progress'
+            if (i.status === 'in_progress') return 'in_progress'
+            if (childReady) return 'ready'
+            if (childReview) return 'review'
+            return 'blocked'
+          }
+          return own(i)
+        }
 
         // renderTree reads this to keep an expanded family to the lane being
         // drawn — a child in another state stays in its own lane, subtree and
@@ -2197,15 +2283,22 @@
         // explicit press (paintNow) or the end of the gesture.
         if (!force && (composerOpen || draggedId)) return
 
+        // Counted from what's rendered, not the server's closed count: an open
+        // parent whose children are all closed reads done here without being
+        // closed itself.
+        const doneItems = cards.filter((i) => lane(i) === 'done')
         const lanes = [
           ...beadLanes,
-          {key: 'done', label: 'done', count: d.ledger.counts.closed, items: cards.filter((i) => lane(i) === 'done')},
+          {key: 'done', label: 'done', count: doneItems.length, items: doneItems},
           // An empty lane says nothing worth the room it takes. Staging is the
           // exception: with commits to push it carries the button that pushes them,
           // and that has to stay reachable whether or not a bead sits under it.
           // Ready is the other: the plus that files the next bead lives in its
           // header, and an empty worklist is news rather than nothing.
-        ].filter((l) => l.key === 'ready' || (l.worktree ? (d.worktree || []).length : l.items.length || l.slot))
+          // Neither exception applies with no ledger behind them.
+        ].filter((l) =>
+          noLedger ? !!l.worktree : l.key === 'ready' || (l.worktree ? (d.worktree || []).length : l.items.length || l.slot),
+        )
 
         // Rebuilt only when something changed: two lanes carry hover popovers, and
         // replacing one under the pointer would close it mid-read.
@@ -2232,7 +2325,10 @@
 
         const paint = () => {
           const had = new Set([...board.children].map((el) => el.dataset.lane))
-          board.innerHTML = rendered.map((l) => l.html).join('') || '<div class="empty">nothing in the ledger</div>'
+          // With no ledger there is no "nothing in the ledger" either — the
+          // board is just the work tree, or nothing at all.
+          board.innerHTML =
+            rendered.map((l) => l.html).join('') || (noLedger ? '' : '<div class="empty">nothing in the ledger</div>')
           for (const el of board.children) {
             if (el.dataset.lane && !had.has(el.dataset.lane)) el.classList.add('entering')
           }
@@ -2625,6 +2721,12 @@
       /* Filed, not offered. It sits above the board because it's the shelf the board
          draws from, and collapsed because nothing here is the next thing to do. */
       function drawBacklog(d, force = false) {
+        // No ledger, no shelf: the strip hides rather than drawing an empty one.
+        if (!d.ledger || d.ledger.available === false) {
+          $('backlog').hidden = true
+          backlogSignature = ''
+          return
+        }
         const items = d.ledger.issues
           .filter((i) => i.backlog)
           // bd returns no meaningful order, so the strip reads down by priority —
@@ -2815,20 +2917,27 @@
 
       function drawHarness(d) {
         const stages = d.harness || []
+        // No .claude/ on disk means no stages with anything in them, and a
+        // panel of "nothing here" rows is a confused shape — the whole panel
+        // hides instead. Set before the signature check so a return to nothing
+        // still lands.
+        const nodes = stages.flatMap((s) => s.nodes)
+        $('harness').hidden = nodes.length === 0
+        if (!nodes.length) return
         const signature = JSON.stringify(stages)
         if (signature === harnessSignature) return
         harnessSignature = signature
 
-        harness.byId = Object.fromEntries(stages.flatMap((s) => s.nodes.map((n) => [n.id, n])))
-        const nodes = Object.keys(harness.byId).length
+        harness.byId = Object.fromEntries(nodes.map((n) => [n.id, n]))
+        const count = Object.keys(harness.byId).length
         const mine = Object.values(harness.byId).filter((n) => n.origin === 'claude').length
-        $('harnessCount').textContent = `${nodes} pieces`
+        $('harnessCount').textContent = `${count} pieces`
 
         $('harnessFlow').innerHTML =
           `
           <div class="legend">
             <span><i style="background:var(--accent)"></i>${mine} from claude code</span>
-            <span><i style="background:var(--dim)"></i>${nodes - mine} built on top</span>
+            <span><i style="background:var(--dim)"></i>${count - mine} built on top</span>
           </div>` +
           stages
             .map(
@@ -2894,18 +3003,144 @@
         ).json()
       }
 
+      /* The sheet's unsent edit, beside the composer's draft for the same
+      reason: the sheet is rebuilt from innerHTML on every poll, so the typed
+      title, the pressed segment, and the typed close reason all have to
+      survive a repaint. Every keystroke writes through to here (see the input
+      listener below), so a repaint rebuilds the same words — and while an
+      edit is armed polls don't repaint the sheet at all (see drawSheet).
+      Cleared on save and whenever the sheet moves. */
+      const pendingEdit = {id: null, prio: null, title: null, reason: null}
+
+      function clearPendingEdit() {
+        pendingEdit.id = null
+        pendingEdit.prio = null
+        pendingEdit.title = null
+        pendingEdit.reason = null
+      }
+
+      function setEditPrio(btn) {
+        const id = subject && subject.kind === 'bead' ? subject.id : null
+        const incoming = +btn.dataset.editPrio
+        // Clicking the already-selected segment (or Home on it) changes
+        // nothing: arming here would hold repaints forever on values identical
+        // to the ledger, so compare against the ledger first and leave the
+        // sheet unarmed when both the prio and the live title match.
+        const bead = id ? ledger.byId[id] : null
+        // Arming a hold on a bead saveEdit can never save is dead state.
+        if (!bead) return
+        const titleEl = $('editTitle')
+        const liveTitle = titleEl ? titleEl.value : null
+        if (bead && incoming === bead.priority && (liveTitle === null || liveTitle === bead.title)) return
+        pendingEdit.id = id
+        // Focus is on the pressed segment now, so the typing guard in
+        // drawSheet no longer holds — the title is captured here before the
+        // control is marked, or the next poll would rebuild it from the
+        // ledger and drop the draft.
+        pendingEdit.title = liveTitle
+        pendingEdit.prio = incoming
+        const btns = [...document.querySelectorAll('#sheetBody .seg [data-edit-prio]')]
+        btns.forEach((b) => {
+          const on = +b.dataset.editPrio === pendingEdit.prio
+          b.setAttribute('aria-checked', String(on))
+          b.tabIndex = on ? 0 : -1
+        })
+      }
+
+      /* Retitle / reprioritise from the sheet. Only changed fields travel —
+      the server rejects an empty update, and the sheet says "no changes"
+      before it ever asks. */
+      async function saveEdit(id, btn) {
+        const i = ledger.byId[id]
+        // A bead that left the ledger (deleted elsewhere) while its sheet
+        // stood open: say so like saveClose does, and drop the armed draft.
+        if (!i) { if ($('editError')) $('editError').textContent = "the board isn't showing that bead"; clearPendingEdit(); return }
+        const titleEl = $('editTitle')
+        const errEl = $('editError')
+        let title = titleEl ? titleEl.value : ''
+        if (pendingEdit.id === id && pendingEdit.title !== null) title = pendingEdit.title
+        title = title.trim()
+        const prio = pendingEdit.id === id && pendingEdit.prio !== null ? pendingEdit.prio : i.priority
+        if (!title) {
+          if (errEl) errEl.textContent = 'a bead needs a title'
+          titleEl?.focus()
+          return
+        }
+        if (title === i.title && prio === i.priority) {
+          if (errEl) errEl.textContent = 'no changes'
+          clearPendingEdit()
+          return
+        }
+        btn.disabled = true
+        if (errEl) errEl.textContent = ''
+        try {
+          const body = {id}
+          if (title !== i.title) body.title = title
+          if (prio !== i.priority) body.priority = prio
+          const r = await (await fetch('beads/update', {method: 'POST', body: JSON.stringify(body)})).json()
+          if (r.ok) {
+            clearPendingEdit()
+            tick()
+          } else {
+            if (errEl) errEl.textContent = r.error || 'update failed'
+            btn.disabled = false
+          }
+        } catch {
+          if (errEl) errEl.textContent = "nothing is serving this page, so the edit didn't go through"
+          btn.disabled = false
+        }
+      }
+
+      /* Close from the sheet, carrying the reason the ledger keeps. The drop
+      on done stays wordless; this is where the words go. */
+      async function saveClose(id, btn) {
+        const errEl = $('closeError')
+        btn.disabled = true
+        if (errEl) errEl.textContent = ''
+        try {
+          // The typed reason writes through to pendingEdit on every keystroke
+          // (see the input listener below), so prefer it over the DOM: a poll
+          // that repainted the sheet rebuilt the input from here, and reading
+          // the DOM would lose the words to a changed signature mid-type.
+          let reason = $('closeReason') ? $('closeReason').value : ''
+          if (pendingEdit.id === id && pendingEdit.reason !== null) reason = pendingEdit.reason
+          reason = reason.trim()
+          const r = await (
+            await fetch('beads/close', {method: 'POST', body: JSON.stringify({id, reason})})
+          ).json()
+          if (r.ok) {
+            clearPendingEdit()
+            tick()
+          } else {
+            if (errEl) errEl.textContent = r.error || 'close failed'
+            btn.disabled = false
+          }
+        } catch {
+          if (errEl) errEl.textContent = "nothing is serving this page, so the close didn't go through"
+          btn.disabled = false
+        }
+      }
+
       /* The keyboard path for lane moves: drag-and-drop stays as the pointer
       gesture, and these buttons POST the same move the drop handler does. The
-      button arrives disabled in flight and stays that way on success (the poll
-      rebuilds the row); on failure it is re-enabled so retry survives without
-      reopening the sheet. */
+      button arrives disabled in flight and is replaced on success (the sheet
+      repaints from the fresh ledger below); on failure it is re-enabled so
+      retry survives without reopening the sheet. */
       async function moveBead(id, lane, btn) {
         try {
           const r = await postMove(id, lane)
           if (!r.ok) {
             toast(r.error || 'move failed')
             if (btn) btn.disabled = false
-          } else tick()
+          } else {
+            await tick()
+            // A typed draft arms pendingEdit, which holds sheet repaints —
+            // without this the success repaint never comes and the pressed
+            // button stays dead on the old lane. beadSheet rebuilds from
+            // pendingEdit, so forcing the repaint keeps the draft while the
+            // move row answers from the fresh ledger.
+            refreshSheet(true)
+          }
         } catch {
           toast("nothing is serving this page, so the move didn't go through")
           if (btn) btn.disabled = false
@@ -2923,6 +3158,36 @@
               key === here ? ' aria-disabled="true" title="Already here"' : ''
             }>${esc(label)}</button>`,
         ).join('')}</div></section>`
+        // The unsent edit lives here rather than in the DOM: a poll that
+        // repaints the sheet would otherwise disarm the segment and wipe the
+        // title, the same way a board repaint would eat the composer's draft.
+        const prio = pendingEdit.id === i.id && pendingEdit.prio !== null ? pendingEdit.prio : i.priority
+        const editTitle = pendingEdit.id === i.id && pendingEdit.title !== null ? pendingEdit.title : i.title
+        const editRow = `<section><h4>edit</h4>
+          <div class="edit-row">
+            <input type="text" id="editTitle" value="${esc(editTitle)}" maxlength="300" aria-label="Title" />
+            <div class="seg" role="radiogroup" aria-label="Priority">${[0, 1, 2, 3, 4]
+              .map(
+                (p) =>
+                  `<button type="button" role="radio" data-edit-prio="${p}" aria-checked="${prio === p}" tabindex="${prio === p ? '0' : '-1'}" title="P${p}">P${p}</button>`,
+              )
+              .join('')}</div>
+          </div>
+          <div class="composer-row actions">
+            <span class="form-error" id="editError"></span>
+            <button class="mini" type="button" data-edit-save data-bead-id="${esc(i.id)}">save</button>
+          </div></section>`
+        const closeRow =
+          i.status === 'closed'
+            ? ''
+            : `<section><h4>close</h4>
+          <div class="edit-row">
+            <input type="text" id="closeReason" placeholder="why it's done…" maxlength="600" aria-label="Close reason" value="${esc(pendingEdit.id === i.id && pendingEdit.reason !== null ? pendingEdit.reason : '')}" />
+          </div>
+          <div class="composer-row actions">
+            <span class="form-error" id="closeError"></span>
+            <button class="mini" type="button" data-close-save data-bead-id="${esc(i.id)}">close</button>
+          </div></section>`
 
         return `
           <h3 class="title" id="sheetTitle">${esc(i.title)}</h3>
@@ -2935,6 +3200,8 @@
             ${i.owner ? `<code>@${esc(i.owner)}</code>` : ''}
           </div>
           ${moveRow}
+          ${editRow}
+          ${closeRow}
           ${block('description', i.description)}
           ${block('design', i.design)}
           ${block('notes', i.notes)}
@@ -3114,9 +3381,28 @@
          to be able to tell "nothing changed" from "changed to the same thing". */
       let sheetHtml = ''
 
-      function drawSheet(kind, id) {
+      function drawSheet(kind, id, force = false) {
         const found = SHEET[kind].find(id)
         if (!found) return
+        // A draft in progress holds the sheet: repainting from innerHTML would
+        // wipe typed text and drop focus, the same reason a poll never repaints
+        // the board mid-composer. Focus in a field holds it; an armed edit
+        // holds it past the press that armed it, when focus sits on a segment
+        // button instead. The lookup tables are already current; the paint
+        // waits for the save or the close. A forced repaint (a lane move
+        // answering its own press) rebuilds from pendingEdit instead, so the
+        // draft survives it — see moveBead.
+        const typing =
+          subject &&
+          document.activeElement &&
+          $('sheet').contains(document.activeElement) &&
+          ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)
+        const sheetDirty =
+          subject &&
+          subject.kind === 'bead' &&
+          pendingEdit.id === subject.id &&
+          (pendingEdit.title !== null || pendingEdit.prio !== null || pendingEdit.reason !== null)
+        if (!force && (typing || sheetDirty)) return
         const html = SHEET[kind].draw(found)
         if (html === sheetHtml) return
         sheetHtml = html
@@ -3126,6 +3412,7 @@
       function openSheet(kind, id) {
         if (!SHEET[kind].find(id)) return
         subject = {kind, id}
+        clearPendingEdit()
         sheetHtml = ''
         // A diff is refetched on every open — the last one is whatever the file
         // looked like the last time this path was checked, which by the time a
@@ -3144,14 +3431,15 @@
 
       function closeSheet() {
         subject = null
+        clearPendingEdit()
         sheetHtml = ''
         $('sheet').classList.remove('open')
         $('scrim').classList.remove('open')
       }
 
       /* Keep an open sheet honest: the board behind it is still polling. */
-      function refreshSheet() {
-        if (subject) drawSheet(subject.kind, subject.id)
+      function refreshSheet(force = false) {
+        if (subject) drawSheet(subject.kind, subject.id, force)
       }
 
       /* Wired above the polling section on purpose: the frozen artifact keeps
@@ -3213,6 +3501,20 @@
           if (move.disabled || move.getAttribute('aria-disabled') === 'true' || !move.dataset.beadId || !move.dataset.move) return
           move.disabled = true
           return moveBead(move.dataset.beadId, move.dataset.move, move)
+        }
+        // The sheet's edit path — same POST discipline as the move above, from
+        // an input and a segmented control instead of a button.
+        const editPrio = e.target.closest('[data-edit-prio]')
+        if (editPrio) return setEditPrio(editPrio)
+        const editSave = e.target.closest('[data-edit-save]')
+        if (editSave) {
+          if (editSave.disabled || !editSave.dataset.beadId) return
+          return saveEdit(editSave.dataset.beadId, editSave)
+        }
+        const closeSave = e.target.closest('[data-close-save]')
+        if (closeSave) {
+          if (closeSave.disabled || !closeSave.dataset.beadId) return
+          return saveClose(closeSave.dataset.beadId, closeSave)
         }
         // The caret sits inside its card's button, so it claims its press before
         // the card-level handler below ever sees it — expanding must not also
@@ -3313,12 +3615,19 @@
       )
 
       /* The composer writes through to `draft` on every keystroke, so a repaint
-         rebuilds the same words. Suggestions update the dropdown in place — a
-         repaint here would move focus after every letter. */
+         rebuilds the same words, and the sheet's title writes through to
+         `pendingEdit` the same way. Suggestions update the dropdown in place —
+         a repaint here would move focus after every letter. */
       document.addEventListener('input', (e) => {
         if (e.target.id === 'composerTitle') draft.title = e.target.value
         else if (e.target.id === 'composerDesc') draft.description = e.target.value
-        else if (e.target.id === 'composerLabels') {
+        else if (e.target.id === 'editTitle') {
+          if (subject && subject.kind === 'bead') pendingEdit.id = subject.id
+          pendingEdit.title = e.target.value
+        } else if (e.target.id === 'closeReason') {
+          if (subject && subject.kind === 'bead') pendingEdit.id = subject.id
+          pendingEdit.reason = e.target.value
+        } else if (e.target.id === 'composerLabels') {
           draft.labels = e.target.value
           renderSuggestions(e.target)
         }
@@ -3362,6 +3671,25 @@
           else if (e.key === 'Home') ix = 0
           else ix = order.length - 1
           setPriority(+order[ix].dataset.prio, true)
+          return
+        }
+        // The sheet's priority group answers the same keys as the composer's.
+        const editRadio = e.target.closest?.('[data-edit-prio]')
+        if (
+          editRadio &&
+          ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)
+        ) {
+          e.preventDefault()
+          const order = [...document.querySelectorAll('#sheetBody .seg [data-edit-prio]')]
+          if (!order.length) return
+          let ix = order.indexOf(editRadio)
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ix = (ix + 1) % order.length
+          else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+            ix = (ix - 1 + order.length) % order.length
+          else if (e.key === 'Home') ix = 0
+          else ix = order.length - 1
+          setEditPrio(order[ix])
+          order[ix].focus()
           return
         }
         if (
@@ -3584,9 +3912,24 @@
 
       /* ---- the popovers ----------------------------------------------------- */
       /* The gate is one word in the header. Green means what's on disk has been
-         proven; anything else is the number of commits nobody has checked. */
+         proven; anything else is the number of commits nobody has checked.
+         No verify logs means no gate at all — except that a gate-placed run
+         button is how logs come to exist, so the gate stays while one is
+         configured. */
+      function gateVisible(d) {
+        const v = d.verify || {}
+        if (v.status && v.status !== 'never run') return true
+        return Object.values(runStates).some((r) => r.where === 'gate')
+      }
+
       function drawGate(d) {
-        const v = d.verify
+        const v = d.verify || {status: 'never run'}
+        $('gate').hidden = !gateVisible(d)
+        // The dot before the gate separates it from the branch; a hidden gate
+        // leaves a doubled separator.
+        const dot = $('gate').previousElementSibling
+        if (dot && dot.classList.contains('dot')) dot.hidden = $('gate').hidden
+        if ($('gate').hidden) return
         $('gateLabel').textContent =
           v.status === 'passed' ? 'verified' : v.status === 'failed' ? 'failing' : 'unverified'
         $('gate').className = 'gate hoverable ' + (v.status === 'passed' ? 'good' : v.status === 'failed' ? 'bad' : '')
@@ -3596,8 +3939,8 @@
 
       function drawVerify(d) {
         const tip = $('verifyTip')
-        if (!tip) return
-        const v = d.verify
+        if (!tip || !gateVisible(d)) return
+        const v = d.verify || {status: 'never run'}
         const cls = v.status === 'passed' ? 'ok' : v.status === 'failed' ? 'bad' : ''
         // The pane holds a button now, so it can't be rebuilt on every poll — the
         // press would land on an element that had already been replaced under it.
@@ -3705,7 +4048,7 @@
         drawReview(d)
         drawCommit(d)
         drawMeta(d)
-        $('branchline').textContent = `${d.git.branch} · ${d.ledger.counts.open} open`
+        $('branchline').textContent = `${(d.git || {}).branch || '—'} · ${(((d.ledger || {}).counts || {}).open ?? 0)} open`
         document.title = `${d.project} · harness`
         $('projectName').textContent = d.project
         drawGate(d)
@@ -3809,6 +4152,53 @@
 
       tick()
       setInterval(tick, 2500)
+
+      /* ---- capture states ------------------------------------------------- */
+      /* `dashboard.py shot <state>` photographs hover and focus content that
+         headless Chrome can never trigger on its own — it captures the page as
+         it loads. The state rides in as ?shot=<name>: after the first poll
+         paints, the matching action below opens the same UI a hover or a press
+         would, and a hold-open keeps the CSS-only tips up for the capture (see
+         the capture rule beside the :hover ones): a data-shot attribute on the
+         document for gate and pulse, whose classes polls rebuild, a .shot
+         class on the lane for review and staging, whose markup only rebuilds
+         on change. Nothing here runs without the query param, so the live
+         page never notices it. */
+      const SHOT = new URLSearchParams(location.search).get('shot')
+      if (SHOT) {
+        const SHOT_ACTIONS = {
+          // On the document, not the node: drawGate and the poll both rebuild
+          // those classes on every pass, which would wipe a class holding the
+          // tip open before the capture lands.
+          gate: () => document.documentElement.setAttribute('data-shot', 'gate'),
+          pulse: () => document.documentElement.setAttribute('data-shot', 'pulse'),
+          review: () => document.getElementById('reviewTip')?.closest('.lane-name')?.classList.add('shot'),
+          staging: () => document.getElementById('commitTip')?.closest('.lane-name')?.classList.add('shot'),
+          // Click-driven UI is opened with a real press rather than a class.
+          // The composer toggles off a lane button; the file menu hangs off a
+          // diff sheet's header, so that state opens the first changed file
+          // first. Best effort: with a clean work tree there is nothing to
+          // press, and the capture is the default view.
+          commit: () => document.querySelector('[data-commit-toggle]')?.click(),
+          filemenu: () => {
+            const row = document.querySelector('[data-diff]')
+            if (!row) return
+            row.click()
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => document.querySelector('[data-filemenu]')?.click()),
+            )
+          },
+        }
+        // After the first poll paints, so the nodes exist, and a frame past
+        // that so the lanes are in the DOM. An unknown name does nothing — the
+        // server already refused it, so a hand-typed one just captures the
+        // default view.
+        const shotWait = setInterval(() => {
+          if (!lastLedger) return
+          clearInterval(shotWait)
+          requestAnimationFrame(() => requestAnimationFrame(() => SHOT_ACTIONS[SHOT]?.()))
+        }, 250)
+      }
     </script>
   </body>
 </html>

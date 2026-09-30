@@ -5,7 +5,7 @@
     scripts/dashboard.py up          # the same thing, spelled the way the hooks call it
     scripts/dashboard.py serve      # stay in the foreground instead (ctrl-c to stop)
     scripts/dashboard.py snapshot   # just write dashboard/state.json
-    scripts/dashboard.py shot [png] # photograph it, for the design review pass
+    scripts/dashboard.py shot [png] [state ...]  # photograph it, for the design review pass
     scripts/dashboard.py --port N   # serve somewhere else
 
 Backgrounding is the default because of who runs this: a hook at the end of a
@@ -27,6 +27,7 @@ import http.server
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -38,7 +39,25 @@ from pathlib import Path
 import urllib.request
 from urllib.parse import parse_qs, unquote, urlparse
 
-ROOT = Path(__file__).resolve().parent.parent
+
+def _project_root():
+    """The checkout this server describes, asked of git rather than of this
+    file's own path — the script's location only equals the checkout when it
+    is installed where it was developed. Falls back to the working directory,
+    which is where the hooks and the background child start from."""
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=10,
+                           cwd=Path(__file__).resolve().parent)
+        top = (r.stdout or "").strip()
+        if r.returncode == 0 and top:
+            return Path(top)
+    except Exception:
+        pass
+    return Path.cwd()
+
+
+ROOT = _project_root()
 
 
 def _bd_prefix():
@@ -286,6 +305,13 @@ def ledger_state():
     # and a needs-human bead is one a session already declined to guess at.
     # Both stay out of ready for the same reason they stay out of the brief.
     #
+    # `available` is the absence half of this state: no `bd` on PATH means no
+    # ledger lanes, not empty ones. The bd reads below already degrade to
+    # empty output on their own (run/bd_json swallow failures), so this flag
+    # is what tells the page the difference between "nothing to do" and
+    # "nothing to ask" — the panels vanish on the former, never on a traceback.
+    available = shutil.which("bd") is not None
+    #
     # One engine spin, not three: `bd list --all` already carries the labels,
     # dependencies, parents and sparse flags ready-ness and staleness judge
     # on, so both derive from its payload. Each derivation declines exotic
@@ -375,7 +401,7 @@ def ledger_state():
     # Computed before the closed-bead trim below, which is what would hide them.
     all_labels = sorted({l for i in issues for l in (i.get("labels") or [])})
     return {"counts": counts, "issues": issues, "stale": cached_stale(all_issues),
-            "all_labels": all_labels}
+            "all_labels": all_labels, "available": available}
 
 
 # Dependency types that never block. Proved inert against bd 1.1.2 on scratch
@@ -768,7 +794,12 @@ HARNESS = [
         (str(MEMORY_DIR / "*.md"), "claude", "a memory: what was true when it was written"),
     ]),
     ("ledger", "where work is found and left", [
-        (".beads/issues.jsonl", "harness", "the issue graph, exported for git"),
+        # issues.jsonl only exists when the ledger's JSONL export is enabled
+        # (bd ships it disabled); it is a readable copy for diffs, never the
+        # transport — git carries the ledger as the Dolt ref, pushed by
+        # scripts/ledger-push.sh. A row for a file that isn't there is simply
+        # not drawn (see resolve), so this never sends anyone looking for one.
+        (".beads/issues.jsonl", "harness", "the issue graph, as a readable export"),
         (".claude/skills/beads/SKILL.md", "harness", "the bd surface, on demand"),
         (".claude/skills/workflow/SKILL.md", "harness", "how work moves through the system"),
     ]),
@@ -1002,16 +1033,46 @@ def commit(message, amend):
     return {"ok": r.returncode == 0, "error": "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[:300]}
 
 
-# The board's own writes: filing a bead and dragging one between lanes. Like
-# the run table and the work-tree actions, these run fixed `bd` invocations —
-# nothing in a request reaches a shell, and the id, lane and labels are
-# validated before they get near one. Bead ids are checked against bead_re(),
-# the ledger's own prefix resolved at runtime.
+# The board's own writes: filing a bead, editing one, closing one, and
+# dragging one between lanes. Like the run table and the work-tree actions,
+# these run fixed `bd` invocations — nothing in a request reaches a shell, and
+# the id, lane and labels are validated before they get near one. Bead ids are
+# checked against bead_re(), the ledger's own prefix resolved at runtime — and
+# then against the ids in the current snapshot, so a request can never name a
+# bead the board isn't showing.
 # The lanes a card can be dropped on. Kept in step with DROP_LANES and the
 # backlog strip's data-drop in dashboard/index.html by hand — the page can't
 # read this table, so a lane added here needs adding there too.
 MOVE_LANES = ("ready", "blocked", "in_progress", "review", "done", "backlog")
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def snapshot_bead_ids():
+    """The ids a bead write may name: the ones in the current snapshot.
+
+    Falls back to a live ledger read before the first build finishes, rather
+    than refusing every write until then — those are the same rows the board
+    is about to show, so nothing unnamed gets through either way."""
+    data = _snapshot["data"]
+    if data:
+        try:
+            return {i["id"] for i in data["ledger"]["issues"]}
+        except (KeyError, TypeError):
+            pass
+    try:
+        return {i["id"] for i in ledger_state()["issues"]}
+    except Exception:
+        return set()
+
+
+def bead_id_error(bead):
+    """Why this id may not be written to, or "" when it may. Format first
+    (cheap, no snapshot needed), then membership in what the board shows."""
+    if not isinstance(bead, str) or not bead_re().match(bead):
+        return "not a bead id"
+    if bead not in snapshot_bead_ids():
+        return "the board isn't showing that bead"
+    return ""
 
 
 def bd_run(*args):
@@ -1086,8 +1147,9 @@ def move_bead(payload):
     bead = bead.strip() if isinstance(bead, str) else ""
     lane = payload.get("lane")
     lane = lane.strip() if isinstance(lane, str) else ""
-    if not bead_re().match(bead):
-        return {"ok": False, "error": "not a bead id"}
+    bad = bead_id_error(bead)
+    if bad:
+        return {"ok": False, "error": bad}
     if lane not in MOVE_LANES:
         return {"ok": False, "error": "not a bead lane"}
     # A drag lands a bead in a lane, whatever it was before. Reopening
@@ -1118,6 +1180,70 @@ def move_bead(payload):
     if stuck:
         return {"ok": False,
                 "error": f"moved, but {', '.join(stuck)} still attached — drop it again"}
+    return {"ok": True}
+
+
+def update_bead(payload):
+    """Retitle and/or reprioritise a bead from its sheet. Status moves travel
+    through move_bead (the lane buttons and the drop handler share it); this
+    is the two fields no lane stands for. One fixed `bd update` invocation —
+    the title and priority ride the argv list, never a shell."""
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "bad request"}
+    bead = payload.get("id")
+    bead = bead.strip() if isinstance(bead, str) else ""
+    bad = bead_id_error(bead)
+    if bad:
+        return {"ok": False, "error": bad}
+    title = payload.get("title", None)
+    if title is not None:
+        title = title.strip() if isinstance(title, str) else ""
+        if not title:
+            return {"ok": False, "error": "title is empty"}
+        if len(title) > 300:
+            return {"ok": False, "error": "title is too long (300 characters)"}
+    priority = payload.get("priority", None)
+    if priority is not None:
+        try:
+            priority = int(priority)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "priority must be 0–4"}
+        if priority not in (0, 1, 2, 3, 4):
+            return {"ok": False, "error": "priority must be 0–4"}
+    if title is None and priority is None:
+        return {"ok": False, "error": "nothing to update"}
+    args = ["update", bead]
+    if title is not None:
+        args += ["--title", title]
+    if priority is not None:
+        args += ["--priority", str(priority)]
+    code, out, err = bd_run(*args)
+    if code != 0:
+        return {"ok": False, "error": (err or out or "bd update failed")[:300]}
+    return {"ok": True}
+
+
+def close_bead(payload):
+    """Close a bead from its sheet, with the reason the ledger keeps. Unlike
+    the drop-on-done path (a lane move with no words), this carries the close
+    reason — argv, never a shell."""
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "bad request"}
+    bead = payload.get("id")
+    bead = bead.strip() if isinstance(bead, str) else ""
+    bad = bead_id_error(bead)
+    if bad:
+        return {"ok": False, "error": bad}
+    reason = payload.get("reason", None)
+    reason = reason.strip() if isinstance(reason, str) else ""
+    if len(reason) > 600:
+        return {"ok": False, "error": "reason is too long (600 characters)"}
+    args = ["close", bead]
+    if reason:
+        args += ["--reason", reason]
+    code, out, err = bd_run(*args)
+    if code != 0:
+        return {"ok": False, "error": (err or out or "bd close failed")[:300]}
     return {"ok": True}
 
 
@@ -1517,6 +1643,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 result = create_bead(data)
             elif action == "move":
                 result = move_bead(data)
+            elif action == "update":
+                result = update_bead(data)
+            elif action == "close":
+                result = close_bead(data)
             else:
                 return self.send_error(404)
             self.send_json(result)
@@ -1787,19 +1917,39 @@ def announce(url, note):
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
+# The states `shot` can photograph beyond the default view it always could.
+# Hover and focus content — the gate popover, the pulse tip, the lane stage
+# tips — can never be triggered by headless Chrome on its own, so the page
+# honours `?shot=<name>` (see SHOT_ACTIONS in dashboard/index.html): after the
+# first poll paints, the matching UI is opened the same way a hover or press
+# would open it, and a .shot class holds the CSS-only tips open. Click-driven
+# UI (the commit composer, the file menu) is opened with a real click instead.
+# These names are the only ones the CLI accepts, and one png is written per
+# state, so the review packet carries them all.
+SHOT_STATES = ("gate", "pulse", "review", "staging", "commit", "filemenu")
 
-def shot(path, port, width=900, height=1400):
+
+def shot(path, port, width=900, height=1400, states=()):
     """Write a picture of the running dashboard, for the design review pass.
 
     The reviewing agent reads screenshots off disk, and a dashboard looked at in
     a browser pane leaves nothing behind — so the change nobody could photograph
     was the change nobody reviewed. Chrome headless renders the same page the
     server is already serving.
+
+    With no states this photographs the page as it loads, exactly as before.
+    With states — a subset of SHOT_STATES — it captures once per state, each
+    with `?shot=<name>` in the URL, writing one png per state beside `path`
+    (`board.png` + `gate` becomes `board-gate.png`).
     """
     if not Path(CHROME).exists():
         return f"no Chrome at {CHROME} — install it or capture by hand"
     if not is_serving(port):
         return f"nothing serving on {port} — run `dashboard.py up` first"
+    unknown = [s for s in states if s not in SHOT_STATES]
+    if unknown:
+        return (f"no such state: {', '.join(unknown)} "
+                f"(try: {', '.join(SHOT_STATES)})")
     # Warmed on real time first. Chrome's virtual clock stops while a request is
     # outstanding, so against a server that hasn't built its first snapshot the
     # page's own poll spends the whole budget waiting — and the capture comes
@@ -1813,13 +1963,29 @@ def shot(path, port, width=900, height=1400):
     except Exception as e:
         return (f"the dashboard on {port} gave no state in "
                 f"{FIRST_BUILD_TIMEOUT + 5:.0f}s, so there is nothing to photograph: {e}")
-    # A budget rather than a sleep: the page paints once its first poll lands,
-    # and virtual time runs it forward without waiting in real seconds.
-    subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars",
-                    f"--window-size={width},{height}", f"--screenshot={path}",
-                    "--virtual-time-budget=2500", f"http://localhost:{port}/"],
-                   capture_output=True)
-    return path if Path(path).exists() else "chrome wrote nothing"
+    base = Path(path)
+    targets = [("", path)] if not states else [
+        (s, str(base.with_name(f"{base.stem}-{s}{base.suffix or '.png'}")))
+        for s in states]
+    written = []
+    for name, out in targets:
+        url = f"http://localhost:{port}/" + (f"?shot={name}" if name else "")
+        # A budget rather than a sleep: the page paints once its first poll lands,
+        # and virtual time runs it forward without waiting in real seconds.
+        # run-all-compositor-stages-before-draw so a popover opened by the
+        # ?shot hook is painted, not just in the DOM, when the capture lands.
+        subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars",
+                        f"--window-size={width},{height}", f"--screenshot={out}",
+                        "--virtual-time-budget=2500",
+                        # At final state for the capture: the sheet slides up
+                        # over 0.44s and virtual time can photograph it mid-way.
+                        "--force-prefers-reduced-motion",
+                        "--run-all-compositor-stages-before-draw", url],
+                       capture_output=True)
+        if not Path(out).exists():
+            return f"chrome wrote nothing for {name or 'the default view'}"
+        written.append(out)
+    return written[0] if len(written) == 1 else "\n".join(written)
 
 
 COMMANDS = ("up", "down", "serve", "snapshot", "shot")
@@ -1852,9 +2018,26 @@ def main():
     port = int(args[args.index("--port") + 1]) if explicit_port else free_port(PORT)
 
     # Named so `scripts/review.sh` picks it up with the app's own captures.
+    # Extra positionals name states (see SHOT_STATES): one png per state,
+    # written beside the path. A first positional that names a state keeps
+    # the default path, so `shot gate` captures just the gate popover.
     if command == "shot":
-        target = args[1] if len(args) > 1 else f"/tmp/{prefix()}-dashboard.png"
-        print(shot(target, port))
+        pos = []
+        i = 1
+        while i < len(args):
+            if args[i] == "--port":
+                i += 2
+                continue
+            if args[i].startswith("-"):
+                i += 1
+                continue
+            pos.append(args[i])
+            i += 1
+        if pos and pos[0] not in SHOT_STATES:
+            target, states = pos[0], pos[1:]
+        else:
+            target, states = f"/tmp/{prefix()}-dashboard.png", pos
+        print(shot(target, port, states=states))
         return
 
     # The default, and what both hooks call: leave a dashboard running at the
