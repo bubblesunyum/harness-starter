@@ -113,6 +113,14 @@ harness_extract_overlay() {
   # decide, not keywords: a comment mentioning `step "..."` is still a comment,
   # and steps or scopes spelled any valid way still count.
   printf '%s' "$block" | grep -qE '^[[:space:]]*[^#[:space:]]' || return 0
+  if [ "$rel" = scripts/review.sh ]; then
+    # The block sat below `_harness_prefix` in review.sh, so "resolved above"
+    # was true there. Lifted into the overlay nothing is above — the resolver
+    # lives in review.sh, which sources this file — so the comment names it
+    # instead. Only the template's own wording is rewritten, on its full line;
+    # a project's own prose lifts verbatim.
+    block="$(printf '%s\n' "$block" | sed "s|^# write its captures to /tmp with this prefix — the ledger's, resolved above\.\$|# write its captures to /tmp with this prefix — the ledger's, from _harness_prefix in scripts/review.sh, which sources this file.|")"
+  fi
   tmp="$(mktemp "$target/.harness-extract-XXXXXX")" || return 1
   {
     printf '# Recovered from %s by the harness: this project'"'"'s own %s,\n' "$rel" \

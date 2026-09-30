@@ -892,7 +892,9 @@ probe_step "diverge refuses overlay files" bash -c '
 
 # The migration itself: a pre-split project recovers its inline blocks into
 # overlay files on --apply, and the lifted steps actually run. Without this the
-# converge above would delete answers only the project has.
+# converge above would delete answers only the project has. The lift also
+# re-homes the CAPTURES comment: "resolved above" was true inline in review.sh
+# but orphaned in the overlay, so it names review.sh instead.
 probe_step "apply lifts pre-split blocks into overlays" bash -c '
   fresh_probe || exit 1
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
@@ -908,7 +910,7 @@ open(v, "w").write(t[:start] + "# ── PROJECT STEPS ──\nstep \"legacy\" t
 t = open(r).read()
 start = t.index("# ── CONFIGURE ──")
 end = t.index("# ── END CONFIGURE ──") + len("# ── END CONFIGURE ──")
-open(r, "w").write(t[:start] + "# ── CONFIGURE ──\nSCOPE=(\"*.sh\")\nCAPTURES=\"none-*.png\"\n# ── END CONFIGURE ──" + t[end:])
+open(r, "w").write(t[:start] + "# ── CONFIGURE ──\nSCOPE=(\"*.sh\")\n# write its captures to /tmp with this prefix — the ledger\x27s, resolved above.\nCAPTURES=\"none-*.png\"\n# ── END CONFIGURE ──" + t[end:])
 PYEOF
     { echo "error: cannot write old-style scripts"; exit 1; }
   out=$(bin/harness update --apply "$probe" 2>&1) ||
@@ -919,6 +921,11 @@ PYEOF
     { echo "error: steps never landed in the overlay"; exit 1; }
   grep -q "SCOPE=" "$probe/scripts/review.scope.sh" ||
     { echo "error: scope never landed in the overlay"; exit 1; }
+  grep -q "from _harness_prefix in scripts/review.sh" "$probe/scripts/review.scope.sh" ||
+    { echo "error: lifted scope never re-homed the captures comment"; exit 1; }
+  if grep -q "resolved above" "$probe/scripts/review.scope.sh"; then
+    echo "error: lifted scope kept the orphaned resolved-above comment"; exit 1;
+  fi
   out=$(bash "$probe/scripts/verify.sh" --quick 2>&1) ||
     { echo "error: migrated gate failed"; echo "$out"; exit 1; }
   echo "$out" | grep -q "ok    legacy" ||
