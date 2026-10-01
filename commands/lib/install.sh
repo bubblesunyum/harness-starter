@@ -44,8 +44,13 @@ harness_is_customised() {
 # add.sh's tidier removes it on the way in — so a block in the project's copy
 # is content the template has no counterpart for, and overwriting the file
 # deletes it. update --apply asks this before writing.
+#
+# Anchored to line start: scripts/context.py counts markers in docs through an
+# inline literal, which an unanchored match reads as a managed block and refuses
+# to converge over — stranding a real contract fix stale. bd writes its markers
+# at line start, so a real block always matches here and stays protected.
 harness_has_beads_block() {
-  grep -q "BEGIN BEADS" "$1" 2>/dev/null
+  grep -q '^[[:space:]]*<!-- BEGIN BEADS' "$1" 2>/dev/null
 }
 
 # Project-owned overlays: the files a project's own answers live in. Installed
