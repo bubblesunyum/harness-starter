@@ -323,6 +323,22 @@ def ledger_state():
         ready = bd_json("ready", "--exclude-label", "backlog",
                         "--exclude-label", "needs-human")
         ready_ids = {i["id"] for i in ready}
+    # The board's backlog strip reads the same inheritance the ready
+    # derivation does (see _grow_down): a child of shelved work renders
+    # under backlog, not as a card of its own.
+    # Needs-human seeds stay open-only: a closed one is finished work, not
+    # shelved work, and the strip is no place for history. Backlog seeds
+    # keep every status, as before — a closed backlog bead was always shelved.
+    backlog_ids = _grow_down(
+        {i["id"]: _parent_ids(i) for i in all_issues},
+        {i["id"] for i in all_issues
+         if "backlog" in (i.get("labels") or []) or
+         ("needs-human" in (i.get("labels") or []) and
+          i.get("status") == "open")})
+    # The bd-ready fallback above answers own labels only; without this one
+    # id could be both ready and backlog and the count would drift from the
+    # board. Harmless on the derived path, where shelved never made ready.
+    ready_ids -= backlog_ids
     issues = []
     counts = {"open": 0, "ready": len(ready_ids), "in_progress": 0, "closed": 0, "blocked": 0}
 
@@ -362,7 +378,7 @@ def ledger_state():
             # review, and inventing a status would mean teaching every other
             # command about it.
             "in_review": "review" in labels,
-            "backlog": "backlog" in labels,
+            "backlog": i["id"] in backlog_ids,
             "labels": labels,
             "priority": i.get("priority", 2),
             "type": i.get("issue_type", "task"),
@@ -477,6 +493,22 @@ def _parent_ids(issue):
     return out
 
 
+def _grow_down(parents, seeds):
+    """Everything hung under a seed, seeds included. Backlog and needs-human
+    travel down the parent chain — a child of shelved work is shelved work,
+    whatever its own labels say. Both the blocked and the shelved sets in
+    derive_ready_ids propagate through this helper."""
+    got = set(seeds)
+    grown = True
+    while grown:
+        grown = False
+        for bead, bead_parents in parents.items():
+            if bead not in got and bead_parents & got:
+                got.add(bead)
+                grown = True
+    return got
+
+
 def derive_ready_ids(all_issues):
     """Ready ids from one `bd list --all` payload, or None when it holds
     something only `bd ready` can judge. Mirrors the ready-work WHERE clause
@@ -520,13 +552,11 @@ def derive_ready_ids(all_issues):
             blocked.add(i["id"])
             break
     parents = {i["id"]: _parent_ids(i) for i in all_issues}
-    grown = True
-    while grown:
-        grown = False
-        for bead, pls in parents.items():
-            if bead not in blocked and pls & blocked:
-                blocked.add(bead)
-                grown = True
+    blocked = _grow_down(parents, blocked)
+    # Backlog and needs-human travel down the parent chain: har-whx.5 read
+    # ready under backlog har-whx because only own labels were checked.
+    shelved = _grow_down(parents, {i["id"] for i in all_issues
+                                   if READY_EXCLUDE_LABELS & set(i.get("labels") or [])})
     ready = set()
     for i in all_issues:
         if i.get("status") != "open":
@@ -537,7 +567,7 @@ def derive_ready_ids(all_issues):
             continue
         if i.get("issue_type") in READY_EXCLUDE_TYPES:
             continue
-        if READY_EXCLUDE_LABELS & set(i.get("labels") or []):
+        if i["id"] in shelved:
             continue
         if i["id"] in blocked:
             continue

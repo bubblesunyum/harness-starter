@@ -1034,6 +1034,13 @@
         flex-wrap: wrap;
         margin-bottom: 8px;
       }
+      /* The input shares its row with the priority segment: without a floor
+      of its own it holds its min-content width and pushes the sheet sideways
+      at narrow viewports, however willing the row is to wrap. */
+      .edit-row input[type='text'] {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
       .sheet .form-error {
         margin-right: auto;
         font-size: 11px;
@@ -1173,6 +1180,24 @@
         font-variant-numeric: tabular-nums;
         font-size: 11.5px;
         text-align: right;
+        /* A value shares its row with the label: without a floor of its own
+        its longest unbreakable run (a sha, a branch name) holds the row wider
+        than the popover and bleeds over the lane cards. */
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      /* The gate's values are short verdicts — ok, failed — and a wrapped one
+      reads as a rendering bug (`o` over `k`) while doubling the pane's
+      height. They keep their natural width and never break; the label takes
+      the narrowing instead. Every other pane keeps the wrapping above, which
+      is what holds long shas inside the staging pane. */
+      .gate .tip .row .v {
+        flex: none;
+        overflow-wrap: normal;
+      }
+      .gate .tip .row .name {
+        min-width: 0;
+        overflow-wrap: anywhere;
       }
       .v.ok {
         color: var(--ok);
@@ -1289,6 +1314,10 @@
         box-shadow: var(--shadow);
         padding: 12px 14px;
         white-space: normal;
+        /* A popover clips, never bleeds: a value the row rules can't wrap
+        (see .row .v) still stays inside the pane instead of running over the
+        lane cards beside it. */
+        overflow: hidden;
         cursor: default;
         font:
           400 12px/1.5 ui-sans-serif,
@@ -1341,6 +1370,14 @@
         opacity: 1;
         visibility: visible;
         transform: translateY(0);
+      }
+      /* Frozen while a capture state is armed: virtual time can photograph a
+      tip mid-fade, and a half-open popover reads as a rendering bug. The
+      attribute is set for every ?shot= name (see SHOT), so one rule covers
+      the document-keyed gate/pulse tips and the lane-keyed review/staging
+      ones alike. */
+      html[data-shot] .tip {
+        transition: none;
       }
 
       .tip h3 {
@@ -2139,6 +2176,11 @@
         list.forEach((i) => walk(i, false))
         return out.join('')
       }
+
+      /* Shelving lives on the server: ledger_state inherits backlog down the
+      parent chain into `backlog`, so the view filters on the flag rather
+      than re-walking the chain (a local walk over untyped deps overreaches
+      where the server walks parent links only). */
 
       /* The last ledger the board was drawn from, so a press that only changes how
          much of a lane is showing can repaint without waiting for the next poll. */
@@ -4166,6 +4208,10 @@
          page never notices it. */
       const SHOT = new URLSearchParams(location.search).get('shot')
       if (SHOT) {
+        // Marked at once, for every name: the transition freeze above keys off
+        // this attribute, so it has to hold from the first paint, not from when
+        // the matching action below runs.
+        document.documentElement.setAttribute('data-shot', SHOT)
         const SHOT_ACTIONS = {
           // On the document, not the node: drawGate and the poll both rebuild
           // those classes on every pass, which would wipe a class holding the
@@ -4189,14 +4235,15 @@
             )
           },
         }
-        // After the first poll paints, so the nodes exist, and a frame past
-        // that so the lanes are in the DOM. An unknown name does nothing — the
-        // server already refused it, so a hand-typed one just captures the
-        // default view.
+        // After the first poll paints, so the nodes exist — applied
+        // synchronously, because nothing the actions do needs a painted frame
+        // and a double-rAF wait loses the race with headless capture. An
+        // unknown name does nothing — the server already refused it, so a
+        // hand-typed one just captures the default view.
         const shotWait = setInterval(() => {
           if (!lastLedger) return
           clearInterval(shotWait)
-          requestAnimationFrame(() => requestAnimationFrame(() => SHOT_ACTIONS[SHOT]?.()))
+          SHOT_ACTIONS[SHOT]?.()
         }, 250)
       }
     </script>

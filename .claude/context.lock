@@ -7,11 +7,11 @@
     ".claude/skills/workflow/SKILL.md": "b0d1c23e3b294f10",
     "doc": "d1155e1d87765957",
     "scripts/agent.py": "9d06600351b2f27f",
-    "scripts/brief.sh": "0c178578e538e6c8",
+    "scripts/brief.sh": "300ea9724dfd779c",
     "scripts/context.py": "57de2a6ebb1adea9",
     "scripts/opencode-agents.py": "838b979d27801c74",
     "scripts/review.sh": "b1c750897c2e4f66",
-    "scripts/verify.sh": "bab6bc040bb3ff03"
+    "scripts/verify.sh": "9a95640b7b594361"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "50b425f15365c9ed",
@@ -27,23 +27,23 @@
   },
   ".claude/skills/handoff/SKILL.md": {
     "doc": "7fec5b9a76db6581",
-    "scripts/brief.sh": "0c178578e538e6c8"
+    "scripts/brief.sh": "300ea9724dfd779c"
   },
   ".claude/skills/orchestrate/SKILL.md": {
-    "doc": "eb5530ed4b53cb9c",
+    "doc": "ddfcbd64ef8f8a7a",
     "scripts/agent.py": "9d06600351b2f27f",
-    "scripts/brief.sh": "0c178578e538e6c8",
+    "scripts/brief.sh": "300ea9724dfd779c",
     "scripts/review.sh": "b1c750897c2e4f66",
-    "scripts/verify.sh": "bab6bc040bb3ff03"
+    "scripts/verify.sh": "9a95640b7b594361"
   },
   ".claude/skills/workflow/SKILL.md": {
     "doc": "b0d1c23e3b294f10",
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "1b376157a2fda3a5",
-    "scripts/brief.sh": "0c178578e538e6c8",
+    "doc": "89419f2ab783633b",
+    "scripts/brief.sh": "300ea9724dfd779c",
     "scripts/review.sh": "b1c750897c2e4f66",
-    "scripts/verify.sh": "bab6bc040bb3ff03"
+    "scripts/verify.sh": "9a95640b7b594361"
   }
 }

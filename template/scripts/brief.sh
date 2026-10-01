@@ -72,7 +72,9 @@ active = bd("list", "--status", "in_progress", "--json")
 # Dolt engine (~half a second), so the one query's rows are counted locally
 # and lists are only fetched when the titles get printed.
 counts = {}
-all_issues = bd("list", "--json", "--all")
+# --limit 0, because bd's default is 50 and silently losing beads past that
+# would look like work disappearing rather than a truncated query.
+all_issues = bd("list", "--json", "--all", "--limit", "0")
 if isinstance(all_issues, list):
     for issue in all_issues:
         if isinstance(issue, dict):
@@ -83,6 +85,43 @@ if isinstance(all_issues, list):
 memories = bd("memories", "--json")
 memories = ({k: v for k, v in memories.items() if isinstance(v, str)}
             if isinstance(memories, dict) else {})
+
+# Backlog and needs-human travel down the parent chain (the same inheritance
+# scripts/dashboard.py derives with), but `bd ready` only ever checked own
+# labels — so a child of shelved work is listed ready here until filtered.
+# Parents come from the one `bd list` payload already fetched above: the
+# parent column, plus parent-child edges, which is where an epic link lives
+# when the column is empty.
+def _parent_ids(i):
+    out = set()
+    if not isinstance(i, dict):
+        return out
+    if i.get("parent"):
+        out.add(i["parent"])
+    for d in i.get("dependencies") or []:
+        if isinstance(d, dict) and d.get("type") == "parent-child":
+            t = d.get("depends_on_id") or d.get("id")
+            if t:
+                out.add(t)
+    return out
+
+def _grow_down(parents, seeds):
+    shelved = set(seeds)
+    grown = True
+    while grown:
+        grown = False
+        for bead, bead_parents in parents.items():
+            if bead not in shelved and bead_parents & shelved:
+                shelved.add(bead)
+                grown = True
+    return shelved
+by_id = {i["id"]: i for i in all_issues
+         if isinstance(i, dict) and i.get("id")}
+parents = {bid: _parent_ids(i) for bid, i in by_id.items()}
+shelved = _grow_down(parents, {bid for bid, i in by_id.items()
+                                 if {"backlog", "needs-human"} & set(i.get("labels") or [])})
+ready = [i for i in ready
+         if isinstance(i, dict) and i.get("id") not in shelved]
 
 def line(i):
     return f"  {i['id']:<12} P{i['priority']} {i['title']}"
