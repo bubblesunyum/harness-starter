@@ -12,7 +12,7 @@ what lets N workers share a tree without merge conflicts, double commits,
 or a gate run per worker.
 
 Proven shape: N beads, N background implementers, one gate run, one
-review packet round, batched commit. Provenance for a specific round
+review packet round, per-bead commits. Provenance for a specific round
 lives in its beads and commits, not here.
 
 ## Inputs
@@ -124,9 +124,11 @@ file the rest as beads, and say plainly what you left and why.
 
 ## Phase 7 — Commit and close
 
-- Commit policy: **batched per round** when the beads form one story
-  (one message, every bead id named); per-bead when they don't. Either
-  way every commit names its bead — the commit-msg hook enforces it.
+- Commit policy: **split commits by bead by default** — one commit per
+  bead, each naming its bead. Batch into a single round commit only when
+  the beads are super tightly coupled (one story that reads as nonsense
+  split apart). Either way every commit names its bead — the commit-msg
+  hook enforces it.
 - Attribute multi-author work in the commit body (which beads, which
   workers) so a later session can ask why a line looks the way it does
   and get an answer.
@@ -163,7 +165,7 @@ that never existed.
 | One implementer per tree (`delegate`) vs parallel? | `delegate` for single decided work; this skill for parallel same-tree rounds under the contract above. |
 | Fix or file mid-task? | Fix, unless significant enough for its own bead. |
 | Who fixes review findings? | Re-spawned implementers; orchestrator only when super small. |
-| Batched or per-bead commits? | Batched per round for one story, per-bead otherwise. |
+| Batched or per-bead commits? | Per-bead by default; batched only when super tightly coupled. |
 | Who is the ledger identity for subagent work? | The orchestrator's note on each bead, per Phase 7. |
 
 <!-- tracks: scripts/brief.sh scripts/verify.sh scripts/review.sh scripts/agent.py -->
