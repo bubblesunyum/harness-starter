@@ -30,7 +30,7 @@
     "scripts/brief.sh": "300ea9724dfd779c"
   },
   ".claude/skills/orchestrate/SKILL.md": {
-    "doc": "ddfcbd64ef8f8a7a",
+    "doc": "e7a8392f55f2d959",
     "scripts/agent.py": "9d06600351b2f27f",
     "scripts/brief.sh": "300ea9724dfd779c",
     "scripts/review.sh": "b1c750897c2e4f66",

@@ -1616,6 +1616,9 @@ def refresher():
             # never a half-filled one. Nothing here mutates a published snapshot.
             _snapshot["data"] = data
             _built.set()
+            # Warmed here, off-request, so /dashboards only ever reads the
+            # cache — port probes and directory scans never run in a request.
+            cached_peers()
         except Exception as e:
             # A build that throws leaves the last good snapshot up rather than
             # blanking the board. Said out loud, because a dashboard quietly
@@ -1623,7 +1626,10 @@ def refresher():
             # against.
             print(f"! state build failed: {e}", flush=True)
         idle = time.monotonic() - _last_poll["at"]
-        if EXIT_AFTER and idle > EXIT_AFTER:
+        # A persistent board doesn't count idle time: it was started to
+        # outlive the session that opened it.
+        limit = 0 if os.environ.get("DASHBOARD_PERSIST") == "1" else EXIT_AFTER
+        if limit and idle > limit:
             since = f"{idle / 60:.0f}m" if idle >= 60 else f"{idle:.0f}s"
             shutdown(f"nobody polled in {since} — exiting")
         # An unwatched board costs a build a minute instead of one every few
@@ -1722,6 +1728,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if was_idle:
                 touch()
             return self.send_json(cached_state())
+        if urlparse(self.path).path in ("/dashboards", "/dashboards/"):
+            # No request input reaches the filesystem: the answer is the
+            # cached peer list, whatever the query string says.
+            return self.send_json(cached_peers())
         if self.path.startswith("/diff"):
             wanted = unquote(parse_qs(urlparse(self.path).query).get("path", [""])[0])
             result = diff_for(wanted)
@@ -1797,12 +1807,170 @@ def held_pid(port):
     return pid if isinstance(pid, int) else None
 
 
-def stop_serving():
-    """Stop this checkout's dashboard, if it has one. Idempotent: a session that
-    ends with no server running is the normal case, not an error."""
-    for port in range(PORT, PORT + 20):
+# Every board knows about every other board. Two sources: the port claim files
+# in /tmp (each serving dashboard writes one — see claim_file) and the sibling
+# checkouts beside this one (a board nobody has opened yet has no claim).
+# Rebuilt at most once a minute — port probes and directory scans on every
+# poll is what once made the server fall behind its own polling.
+_peers = {"at": 0.0, "data": None}
+PEERS_TTL = 60.0
+
+
+def cached_peers():
+    if _peers["data"] is None or time.time() - _peers["at"] > PEERS_TTL:
+        _peers["data"] = build_peers()
+        _peers["at"] = time.time()
+    return _peers["data"]
+
+
+def sibling_name(root):
+    """The display name for a checkout that isn't this one. Its dashboard.toml
+    says, else its directory does — all guarded, since it is someone else's
+    file and may be missing or torn mid-write."""
+    try:
+        with open(Path(root) / "dashboard.toml", "rb") as f:
+            doc = tomllib.load(f)
+        project = doc.get("project") if isinstance(doc, dict) else None
+        name = project.get("name") if isinstance(project, dict) else None
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    except Exception:
+        pass
+    return Path(root).name
+
+
+def claim_port(path):
+    """The port a claim filename names, or None. Claim files are
+    `<prefix>-dashboard-<port>.json`; anything else is someone's scratch."""
+    try:
+        return int(Path(path).stem.rsplit("-", 1)[1])
+    except ValueError:
+        return None
+
+
+def live_claims():
+    """Every claim file in /tmp that still describes a running board: a root
+    that exists and something answering on the claimed port. Anything else is
+    a stale file from a board that died without cleaning up."""
+    found = {}
+    try:
+        files = sorted(Path("/tmp").glob("*-dashboard-*.json"))
+    except OSError:
+        return found
+    for f in files:
+        port = claim_port(f)
+        if port is None:
+            continue
+        try:
+            claim = json.loads(f.read_text())
+        except Exception:
+            continue
+        root = claim.get("root") if isinstance(claim, dict) else None
+        if not root or not Path(root).is_dir():
+            continue
+        pid = claim.get("pid") if isinstance(claim, dict) else None
+        if isinstance(pid, int):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                # Crashed without cleaning up (kill -9 leaves the claim
+                # behind): the port may already serve someone else, so this
+                # root must not be listed as live at their URL. A recycled pid
+                # still slips through — identity, not just existence, would be
+                # the full fix.
+                continue
+        if not is_serving(port):
+            continue
+        found[str(root)] = port
+    return found
+
+
+def sibling_roots():
+    """The checkouts beside this one — children of the parent directory that
+    run this same harness. Sorted and capped: a home directory holds dozens
+    of checkouts and the board only has room to name them."""
+    try:
+        children = sorted((d for d in ROOT.parent.iterdir()), key=lambda d: d.name)
+    except OSError:
+        return []
+    return [d for d in children
+            if d.is_dir() and (d / "scripts" / "dashboard.py").is_file()][:50]
+
+
+def build_peers():
+    """This board and every board beside it: live ones with ports, quiet ones
+    without. Self is always in the list and always live — the board answering
+    is proof enough it is serving."""
+    claims = live_claims()
+    own_port = _bound_port["port"]
+    if own_port is None:
+        own_port = claims.get(str(ROOT))
+    by_root = {}
+    for root, port in claims.items():
+        by_root[root] = {
+            "name": project_name() if root == str(ROOT) else sibling_name(root),
+            "root": root,
+            "port": port,
+            "url": f"http://localhost:{port}/",
+            "live": True,
+        }
+    for d in sibling_roots():
+        if str(d) == str(ROOT) or str(d) in by_root:
+            continue
+        by_root[str(d)] = {
+            "name": sibling_name(str(d)),
+            "root": str(d),
+            "port": None,
+            "url": "",
+            "live": False,
+        }
+    if str(ROOT) not in by_root:
+        by_root[str(ROOT)] = {
+            "name": project_name(),
+            "root": str(ROOT),
+            "port": own_port,
+            "url": f"http://localhost:{own_port}/" if own_port else "",
+            "live": True,
+        }
+    peers = sorted(by_root.values(), key=lambda p: (p["name"].lower(), p["root"]))
+    return {"self": str(ROOT), "peers": peers}
+
+
+def own_claims():
+    """This checkout's port claim files, whatever port they name. Found by
+    file rather than by port range: an explicit --port outside the usual
+    twenty still belongs to this checkout, and `down` must still reach it."""
+    try:
+        files = sorted(Path("/tmp").glob(f"{prefix()}-dashboard-*.json"))
+    except OSError:
+        return []
+    claims = []
+    for f in files:
+        port = claim_port(f)
+        if port is None:
+            continue
+        claims.append(port)
+    return claims
+
+
+def stop_serving(force=False):
+    """Stop this checkout's dashboards, all of them. Idempotent: a session that
+    ends with no server running is the normal case, not an error. A persistent
+    board (DASHBOARD_PERSIST=1 at serve time) survives this — it was started
+    to outlive sessions — unless `force` says otherwise. Every board is
+    visited before reporting, so a second board is never left running behind
+    a success message about the first."""
+    stopped, persistent = [], False
+    for port in own_claims():
         pid = held_pid(port)
         if pid is None or not is_serving(port):
+            continue
+        try:
+            claim = json.loads(claim_file(port).read_text())
+        except Exception:
+            claim = {}
+        if isinstance(claim, dict) and claim.get("persist") and not force:
+            persistent = True
             continue
         try:
             os.kill(pid, signal.SIGTERM)
@@ -1811,7 +1979,15 @@ def stop_serving():
             # claim so the next `up` does not read the port as taken.
             claim_file(port).unlink(missing_ok=True)
             continue
-        return f"stopped the dashboard on {port}"
+        stopped.append(port)
+    if stopped and persistent:
+        names = ", ".join(map(str, stopped))
+        return (f"stopped the dashboard on {names} — a persistent board is "
+                f"still running (`down --force` to stop it)")
+    if stopped:
+        return f"stopped the dashboard on {', '.join(map(str, stopped))}"
+    if persistent:
+        return "dashboard is persistent — `down --force` to stop it"
     return "no dashboard running"
 
 
@@ -1956,7 +2132,7 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 # UI (the commit composer, the file menu) is opened with a real click instead.
 # These names are the only ones the CLI accepts, and one png is written per
 # state, so the review packet carries them all.
-SHOT_STATES = ("gate", "pulse", "review", "staging", "commit", "filemenu")
+SHOT_STATES = ("gate", "pulse", "review", "staging", "commit", "filemenu", "peers")
 
 
 def shot(path, port, width=900, height=1400, states=()):
@@ -2041,7 +2217,8 @@ def main():
     # idle CPU. The server also times itself out (EXIT_AFTER) — this is the
     # tidy path, that is the backstop.
     if command == "down":
-        print(stop_serving())
+        # --force stops even a persistent board; without it one survives.
+        print(stop_serving(force="--force" in args))
         return
 
     explicit_port = "--port" in args
@@ -2141,7 +2318,12 @@ def main():
     url = f"http://localhost:{port}/"
     with srv:
         _bound_port["port"] = port
-        claim_file(port).write_text(json.dumps({"root": str(ROOT), "pid": os.getpid()}))
+        # DASHBOARD_PERSIST=1 keeps this board past `down` and past an idle
+        # hour: the claim says so, and the refresher stops counting idle.
+        # For a board that watches several checkouts at once, not a session's.
+        persist = os.environ.get("DASHBOARD_PERSIST") == "1"
+        claim_file(port).write_text(json.dumps({"root": str(ROOT), "pid": os.getpid(),
+                                                "persist": persist}))
         # `down` sends SIGTERM, whose default disposition kills the process
         # outright — past the `finally` below, leaving the claim file behind.
         signal.signal(signal.SIGTERM, lambda *_: shutdown("stopped"))
