@@ -81,7 +81,7 @@ itself in `bd remember`.
 ```bash
 scripts/verify.sh          # build + tests + throwaway-repo probes
 scripts/verify.sh --quick  # fast lane only, no probes — iterate here
-scripts/verify.sh --full   # + slow checks and any smoke run
+scripts/verify.sh --full   # accepted, same as the default today: no --full-only tier yet
 ```
 
 Run this rather than raw build commands. It swallows tens of thousands of log
@@ -131,11 +131,16 @@ put them, because a packet inside the tree would ride along in the next
 
 ## Skills load on demand
 
-`.claude/skills/` holds `workflow` (how work moves through all of this),
-`agentic-review`, `beads`, `handoff`, and `delegate` (handing specced work to
-an opencode implementer and reviewing what comes back). Claude Code and opencode both discover
-them there. Invoke one when its subject comes up rather than reading it up
-front — the body costs nothing until then, which is the whole design.
+`.claude/skills/` (mirrored in `.agents/skills/`) holds `workflow` (how work
+moves through all of this), `agentic-review`, `beads`, `handoff`, `delegate`
+(handing specced work to an opencode implementer and reviewing what comes
+back), `orchestrate`, and `output-style`. Claude Code and opencode both
+discover them there. Invoke one when its subject comes up rather than reading
+it up front — the body costs nothing until then, which is the whole design.
+
+User-facing prose always follows the `output-style` skill: load
+`.claude/skills/output-style/SKILL.md` before writing any report, summary,
+handoff note, or other text the user will read, and apply its voice there.
 
 ## Closing a session
 

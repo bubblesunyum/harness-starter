@@ -34,13 +34,19 @@ Every round starts with three answers, from the user or your judgment:
 1. `scripts/brief.sh` first. It is the state: ready work, memory keys,
    last session's note. Do not re-derive it by hand.
 2. Select from `bd ready` inside the focus areas, minus the excludes.
-   Prefer beads whose acceptance is already written; a bead you cannot
-   brief is a bead you cannot delegate — spec it first or leave it out.
-3. Check overlap with `grep` across the candidate beads' files: two
+   Prefer beads whose acceptance is already written; the next step specs
+   the rest before anything is briefed.
+3. Auto-spec each selected bead before briefing. For every candidate
+   missing design or acceptance, write them back with `bd update <id>
+   --design "<...>" --acceptance "<...>"`, then re-read with `bd show
+   <id>` and brief only from what the re-read confirms. A bead you
+   cannot spec is a bead you cannot brief — it waits for the next round,
+   it does not ride along unspecced.
+4. Check overlap with `grep` across the candidate beads' files: two
    workers on overlapping paths is a merge conflict you scheduled. If
    two beads overlap, they go sequential (same worker, ordered briefs)
    or one of them waits for the next round.
-4. **Claim all selected beads upfront** (`bd update <id> --claim`).
+5. **Claim all selected beads upfront** (`bd update <id> --claim`).
    The ledger then shows the round as live, and no other session picks
    up the same work mid-round.
 

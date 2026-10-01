@@ -3,7 +3,8 @@
 # agent can prove its own work without a human reading a screen.
 #
 #   scripts/verify.sh           # build + tests
-#   scripts/verify.sh --full    # + slower checks and any smoke test
+#   scripts/verify.sh --full    # accepted, and today the same as the default:
+#                               # there is no --full-only tier yet
 #   scripts/verify.sh --quick   # fast lane only: no throwaway-repo probes
 #
 # Two lanes, one contract. The probe steps below each build a throwaway repo
@@ -279,6 +280,15 @@ else
   echo "  ! no scripts/verify.steps.sh — the gate has no project steps to run."
 fi
 # ── END PROJECT STEPS ─────────────────────────────────────────────────────
+
+# The golden probe fixture pays one install per run and every probe copies it
+# instead of installing — but probe bodies reset the EXIT trap, so the fixture
+# cannot reap itself. Reaped here, once, whatever the outcome — and only when
+# this run built it (GOLDEN_MINE is never exported, so a nested --quick gate
+# inheriting GOLDEN can never reap the outer run's fixture mid-flight).
+if [ "${GOLDEN_MINE:-}" = 1 ] && [ -n "${GOLDEN:-}" ] && [ -d "$GOLDEN" ]; then
+  rm -rf "$GOLDEN"
+fi
 
 # What the gate proved, as a git tree. Comparing a commit's timestamp against the
 # gate's can only ever say "you committed after you verified", which is the
