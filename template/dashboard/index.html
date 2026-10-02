@@ -1093,6 +1093,17 @@
         opacity: 0.45;
         cursor: default;
       }
+      /* The peer tabs open the popover with no header and no rule below them:
+      the next group's top border would read as their underline, so it goes,
+      and the row keeps a gap instead. Doubled class to outrank the generic
+      group-divider rule below. */
+      .tip .group.peer-group + .group {
+        border-top: 0;
+        margin-top: 2px;
+      }
+      .peer-group .peer-seg {
+        margin: 2px 0 14px;
+      }
       /* The sheet's keyboard move path: plain buttons in a wrapping row, so it
       reads as actions rather than another segmented setting. */
       .move-row {
@@ -4147,7 +4158,7 @@
           })
           .join('')
         return (
-          `<div class="group"><h3>dashboards</h3>` +
+          `<div class="group peer-group">` +
           `<div class="seg peer-seg" role="listbox" aria-label="dashboards">${buttons}</div></div>`
         )
       }
