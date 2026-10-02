@@ -1001,6 +1001,9 @@ def state():
 
     return {
         "generated": time.strftime("%H:%M:%S"),
+        # The checkout this snapshot describes. The page matches it after a
+        # peer switch and repaints only once the rebuild has landed there.
+        "root": str(ROOT),
         "project": project_name(),
         "git": git,
         "ledger": ledger,
@@ -1318,8 +1321,8 @@ _TASK_WHERE = {"header", "gate"} | {
     f"lane:{k}" for k in
     ("ready", "blocked", "in_progress", "review", "done", "backlog", "staging", "worktree")}
 
-_toml = {"mtime": (0.0, 0), "reported": (0.0, 0), "tasks": None, "name": None,
-        "verdict": DEFAULT_VERDICT, "verdict_reported": (0.0, 0)}
+_toml = {"mtime": ("", 0.0, 0), "reported": ("", 0.0, 0), "tasks": None, "name": None,
+        "verdict": DEFAULT_VERDICT, "verdict_reported": ("", 0.0, 0)}
 _toml_lock = threading.Lock()
 
 
@@ -1406,13 +1409,15 @@ def _refresh_toml():
     global _toml
     try:
         st = (ROOT / "dashboard.toml").stat()
-        stamp = (st.st_mtime, st.st_size)
+        # The path rides in the stamp: two checkouts' tomls can share a
+        # mtime and size, and the server re-points between checkouts.
+        stamp = (str(ROOT / "dashboard.toml"), st.st_mtime, st.st_size)
     except OSError:
-        stamp = (0.0, 0)
+        stamp = ("", 0.0, 0)
     with _toml_lock:
         if stamp == _toml["mtime"]:
             return
-        if stamp == (0.0, 0):
+        if stamp == ("", 0.0, 0):
             _toml = {"mtime": stamp, "reported": stamp, "tasks": dict(DEFAULT_TASKS), "name": None,
                      "verdict": DEFAULT_VERDICT, "verdict_reported": stamp}
             return
@@ -1486,6 +1491,10 @@ def project_name():
 
 _runs = {}
 
+# Which checkout a run result belongs to. Bumped on every root switch so a run
+# pressed over there can't land its output on the board over here.
+_run_gen = {"n": 0}
+
 
 def start_task(name):
     """Run one of the dashboard.toml tasks in the background and keep its last result. A second
@@ -1497,22 +1506,28 @@ def start_task(name):
         return _runs[name]
 
     _runs[name] = {"state": "running", "output": "", "at": time.time()}
+    gen = _run_gen["n"]
 
     def work():
         try:
             r = subprocess.run(tasks()[name]["command"], capture_output=True, text=True,
                                cwd=ROOT, timeout=900)
             tail = (r.stdout + r.stderr).strip().splitlines()
-            _runs[name] = {
+            result = {
                 "state": "ok" if r.returncode == 0 else "failed",
                 # The page shows a line or two, not a build log.
                 "output": " · ".join(tail[-2:])[:200] if tail else "",
                 "at": time.time(),
             }
         except subprocess.TimeoutExpired:
-            _runs[name] = {"state": "failed", "output": "timed out", "at": time.time()}
+            result = {"state": "failed", "output": "timed out", "at": time.time()}
         except Exception as e:
-            _runs[name] = {"state": "failed", "output": str(e)[:200], "at": time.time()}
+            result = {"state": "failed", "output": str(e)[:200], "at": time.time()}
+        # A switch since the press moved the board on: this result belongs to
+        # the old checkout and must not land on the new one's buttons.
+        if _run_gen["n"] != gen:
+            return
+        _runs[name] = result
         # Finishing changes the world the page is describing — a push moves the
         # tracking ref, so the beads named in those commits stop being unpushed
         # and fall back to done. Drop the cache so the next poll sees it rather
@@ -1547,6 +1562,11 @@ def runs_state():
 # seeing a failed fetch, stopped repainting. Retuning the TTL only moves that
 # collision around. So a thread owns the build and requests only ever read the
 # snapshot it last finished: a poll never waits on bd, however slow bd is.
+# The state build and a root switch never interleave: ROOT is read in dozens
+# of helpers, and a build straddling a switch would publish one checkout's
+# rows under another's title for a cycle. The switch waits on the build, not
+# the other way round — a switch is rare, a build is every few seconds.
+_state_lock = threading.Lock()
 _snapshot = {"data": None}
 _built = threading.Event()
 _wake = threading.Event()
@@ -1586,18 +1606,20 @@ EXIT_AFTER = float(os.environ.get("DASHBOARD_EXIT_AFTER", 3600))
 # what it is: no time passed for anybody.
 _last_poll = {"at": time.monotonic()}
 
-# The port this process serves, once it has bound one. Every exit that isn't
-# ctrl-c happens away from the `serve` block's `finally`, and a claim file left
-# behind after the process is gone makes the next `up` report a dashboard that
-# isn't there.
-_bound_port = {"port": None}
+# The port this process serves and the claim file it holds, once it has bound
+# one. The file is captured at bind rather than recomputed: a switched server
+# answers for another checkout, but its claim stays where it was started, so
+# `down` there still reaches it. Every exit that isn't ctrl-c happens away
+# from the `serve` block's `finally`, and a claim file left behind after the
+# process is gone makes the next `up` report a dashboard that isn't there.
+_bound_port = {"port": None, "claim": None}
 
 
 def shutdown(reason, code=0):
     """Leave, releasing the port claim on the way out."""
-    port = _bound_port["port"]
-    if port is not None:
-        claim_file(port).unlink(missing_ok=True)
+    claim = _bound_port["claim"]
+    if claim is not None:
+        Path(claim).unlink(missing_ok=True)
     print(f"! {reason}", flush=True)
     os._exit(code)
 
@@ -1611,7 +1633,8 @@ def refresher():
     """Rebuild the state forever, resting longer once nobody is watching."""
     while True:
         try:
-            data = state()
+            with _state_lock:
+                data = state()
             # One assignment, so a reader gets the previous dict or this one and
             # never a half-filled one. Nothing here mutates a published snapshot.
             _snapshot["data"] = data
@@ -1716,6 +1739,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json(result)
             touch()
             return
+        if self.path.startswith("/dashboards/"):
+            # One server, re-pointed: the request names a checkout off the
+            # switch allowlist and the same page repaints as its board.
+            action = self.path[len("/dashboards/"):].split("?")[0]
+            if action == "switch":
+                self.send_json(switch_root(read_json(self)))
+                return
+            return self.send_error(404)
         self.send_error(404)
 
     def do_GET(self):
@@ -1792,19 +1823,6 @@ def holder(port):
         return json.loads(claim_file(port).read_text()).get("root")
     except Exception:
         return "unknown"
-
-
-def held_pid(port):
-    """The pid serving this checkout's port, or None. Only ever this checkout's
-    own — signalling another project's dashboard is not `down`'s business."""
-    try:
-        claim = json.loads(claim_file(port).read_text())
-    except Exception:
-        return None
-    if claim.get("root") != str(ROOT):
-        return None
-    pid = claim.get("pid")
-    return pid if isinstance(pid, int) else None
 
 
 # Every board knows about every other board. Two sources: the port claim files
@@ -1936,21 +1954,78 @@ def build_peers():
     return {"self": str(ROOT), "peers": peers}
 
 
-def own_claims():
-    """This checkout's port claim files, whatever port they name. Found by
-    file rather than by port range: an explicit --port outside the usual
-    twenty still belongs to this checkout, and `down` must still reach it."""
+# The string a sibling board's page must contain to be switched to. A board
+# from before the switch speaks only `start`, so landing there would strand
+# the tab bar with no way back — every listed tab must round-trip.
+SWITCH_MARKER = "dashboards/switch"
+
+
+def _repoint_memory(member, old_mem):
+    """One HARNESS row with its memory path moved to the current checkout.
+    Prefix-scoped rather than row-specific, so a memory row added tomorrow
+    moves without anyone touching this."""
+    pattern, origin, role, *cap = member
+    if isinstance(pattern, str) and pattern.startswith(old_mem):
+        pattern = str(MEMORY_DIR) + pattern[len(old_mem):]
+    return (pattern, origin, role, *cap)
+
+
+def switch_capable(root):
+    """Whether `root` can be switched to: its page already speaks `switch`."""
     try:
-        files = sorted(Path("/tmp").glob(f"{prefix()}-dashboard-*.json"))
+        return SWITCH_MARKER in (Path(root) / "dashboard" / "index.html").read_text(errors="ignore")
     except OSError:
-        return []
-    claims = []
-    for f in files:
-        port = claim_port(f)
-        if port is None:
-            continue
-        claims.append(port)
-    return claims
+        return False
+
+
+def switch_root(payload):
+    """Re-point this server at another checkout and rebuild there. Nothing
+    spawns — the same page repaints as that project's board on the next poll.
+    The claim stays as bound: the server still belongs to the checkout that
+    started it, so `down` there reaches it however it is showing. Anything
+    off the allowlist leaves all state untouched."""
+    global ROOT, _prefix, MEMORY_DIR, HARNESS
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "bad request"}
+    root = payload.get("root")
+    root = root.strip() if isinstance(root, str) else ""
+    if not root:
+        return {"ok": False, "error": "root is empty"}
+    if root == str(ROOT):
+        return {"ok": True}
+    if root not in {str(d) for d in sibling_roots()}:
+        return {"ok": False, "error": "unknown checkout"}
+    if not switch_capable(root):
+        return {"ok": False, "error": "checkout does not support switching"}
+    with _state_lock:
+        old_mem = str(MEMORY_DIR)
+        ROOT = Path(root)
+        _prefix = None
+        MEMORY_DIR = Path.home() / ".claude/projects" / str(ROOT).replace("/", "-") / "memory"
+        HARNESS = [(name, blurb, [_repoint_memory(m, old_mem) for m in members])
+                   for name, blurb, members in HARNESS]
+        # Per-root caches, dropped so nothing leaks across projects: the bead
+        # prefix, the peer list, the verify key, the budget and the stale count
+        # all describe the old checkout. _catalog stays — keyed by path
+        # already — with _built, which is not per-root.
+        _peers["data"] = None
+        _verify["key"] = None
+        _budget["data"] = None
+        _stale["at"] = 0.0
+        # Run history belongs to the old checkout. The generation moves too, so
+        # a run pressed over there that finishes over here lands nowhere.
+        _runs.clear()
+        _run_gen["n"] += 1
+        # The table itself resets to defaults before the forced re-read: an
+        # invalid toml over there keeps last-good values by design, and those
+        # must not leak across as this checkout's buttons and verdict.
+        with _toml_lock:
+            _toml["mtime"] = None
+            _toml["tasks"] = None
+            _toml["name"] = None
+            _toml["verdict"] = DEFAULT_VERDICT
+    touch()
+    return {"ok": True}
 
 
 def stop_serving(force=False):
@@ -1959,17 +2034,30 @@ def stop_serving(force=False):
     board (DASHBOARD_PERSIST=1 at serve time) survives this — it was started
     to outlive sessions — unless `force` says otherwise. Every board is
     visited before reporting, so a second board is never left running behind
-    a success message about the first."""
+    a success message about the first.
+
+    Matched on the claim's root, not its filename prefix: a switched server
+    answers for another checkout but still belongs to the one that started
+    it, so `down` there reaches it however it is showing."""
     stopped, persistent = [], False
-    for port in own_claims():
-        pid = held_pid(port)
-        if pid is None or not is_serving(port):
+    try:
+        files = sorted(Path("/tmp").glob("*-dashboard-*.json"))
+    except OSError:
+        files = []
+    for f in files:
+        port = claim_port(f)
+        if port is None:
             continue
         try:
-            claim = json.loads(claim_file(port).read_text())
+            claim = json.loads(f.read_text())
         except Exception:
-            claim = {}
-        if isinstance(claim, dict) and claim.get("persist") and not force:
+            continue
+        if not isinstance(claim, dict) or claim.get("root") != str(ROOT):
+            continue
+        pid = claim.get("pid")
+        if not isinstance(pid, int) or not is_serving(port):
+            continue
+        if claim.get("persist") and not force:
             persistent = True
             continue
         try:
@@ -1977,7 +2065,7 @@ def stop_serving(force=False):
         except OSError:
             # Already gone, and the claim file outlived it. Clear the stale
             # claim so the next `up` does not read the port as taken.
-            claim_file(port).unlink(missing_ok=True)
+            f.unlink(missing_ok=True)
             continue
         stopped.append(port)
     if stopped and persistent:
@@ -2014,9 +2102,13 @@ def wait_until_serving(port, timeout=5.0):
 
 
 def write_snapshot():
-    out = ROOT / "dashboard/state.json"
-    out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(state(), indent=2))
+    # Path and build under one lock: ROOT must not move between them, or the
+    # snapshot lands in a checkout whose board it doesn't describe.
+    with _state_lock:
+        data = state()
+        out = ROOT / "dashboard/state.json"
+        out.parent.mkdir(exist_ok=True)
+        out.write_text(json.dumps(data, indent=2))
     return out
 
 
@@ -2318,6 +2410,7 @@ def main():
     url = f"http://localhost:{port}/"
     with srv:
         _bound_port["port"] = port
+        _bound_port["claim"] = str(claim_file(port))
         # DASHBOARD_PERSIST=1 keeps this board past `down` and past an idle
         # hour: the claim says so, and the refresher stops counting idle.
         # For a board that watches several checkouts at once, not a session's.
@@ -2337,7 +2430,9 @@ def main():
         except KeyboardInterrupt:
             print("\nstopped")
         finally:
-            claim_file(port).unlink(missing_ok=True)
+            claim = _bound_port["claim"]
+            if claim is not None:
+                Path(claim).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

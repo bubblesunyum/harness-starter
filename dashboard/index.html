@@ -1076,18 +1076,18 @@
         background: var(--accent);
         color: var(--panel);
       }
-      /* Peer tabs reuse the segmented pattern but wrap: long project names fold
-      inside the 360px title tip instead of running past its edge. Flex-filled,
-      so wrapped rows share the box edge to edge rather than ending ragged. */
+      /* Peer tabs reuse the segmented pattern in one scrolling row: long project
+      names scroll sideways inside the widened title tip instead of stacking.
+      Flex-filled, so a short list still shares the box edge to edge. */
       .peer-seg {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         max-width: 100%;
+        overflow-x: auto;
       }
       .peer-seg button {
         flex: 1 1 auto;
-        white-space: normal;
-        overflow-wrap: anywhere;
+        white-space: nowrap;
       }
       .peer-seg button[aria-disabled='true'] {
         opacity: 0.45;
@@ -1357,7 +1357,7 @@
      of the page, so a panel measured from its right ran off the screen. */
       .titlemenu .tip {
         left: 0;
-        width: min(360px, calc(100vw - 32px));
+        width: min(680px, calc(100vw - 32px));
         margin-top: 6px;
       }
       .titlemenu.open .tip {
@@ -3523,15 +3523,63 @@
         $('metaToggle').setAttribute('aria-expanded', 'false')
       }
 
-      /* Peer tabs leave for the peer board: a press navigates rather than
-         posting. Quiet segments never reach here — aria-disabled keeps them
-         in tab order (like .mini's own aria-disabled) so keyboard users still
-         find the checkout, and the guard below turns their press away. */
+      /* Peer tabs switch the board in place: a press POSTs the peer's root
+         to the switch endpoint (har-dy2 contract: {ok, error?}), then tick()
+         repaints this same page as the new project — title, branch, board all
+         change, the URL does not. The self tab is pressed and inert. */
       document.addEventListener('click', (e) => {
-        const peer = e.target.closest('[data-peer-url]')
+        const peer = e.target.closest('[data-peer-root]')
         if (!peer || peer.getAttribute('aria-disabled') === 'true') return
-        location.href = peer.dataset.peerUrl
+        // One switch at a time: a second press mid-flight would poll for a
+        // root the server has already moved past and cry failure wrongly.
+        if (startingPeerRoot) return
+        switchPeer(peer)
       })
+
+      async function switchPeer(peer) {
+        const root = peer.dataset.peerRoot
+        if (!root || peer.getAttribute('aria-disabled') === 'true') return
+        const label = peer.textContent
+        startingPeerRoot = root
+        peer.textContent = 'starting…'
+        peer.setAttribute('aria-disabled', 'true')
+        try {
+          const r = await (
+            await fetch('dashboards/switch', {method: 'POST', body: JSON.stringify({root})})
+          ).json()
+          if (!r.ok) throw new Error(r.error || 'switch failed')
+          // The server rebuilds after the switch lands; repaint only once the
+          // snapshot names this root, so a half-rebuilt board never paints.
+          // Generous on purpose: a cold ledger can take most of a minute, and
+          // a wrong timeout here reads as a failed switch that then happens.
+          const deadline = Date.now() + 60000
+          for (;;) {
+            let d = null
+            try {
+              d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
+            } catch {
+              // Not rebuilt yet — keep polling until the cap.
+            }
+            if (d && d.root === root) break
+            if (Date.now() > deadline) throw new Error('the board did not switch in time')
+            await new Promise((w) => setTimeout(w, 500))
+          }
+          if (startingPeerRoot === root) startingPeerRoot = ''
+          await tick()
+        } catch (err) {
+          if (startingPeerRoot === root) startingPeerRoot = ''
+          // The poll may have repainted the tab bar mid-flight; restore
+          // whichever node carries the root now, not just the pressed one.
+          const seg = peer.isConnected
+            ? peer
+            : document.querySelector(`[data-peer-root="${CSS.escape(root)}"]`)
+          if (seg) {
+            seg.textContent = label
+            seg.removeAttribute('aria-disabled')
+          }
+          toast(err instanceof SyntaxError ? 'switch failed' : err && err.message ? err.message : 'switch failed')
+        }
+      }
 
       document.addEventListener('click', (e) => {
         const more = e.target.closest('[data-more]')
@@ -4012,6 +4060,10 @@
       let peers = []
       let selfRoot = ''
       let metaSignature = ''
+      // The peer currently switching (see switchPeer): its root, so the
+      // signature below keeps the busy segment across polls instead of a
+      // repaint restoring the old label mid-flight.
+      let startingPeerRoot = ''
 
       function drawVerify(d) {
         const tip = $('verifyTip')
@@ -4072,25 +4124,25 @@
              finished on this machine, nowhere else.</div>`
       }
 
-      /* One segment per detected harness, the current board pressed and quiet
-         ones dimmed but still listed. With no peer list yet — a lone board, or
+      /* One segment per detected harness, the current board pressed and inert:
+         a press switches this same page to the peer (see switchPeer). With no peer list yet — a lone board, or
          a server from before the dashboards endpoint — the bar is just this
-         board. `p.self` is only ever set on that local fallback; live peers
+         board. `p.self` is only ever set on that local fallback; listed peers
          compare roots against the endpoint's `self`. */
       function peerGroup(d) {
-        const list = peers.length
-          ? peers
-          : [{name: d.project, url: location.href, root: '', live: true, self: true}]
+        const list = peers.length ? peers : [{name: d.project, root: '', self: true}]
         const buttons = list
           .map((p) => {
-            const live = p.live !== false
             const self = p.self || (selfRoot && p.root === selfRoot)
-            const state = self
-              ? ` aria-checked="true"`
-              : ` aria-checked="false"${live ? '' : ' aria-disabled="true"'}`
+            if (self)
+              return (
+                `<button aria-checked="true" aria-disabled="true"` +
+                `${p.root ? ` title="${esc(p.root)}"` : ''}>${esc(p.name)}</button>`
+              )
+            const starting = startingPeerRoot && p.root === startingPeerRoot
             return (
-              `<button${state} data-peer-url="${esc(p.url)}"` +
-              `${p.root ? ` title="${esc(p.root)}"` : ''}>${esc(p.name)}</button>`
+              `<button aria-checked="false"${starting ? ' aria-disabled="true"' : ''}` +
+              ` data-peer-root="${esc(p.root)}" title="${esc(p.root)}">${esc(starting ? 'starting…' : p.name)}</button>`
             )
           })
           .join('')
@@ -4108,8 +4160,9 @@
 
         // The popover rebuilds wholesale, which drops the focus of anyone
         // tabbing through the peer tabs — so an unchanged popover is left
-        // alone. The signature covers everything drawn, peers included.
-        const signature = JSON.stringify([peers, b, d.ledger, d.skills, d.agents, d.git.commits_today])
+        // alone. The signature covers everything drawn, peers and the
+        // in-flight start included.
+        const signature = JSON.stringify([peers, startingPeerRoot, b, d.ledger, d.skills, d.agents, d.git.commits_today])
         if (signature === metaSignature) return
         metaSignature = signature
 
