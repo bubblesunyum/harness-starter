@@ -48,8 +48,8 @@ scripts behind them — are reported as warnings and make this exit non-zero: th
 project has no reason to edit them, so a difference means a starter fix never
 arrived. Files with a FILL THIS IN block are meant to be edited, so those are
 listed quietly, for you to check against the template yourself. Project-owned
-overlay files — project guidance in AGENTS.local.md, gate steps, review scope — are installed once and never
-compared at all.
+overlay files — project guidance in AGENTS.local.md, gate steps, review scope —
+are installed once and never compared at all.
 
 Report-only, unless --apply: that rewrites the stale contract files that
 exist — never customised ones, never missing ones — and prints each file it
@@ -57,6 +57,8 @@ changed. A file carrying a beads block is left for a hand merge, and reviewer
 sources still need their follow-ups below. Run 'harness add' to install files
 that are missing. A deliberate local fork goes in harness/diverged.txt
 ('harness diverge <file>') — acknowledged forks are shown but no longer fail.
+For a live ledger, --apply also disables bd auto-export and refreshes the export
+with memories. Without --apply, a missing manual export policy is reported only.
 USAGE
 }
 
@@ -150,6 +152,20 @@ trap 'rm -rf "$render_dir"' EXIT
 stale=""; customised=""; missing=""; missing_contract=0; diffs=""
 applied=""; skipped_beads=""; skipped_steps=""
 diverged=""; diverged_clean=""; bad_diverged=""
+if [ -d "$target/.beads/embeddeddolt" ]; then
+  if [ "$apply" -eq 1 ]; then
+    if ! command -v bd >/dev/null 2>&1; then
+      echo "✗ bd is required to install the memory-safe export policy." >&2
+      exit 1
+    fi
+    harness_set_manual_export_policy "$target" || exit 1
+  elif ! harness_manual_export_policy "$target"; then
+    stale="$stale  .beads/config.yaml (manual export policy missing or overridden)"$'\n'
+    echo "  bd auto-export may omit memories — run 'harness update --apply $target'"
+    echo "  to set export.auto=false and regenerate with --include-memories."
+    echo
+  fi
+fi
 # Acknowledged local forks. A contract file listed in the project's
 # harness/diverged.txt differs on purpose, so it is shown for the record but
 # never fails the check and never takes an --apply write. Entries matching no

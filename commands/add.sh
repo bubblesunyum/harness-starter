@@ -64,6 +64,9 @@ esac
 had_git=0
 [ -e "${1:-$PWD}/.git" ] && had_git=1
 target="$(harness_resolve_target --init "${1:-$PWD}")"
+# Protect even the first prefix lookup from bd's memory-less auto-flush. The
+# project setting is persisted once its live ledger has been verified below.
+export BD_EXPORT_AUTO=false
 # Only a skill created by this install's bd init may be replaced automatically.
 had_codex_beads=0
 if [ -e "$target/.agents/skills/beads" ] || [ -L "$target/.agents/skills/beads" ]; then
@@ -356,6 +359,9 @@ if command -v bd >/dev/null 2>&1; then
     fi
   else
     echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
+  fi
+  if [ -n "${ledger:-}" ]; then
+    harness_set_manual_export_policy "$target" || exit 1
   fi
   # Every `bd` invocation forks a detached `bd send-metrics` that POSTs to a
   # third-party endpoint. The dashboard runs `bd` several times a poll, so this

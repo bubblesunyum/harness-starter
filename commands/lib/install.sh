@@ -69,6 +69,70 @@ harness_is_overlay() {
   esac
 }
 
+# Read only bd's ordinary block/dotted spelling, without invoking bd: an
+# environment override prevents auto-flush but would also mask `config get`.
+# Unfamiliar YAML fails closed as unknown; bd config set emits the block form.
+harness_auto_export_setting() {
+  local config="$1"
+  [ -e "$config" ] || { echo absent; return; }
+  [ -r "$config" ] || { echo unknown; return; }
+  awk '
+    BEGIN { value="absent"; block=0 }
+    { sub(/[[:space:]]*#.*/, "") }
+    /^[[:space:]]*$/ { next }
+    /^[^[:space:]]/ { block=0 }
+    /^export:[[:space:]]*$/ { block=1; next }
+    /^export\.auto:/ || (block && /^[[:space:]]+auto:/) {
+      sub(/^[^:]*:[[:space:]]*/, ""); sub(/[[:space:]]*$/, "")
+      value=($0 == "false" ? "false" : "unknown"); next
+    }
+    /^export[.:]/ || /^["\047]export/ || /<<:/ || (/^[{]/ && /export/) { value="unknown" }
+    END { print value }
+  ' "$config"
+}
+
+# This checks the explicit project policy rather than bd defaults or a
+# machine-wide preference. A local override must not silently re-enable it.
+harness_manual_export_policy() {
+  local target="$1" base override
+  base="$(harness_auto_export_setting "$target/.beads/config.yaml")"
+  override="$(harness_auto_export_setting "$target/.beads/config.local.yaml")"
+  [ "$base" = false ] && { [ "$override" = absent ] || [ "$override" = false ]; }
+}
+
+# bd 1.1.2's auto-flush/pre-commit export omits memories. Disable it before
+# invoking bd and regenerate explicitly, without importing a stale export.
+# Config alone is not proof: a local override can win, so check what was saved.
+harness_set_manual_export_policy() {
+  local target="$1" tmp
+  if ! (cd "$target" && BD_EXPORT_AUTO=false BD_IMPORT_AUTO=false \
+        bd config set export.auto false >/dev/null 2>&1); then
+    echo "✗ could not set export.auto=false in $target — the memory-safe export policy was not installed." >&2
+    return 1
+  fi
+  if ! harness_manual_export_policy "$target"; then
+    echo "✗ export.auto=false did not take in $target — check .beads/config.yaml and config.local.yaml for an override." >&2
+    return 1
+  fi
+  # Write beside the export and rename only after success: a failed export must
+  # leave the last committed memories available for hydration.
+  tmp="$(mktemp "$target/.beads/.harness-export-XXXXXX")" || return 1
+  if ! (cd "$target" && BD_EXPORT_AUTO=false BD_IMPORT_AUTO=false \
+        bd export --include-memories -o "$tmp" >/dev/null 2>&1); then
+    rm -f "$tmp"
+    echo "✗ could not export the ledger with memories in $target — the previous export was preserved." >&2
+    return 1
+  fi
+  # An empty fresh ledger has nothing to transport. Creating its export would
+  # make the gate demand a tracked file before the project has any bead work.
+  if [ ! -s "$tmp" ] && [ ! -e "$target/.beads/issues.jsonl" ]; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$target/.beads/issues.jsonl" || { rm -f "$tmp"; return 1; }
+  fi
+  echo "  ledger auto-export off; refreshed .beads/issues.jsonl with memories"
+}
+
 # The overlay file carrying a base script's project-owned block, or failure
 # for any other file.
 harness_overlay_of() {

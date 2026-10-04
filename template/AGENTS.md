@@ -72,6 +72,10 @@ a normal `git push` carries none of it. It travels on its own ref
 the push. `.beads/issues.jsonl` is a passive export for human-readable diffs,
 not the source of truth.
 
+The harness disables bd auto-export (`export.auto=false`): its plain export can
+omit memories. Regenerate manually with `bd export --include-memories`, as the
+gate and ledger-push procedure require.
+
 ## Memory that another session can find
 
 `bd remember` / `bd recall` is the durable, cross-tool memory: every agent here
