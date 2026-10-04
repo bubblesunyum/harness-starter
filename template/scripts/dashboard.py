@@ -1616,7 +1616,7 @@ _last_poll = {"at": time.monotonic()}
 # `down` there still reaches it. Every exit that isn't ctrl-c happens away
 # from the `serve` block's `finally`, and a claim file left behind after the
 # process is gone makes the next `up` report a dashboard that isn't there.
-_bound_port = {"port": None, "claim": None}
+_bound_port = {"port": None, "claim": None, "identity": None}
 
 
 def shutdown(reason, code=0):
@@ -1754,6 +1754,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_error(404)
 
     def do_GET(self):
+        if urlparse(self.path).path == "/identity":
+            return self.send_json(_bound_port["identity"])
         if self.path.startswith("/state.json"):
             # A poll is the only evidence anyone is watching. Recording it before
             # the wake means the refresher re-reads a fresh `_last_poll`, so the
@@ -2043,7 +2045,7 @@ def stop_serving(force=False):
     Matched on the claim's root, not its filename prefix: a switched server
     answers for another checkout but still belongs to the one that started
     it, so `down` there reaches it however it is showing."""
-    stopped, persistent = [], False
+    stopped, refused, persistent = [], [], False
     try:
         files = sorted(Path("/tmp").glob("*-dashboard-*.json"))
     except OSError:
@@ -2059,10 +2061,21 @@ def stop_serving(force=False):
         if not isinstance(claim, dict) or claim.get("root") != str(ROOT):
             continue
         pid = claim.get("pid")
-        if not isinstance(pid, int) or not is_serving(port):
+        if type(pid) is not int or pid <= 0 or not is_serving(port):
             continue
         if claim.get("persist") and not force:
             persistent = True
+            continue
+        # A stale claim can name a recycled pid while somebody else owns the
+        # port. Prove this listener holds the same launch identity before kill.
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/identity", timeout=1) as r:
+                identity = json.load(r)
+            if not claim.get("token") or identity != {
+                    "root": claim["root"], "pid": pid, "token": claim["token"]}:
+                raise ValueError("identity mismatch")
+        except Exception:
+            refused.append(port)
             continue
         try:
             os.kill(pid, signal.SIGTERM)
@@ -2072,6 +2085,12 @@ def stop_serving(force=False):
             f.unlink(missing_ok=True)
             continue
         stopped.append(port)
+    if refused:
+        prefix = f"stopped the dashboard on {', '.join(map(str, stopped))}; " if stopped else ""
+        return (prefix + f"refused to stop dashboard on {', '.join(map(str, refused))}: "
+                "process ownership could not be verified; stop older boards in "
+                "the session that launched them, then restart" +
+                ("; a persistent board is still running" if persistent else ""))
     if stopped and persistent:
         names = ", ".join(map(str, stopped))
         return (f"stopped the dashboard on {names} — a persistent board is "
@@ -2419,8 +2438,9 @@ def main():
         # hour: the claim says so, and the refresher stops counting idle.
         # For a board that watches several checkouts at once, not a session's.
         persist = os.environ.get("DASHBOARD_PERSIST") == "1"
-        claim_file(port).write_text(json.dumps({"root": str(ROOT), "pid": os.getpid(),
-                                                "persist": persist}))
+        identity = {"root": str(ROOT), "pid": os.getpid(), "token": os.urandom(16).hex()}
+        _bound_port["identity"] = identity
+        claim_file(port).write_text(json.dumps({**identity, "persist": persist}))
         # `down` sends SIGTERM, whose default disposition kills the process
         # outright — past the `finally` below, leaving the claim file behind.
         signal.signal(signal.SIGTERM, lambda *_: shutdown("stopped"))
