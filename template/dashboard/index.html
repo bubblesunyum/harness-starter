@@ -4246,6 +4246,7 @@
           return
         }
 
+        document.documentElement.setAttribute('data-board-ready', 'true')
         $('pulse').className = 'pulse'
         $('pulseLabel').textContent = 'live'
         $('pulseTip').innerHTML =
@@ -4353,9 +4354,10 @@
         // unknown name does nothing — the server already refused it, so a
         // hand-typed one just captures the default view.
         const shotWait = setInterval(() => {
-          if (!lastLedger) return
+          if (document.documentElement.getAttribute('data-board-ready') !== 'true') return
           clearInterval(shotWait)
           SHOT_ACTIONS[SHOT]?.()
+          document.documentElement.setAttribute('data-shot-ready', SHOT)
         }, 250)
       }
     </script>

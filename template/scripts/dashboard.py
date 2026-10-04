@@ -29,6 +29,9 @@ import os
 import re
 import shutil
 import signal
+import struct
+import zlib
+from collections import Counter
 import socket
 import subprocess
 import sys
@@ -2250,6 +2253,81 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 SHOT_STATES = ("gate", "pulse", "review", "staging", "commit", "filemenu", "peers")
 
 
+def screenshot_problem(path):
+    """Check actual screenshot pixels; an all-background PNG can be large."""
+    try:
+        data = Path(path).read_bytes()
+        if data[:8] != b"\x89PNG\r\n\x1a\n":
+            return "capture is not a PNG"
+        pos, compressed, header = 8, bytearray(), None
+        while pos + 12 <= len(data):
+            size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+            chunk = data[pos + 8:pos + 8 + size]
+            if kind == b"IHDR":
+                header = struct.unpack(">IIBBBBB", chunk)
+            elif kind == b"IDAT":
+                compressed.extend(chunk)
+            pos += size + 12
+        if not header:
+            return "PNG has no image header"
+        width, height, depth, color, compression, filtering, interlace = header
+        if not width or not height or depth != 8 or color not in (2, 6) or any((compression, filtering, interlace)):
+            return "PNG uses an unsupported pixel format"
+        channels = 3 if color == 2 else 4
+        stride = width * channels
+        raw = zlib.decompress(compressed)
+        if len(raw) != height * (stride + 1):
+            return "PNG has incomplete image data"
+        previous = bytearray(stride)
+        colors = Counter()
+        sample = max(1, width * height // 65536)
+        for y in range(height):
+            start = y * (stride + 1)
+            mode = raw[start]
+            row = bytearray(raw[start + 1:start + 1 + stride])
+            if mode not in range(5):
+                return "PNG has an invalid row filter"
+            for x in range(stride):
+                left = row[x - channels] if x >= channels else 0
+                up = previous[x]
+                corner = previous[x - channels] if x >= channels else 0
+                if mode == 1:
+                    predictor = left
+                elif mode == 2:
+                    predictor = up
+                elif mode == 3:
+                    predictor = (left + up) // 2
+                elif mode == 4:
+                    p = left + up - corner
+                    distances = (abs(p - left), abs(p - up), abs(p - corner))
+                    predictor = (left, up, corner)[distances.index(min(distances))]
+                else:
+                    predictor = 0
+                row[x] = (row[x] + predictor) & 255
+            for x in range((-y * width) % sample, width, sample):
+                offset = x * channels
+                rgb = tuple(v // 16 for v in row[offset:offset + 3])
+                if channels == 4 and row[offset + 3] == 0:
+                    rgb = (15, 15, 15)
+                colors[rgb] += 1
+            previous = row
+        total = sum(colors.values())
+        if not total or max(colors.values()) / total > 0.99:
+            return "capture is blank or nearly blank (over 99% background pixels)"
+    except (OSError, ValueError, struct.error, zlib.error) as e:
+        return f"capture could not be read: {e}"
+    return None
+
+
+class ScreenshotError(RuntimeError):
+    """A capture failed validation and must not enter the review packet."""
+
+
+def reject_screenshot(path, message):
+    Path(path).unlink(missing_ok=True)
+    raise ScreenshotError(message)
+
+
 def shot(path, port, width=900, height=1400, states=()):
     """Write a picture of the running dashboard, for the design review pass.
 
@@ -2264,12 +2342,12 @@ def shot(path, port, width=900, height=1400, states=()):
     (`board.png` + `gate` becomes `board-gate.png`).
     """
     if not Path(CHROME).exists():
-        return f"no Chrome at {CHROME} — install it or capture by hand"
+        raise ScreenshotError(f"no Chrome at {CHROME} — install it or capture by hand")
     if not is_serving(port):
-        return f"nothing serving on {port} — run `dashboard.py up` first"
+        raise ScreenshotError(f"nothing serving on {port} — run `dashboard.py up` first")
     unknown = [s for s in states if s not in SHOT_STATES]
     if unknown:
-        return (f"no such state: {', '.join(unknown)} "
+        raise ScreenshotError(f"no such state: {', '.join(unknown)} "
                 f"(try: {', '.join(SHOT_STATES)})")
     # Warmed on real time first. Chrome's virtual clock stops while a request is
     # outstanding, so against a server that hasn't built its first snapshot the
@@ -2282,7 +2360,7 @@ def shot(path, port, width=900, height=1400, states=()):
                                     timeout=FIRST_BUILD_TIMEOUT + 5) as r:
             r.read()
     except Exception as e:
-        return (f"the dashboard on {port} gave no state in "
+        raise ScreenshotError(f"the dashboard on {port} gave no state in "
                 f"{FIRST_BUILD_TIMEOUT + 5:.0f}s, so there is nothing to photograph: {e}")
     base = Path(path)
     targets = [("", path)] if not states else [
@@ -2295,16 +2373,26 @@ def shot(path, port, width=900, height=1400, states=()):
         # and virtual time runs it forward without waiting in real seconds.
         # run-all-compositor-stages-before-draw so a popover opened by the
         # ?shot hook is painted, not just in the DOM, when the capture lands.
-        subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars",
+        Path(out).unlink(missing_ok=True)
+        result = subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars", "--dump-dom",
                         f"--window-size={width},{height}", f"--screenshot={out}",
                         "--virtual-time-budget=2500",
                         # At final state for the capture: the sheet slides up
                         # over 0.44s and virtual time can photograph it mid-way.
                         "--force-prefers-reduced-motion",
                         "--run-all-compositor-stages-before-draw", url],
-                       capture_output=True)
+                       capture_output=True, text=True)
+        view = name or 'the default view'
+        if result.returncode != 0:
+            reject_screenshot(out, f"Chrome capture failed for {view} (exit {result.returncode})")
         if not Path(out).exists():
-            return f"chrome wrote nothing for {name or 'the default view'}"
+            reject_screenshot(out, f"Chrome wrote nothing for {view}")
+        if 'data-board-ready="true"' not in result.stdout or (
+                name and f'data-shot-ready="{name}"' not in result.stdout):
+            reject_screenshot(out, f"invalid screenshot for {view}: the board did not finish painting; retry after it loads")
+        problem = screenshot_problem(out)
+        if problem:
+            reject_screenshot(out, f"invalid screenshot for {view}: {problem}; retry after the board finishes loading")
         written.append(out)
     return written[0] if len(written) == 1 else "\n".join(written)
 
@@ -2359,7 +2447,10 @@ def main():
             target, states = pos[0], pos[1:]
         else:
             target, states = f"/tmp/{prefix()}-dashboard.png", pos
-        print(shot(target, port, states=states))
+        try:
+            print(shot(target, port, states=states))
+        except ScreenshotError as e:
+            raise SystemExit(str(e)) from None
         return
 
     # The default, and what both hooks call: leave a dashboard running at the
