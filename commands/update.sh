@@ -48,7 +48,7 @@ scripts behind them — are reported as warnings and make this exit non-zero: th
 project has no reason to edit them, so a difference means a starter fix never
 arrived. Files with a FILL THIS IN block are meant to be edited, so those are
 listed quietly, for you to check against the template yourself. Project-owned
-overlay files — the gate steps, the review scope — are installed once and never
+overlay files — project guidance in AGENTS.local.md, gate steps, review scope — are installed once and never
 compared at all.
 
 Report-only, unless --apply: that rewrites the stale contract files that

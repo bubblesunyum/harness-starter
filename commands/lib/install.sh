@@ -61,9 +61,10 @@ harness_has_beads_block() {
 #
 #   scripts/verify.steps.sh   the gate's project steps, sourced by verify.sh
 #   scripts/review.scope.sh   what a review may see, sourced by review.sh
+#   AGENTS.local.md           additive project guidance, read beside AGENTS.md
 harness_is_overlay() {
   case "$1" in
-    scripts/verify.steps.sh|scripts/review.scope.sh) return 0 ;;
+    scripts/verify.steps.sh|scripts/review.scope.sh|AGENTS.local.md) return 0 ;;
     *) return 1 ;;
   esac
 }
