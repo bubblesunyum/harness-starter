@@ -73,6 +73,19 @@ A laurel carries no work and no priority by design; the moment it's attached to
 one it stops being recognition and turns into a score worth farming. Padding
 this file corrupts the one signal in the harness that isn't a metric.
 
+## Commit the capture
+
+Stage the handoff note and laurel entry, then commit them as session artifacts:
+
+```bash
+git add harness/handoffs/<timestamp>.md harness/laurels.jsonl
+git commit -m "record session handoff"
+```
+
+The commit hook allows a commit with no bead only when every staged path is one
+of those capture files. A commit that also contains source or other project
+changes still needs a real bead, as does source work committed separately.
+
 ## Handing off to a live successor
 
 When the user wants the work continued **now** rather than at the next session,
