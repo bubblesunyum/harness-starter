@@ -2183,15 +2183,17 @@
       parent rather than indented ones, told apart by the darker fill.
       Depth-first, so a child that is itself a parent carries its own subtree
       right under it. With a lane key, only children in that same state come
-      along — without one (the backlog has no state to match) the whole family
-      does. The seen set keeps a bead that is both listed and nested
+      along, including ancestors needed to reach them. Backlog matches its
+      server-owned shelving flag. The seen set keeps a bead that is both listed and nested
       (the backlog names children outright) to its first appearance. */
+      const beadParents = (i) => i.parents || (i.parent ? [i.parent] : [])
+
       function renderTree(list, laneKey = '') {
         const out = []
         const seen = new Set()
         const walk = (i, kid) => {
           if (!i || seen.has(i.id)) return
-          if (kid && laneKey && ledger.laneOf(i) !== laneKey) return
+          if (laneKey === 'backlog' ? !i.backlog : laneKey && !ledger.lanesOf(i).has(laneKey)) return
           seen.add(i.id)
           out.push(beadCard(i, kid))
           if (!expandedEpics.has(i.id)) return
@@ -2254,73 +2256,33 @@
                     ? 'ready'
                     : 'blocked'
 
-        // A parent's lane is its family's: children travel with the parent
-        // sheet, so a card that ignored them would show ready with zero ready
-        // children, or ready while a child is already in progress. The parent's
-        // own ready never promotes it — an open+ready parent with no ready
-        // children reads blocked, not ready. With live (non-closed) children:
-        // own in review first (review outranks everything), then any child in
-        // progress, then own in progress, then any child ready, then any child
-        // review, else blocked. When every child is closed the card is done
-        // (or staging, per pushedPending as a closed bead would be), unless
-        // the parent itself is in review or in progress, which still reads.
-        // Depth-first, so a child that is itself a parent carries its own
-        // subtree's vote. A card with no children keeps its own lane, and
-        // backlog/staging semantics are untouched: this only ever lifts an
-        // open card toward the live work under it.
-        const lane = (i, seen = new Set()) => {
-          if (i.status === 'closed' || seen.has(i.id)) return own(i)
-          seen.add(i.id)
-          let anyChild = false
-          let allClosed = true
-          let childInProgress = false
-          let childReady = false
-          let childReview = false
+        // A family appears wherever it has work. Each ancestor carries its
+        // descendants' lanes so a nested ready bead remains reachable beside
+        // its blocked or in-progress siblings. Shelved work stays on its strip.
+        const memberships = new Map()
+        const lanesOf = (i, seen = new Set()) => {
+          if (i.backlog) return new Set()
+          if (memberships.has(i.id)) return memberships.get(i.id)
+          const lanes = new Set([own(i)])
+          if (seen.has(i.id)) return lanes
+          const path = new Set(seen).add(i.id)
           for (const id of i.children || []) {
-            const k = ledger.byId[id]
-            if (!k || seen.has(k.id)) continue
-            anyChild = true
-            const l = lane(k, seen)
-            if (l === 'done' || l === 'staging') continue
-            allClosed = false
-            if (l === 'in_progress') childInProgress = true
-            else if (l === 'ready') childReady = true
-            else if (l === 'review') childReview = true
+            const child = ledger.byId[id]
+            if (child) for (const key of lanesOf(child, path)) lanes.add(key)
           }
-          // All children closed (and at least one child): the family's work
-          // is finished, so the card reads done — unless the parent itself
-          // carries a live state, which still shows.
-          if (anyChild && allClosed) {
-            if (i.in_review) return 'review'
-            if (i.status === 'in_progress') return 'in_progress'
-            return pushedPending.has(i.id) ? 'staging' : 'done'
-          }
-          if (anyChild) {
-            if (i.in_review) return 'review'
-            if (childInProgress) return 'in_progress'
-            if (i.status === 'in_progress') return 'in_progress'
-            if (childReady) return 'ready'
-            if (childReview) return 'review'
-            return 'blocked'
-          }
-          return own(i)
+          memberships.set(i.id, lanes)
+          return lanes
         }
+        ledger.laneOf = own
+        ledger.lanesOf = lanesOf
 
-        // renderTree reads this to keep an expanded family to the lane being
-        // drawn — a child in another state stays in its own lane, subtree and
-        // all, rather than trailing its parent around the board.
-        ledger.laneOf = lane
-
-        // A parent stands for its children on the board — six cards that are one
-        // piece of work read as six pieces of work. The children are in the parent's
-        // sheet, where the relationship is legible. Backlog has its own strip.
-        const cards = all.filter((i) => !ledger.byId[i.parent] && !i.backlog)
+        const cards = all.filter((i) => !beadParents(i).some((id) => ledger.byId[id]) && !i.backlog)
         const beadLanes = BEAD_LANES.map(([key, label]) => {
           // Staging keeps the recency order it's always had — it reports
           // which pushes are pending, not what to work on next. Every other
           // lane is a worklist, so it reads top to bottom by priority.
           const items = cards
-            .filter((i) => lane(i) === key)
+            .filter((i) => lanesOf(i).has(key))
             .sort((a, b) => (key === 'staging' ? 0 : a.priority - b.priority))
           const tip = {review: 'reviewTip', staging: 'commitTip'}[key] || ''
           return {
@@ -2353,10 +2315,8 @@
         // explicit press (paintNow) or the end of the gesture.
         if (!force && (composerOpen || draggedId)) return
 
-        // Counted from what's rendered, not the server's closed count: an open
-        // parent whose children are all closed reads done here without being
-        // closed itself.
-        const doneItems = cards.filter((i) => lane(i) === 'done')
+        // Counts name the families rendered in each section.
+        const doneItems = cards.filter((i) => lanesOf(i).has('done'))
         const lanes = [
           ...beadLanes,
           {key: 'done', label: 'done', count: doneItems.length, items: doneItems},
@@ -2806,19 +2766,17 @@
         // the strip is a drop zone, and rebuilding it mid-drag destroys the
         // source node out from under the gesture.
         if (!force && (composerOpen || draggedId)) return
-        // The fingerprint is the markup, so expansion is in it for free: a
-        // toggled caret repaints, and a poll that moves no bead changes nothing.
-        const signature = JSON.stringify([items.map((i) => [i.id, i.title, i.priority, i.status,
-          (i.labels || []).join(','), (i.children || []).join(',')]), [...expandedEpics].sort()])
+        const inBacklog = new Set(items.map((i) => i.id))
+        const markup = renderTree(items.filter((i) => !beadParents(i).some((id) => inBacklog.has(id))), 'backlog')
+        // Fingerprint the rows themselves: reparenting, blocker changes and
+        // expansion all repaint even when the shelved ids stay the same.
+        const signature = JSON.stringify([items.length, markup])
         if (signature === backlogSignature) return
         backlogSignature = signature
 
         $('backlog').hidden = !items.length
         $('backlogCount').textContent = items.length
-        // Children are named outright here, so only roots seed the trees —
-        // renderTree keeps the first appearance either way.
-        const inBacklog = new Set(items.map((i) => i.id))
-        $('backlogStrip').innerHTML = renderTree(items.filter((i) => !inBacklog.has(i.parent)))
+        $('backlogStrip').innerHTML = markup
       }
 
       /* ---- work tree ---------------------------------------------------------- */
@@ -3659,10 +3617,11 @@
           }
           if (Date.now() - lastDragEnd < 350) return
           const id = expander.dataset.expand
+          const section = cardSection(expander)
           if (expandedEpics.has(id)) expandedEpics.delete(id)
           else expandedEpics.add(id)
           paintNow()
-          requestAnimationFrame(() => refocusCard(id))
+          requestAnimationFrame(() => refocusCard(id, section))
           return
         }
         // A sub-bead in the sheet swaps the sheet's subject rather than stacking
@@ -3710,8 +3669,10 @@
 
       /* A repaint rebuilds the board from innerHTML, which drops the focused
       node — so a toggle hands focus back to the row it just rebuilt. */
-      function refocusCard(id) {
-        document.querySelector(`.card[data-bead="${CSS.escape(id)}"]`)?.focus({preventScroll: true})
+      const cardSection = (el) => el.closest('[data-lane]')?.dataset.lane || 'backlog'
+      function refocusCard(id, section) {
+        const container = section === 'backlog' ? '#backlogStrip' : `[data-lane="${CSS.escape(section)}"]`
+        document.querySelector(`${container} .card[data-bead="${CSS.escape(id)}"]`)?.focus({preventScroll: true})
       }
 
       /* A focused parent expands with → and folds with ←. The caret is a span
@@ -3723,10 +3684,11 @@
         if (!card || card !== e.target) return
         e.preventDefault()
         const id = card.dataset.bead
+        const section = cardSection(card)
         if (e.key === 'ArrowRight') expandedEpics.add(id)
         else expandedEpics.delete(id)
         paintNow()
-        requestAnimationFrame(() => refocusCard(id))
+        requestAnimationFrame(() => refocusCard(id, section))
       })
 
       /* `toggle` doesn't bubble, so it's caught on the way down. Folding is the

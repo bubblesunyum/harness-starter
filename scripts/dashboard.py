@@ -342,7 +342,7 @@ def ledger_state():
     issues = []
     counts = {"open": 0, "ready": len(ready_ids), "in_progress": 0, "closed": 0, "blocked": 0}
 
-    def blockers(issue, parent):
+    def blockers(issue):
         """The ids this issue waits on. Belonging to an epic is not being blocked
         by it — the parent arrives in `dependencies` alongside real blockers, and
         drawn as one kind of edge it turns the graph into a hairball where every
@@ -350,7 +350,7 @@ def ledger_state():
         out = []
         for d in issue.get("dependencies") or []:
             got = _dep_target(d)
-            if got and got != parent:
+            if got and got not in _parent_ids(issue):
                 out.append(got)
         return out
 
@@ -365,7 +365,8 @@ def ledger_state():
     for i in all_issues:
         status = i.get("status", "open")
         counts[status] = counts.get(status, 0) + 1
-        parent = i.get("parent") or ""
+        parents = sorted(_parent_ids(i))
+        parent = i.get("parent") or next(iter(parents), "")
         labels = i.get("labels") or []
         issues.append({
             "id": i["id"],
@@ -383,9 +384,10 @@ def ledger_state():
             "priority": i.get("priority", 2),
             "type": i.get("issue_type", "task"),
             "parent": parent,
+            "parents": parents,
             "updated_at": i.get("updated_at", ""),
             "created_at": i.get("created_at", ""),
-            "deps": blockers(i, parent),
+            "deps": blockers(i),
             # The detail pane reads these; capped because the page re-fetches
             # the whole state every few seconds and a long design note would be
             # paid for on every poll.
@@ -402,9 +404,10 @@ def ledger_state():
     for i in issues:
         i["children"] = []
     for i in issues:
-        parent = by_id.get(i["parent"])
-        if parent:
-            parent["children"].append(i["id"])
+        for parent_id in i["parents"]:
+            parent = by_id.get(parent_id)
+            if parent:
+                parent["children"].append(i["id"])
 
     # Yegge's Beadle watches for work that's simply stuck or dropped. With one
     # person there's no agent to nudge, so the number just has to be visible.
@@ -982,7 +985,7 @@ def state():
     staged = [i for i in closed if "commit_count" in i]
     staged_ids = {i["id"] for i in staged}
     roots = [i for i in closed
-             if i["parent"] not in by_id and i["id"] not in staged_ids]
+             if not any(p in by_id for p in i["parents"]) and i["id"] not in staged_ids]
     keep = {i["id"] for i in live + staged + roots}
 
     # Then close the family over what survived, in both directions. A kept child
@@ -990,9 +993,10 @@ def state():
     # child precisely by finding its parent in the payload — and a kept parent
     # needs its children for the detail pane to name them.
     while True:
-        grow = {i["parent"] for i in ledger["issues"]
-                if i["id"] in keep and i["parent"] in by_id and i["parent"] not in keep}
-        grow |= {i["id"] for i in closed if i["parent"] in keep and i["id"] not in keep}
+        grow = {p for i in ledger["issues"] if i["id"] in keep
+                for p in i["parents"] if p in by_id and p not in keep}
+        grow |= {i["id"] for i in closed
+                 if any(p in keep for p in i["parents"]) and i["id"] not in keep}
         if not grow:
             break
         keep |= grow
