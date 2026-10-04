@@ -38,7 +38,7 @@ bd ready → claim → build → scripts/verify.sh → review → commit → clo
    the next session show the work as live rather than available.
 3. **Build it.** Normal work, under the taste in CLAUDE.md.
 4. **Prove it.** `scripts/verify.sh` — the build and the tests behind one exit
-   code; `--full` adds the slower checks. Don't ask the user to look at
+   code; `scripts/verify.steps.sh` defines any `--full`-only checks. Don't ask the user to look at
    something you can check yourself: if the project has a way to drive the real
    app and screenshot it, that is the step, and it belongs in its own skill.
 5. **Review it.** `bd label add <id> review`, then `scripts/review.sh` builds
@@ -56,8 +56,9 @@ bd ready → claim → build → scripts/verify.sh → review → commit → clo
 7. **Capture it.** Below.
 
 **Name the bead in the commit message** — `Closes <bead-id>`, or just the id in the
-body. A `commit-msg` hook enforces it: no bead, no commit, and the id has to
-resolve. That link is what lets a later session ask why a line looks the way it
+body. A `commit-msg` hook enforces it for work commits, and the id has to
+resolve. Commits containing only handoff notes or laurels may omit the bead;
+the `handoff` skill covers that narrow exception. That link is what lets a later session ask why a line looks the way it
 does and get an answer, and it's how the staging lane knows what's sitting
 unpushed. Nothing filed yet? `bd q "…"` takes one line and hands back an id.
 

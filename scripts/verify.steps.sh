@@ -16,6 +16,7 @@
 # that there's no excuse for skipping it.
 
 probe_step "codex install context" python3 scripts/test-codex-install.py
+probe_step "project contract and export policy" python3 scripts/test-contract-overrides.py
 
 step "shell parses" bash -c '
   set -e
@@ -32,6 +33,8 @@ step "python parses" bash -c '
     python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$f" \
       || { echo "error: $f"; exit 1; }
   done'
+
+step "dashboard board regression" python3 scripts/test-dashboard-board.py
 
 # A throwaway repo for the probe steps below: `fresh_probe || exit 1`, then
 # use $probe. Called bare, never captured — inside $(...) the EXIT trap would
@@ -889,24 +892,49 @@ probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
   golden_probe || exit 1
   [ -x "$probe/scripts/hooks/commit-msg" ] || { echo "error: install produced no hook logic"; exit 1; }
   [ -f "$probe/.git/hooks/commit-msg" ] || { echo "error: add never wired the hook"; exit 1; }
-  echo "probe" > "$probe/probe.txt" || { echo "error: cannot dirty a probe file"; exit 1; }
-  (cd "$probe" && git add probe.txt >/dev/null 2>&1) ||
-    { echo "error: cannot stage the probe file"; exit 1; }
   # Pinned like the identity flags below it: a global core.hooksPath would run
   # hooks from elsewhere, and the bead-less commit would sail through a hook
   # that never ran — failing the probe on a correct tree.
   hook="core.hooksPath=$probe/.git/hooks"
-  out=$(cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe commit with no bead" 2>&1) &&
-    { echo "error: the hook accepted a bead-less commit"; echo "$out"; exit 1; }
+  mkdir -p "$probe/harness/handoffs" || { echo "error: cannot make artifact directory"; exit 1; }
+  echo "# probe handoff" > "$probe/harness/handoffs/20260101-000000.md" ||
+    { echo "error: cannot write handoff fixture"; exit 1; }
+  (cd "$probe" && git add harness/handoffs/20260101-000000.md >/dev/null 2>&1) ||
+    { echo "error: cannot stage handoff fixture"; exit 1; }
+  (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "record handoff" >/dev/null 2>&1) ||
+    { echo "error: artifact-only commit was rejected"; exit 1; }
+  echo "probe" > "$probe/probe.txt" || { echo "error: cannot dirty a probe file"; exit 1; }
+  (cd "$probe" && git add probe.txt >/dev/null 2>&1) ||
+    { echo "error: cannot stage source fixture"; exit 1; }
+  out=$(cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe source without bead" 2>&1) &&
+    { echo "error: the hook accepted source without a bead"; echo "$out"; exit 1; }
   echo "$out" | grep -q "names no bead" ||
-    { echo "error: the refusal never said why"; echo "$out"; exit 1; }
+    { echo "error: source refusal never said why"; echo "$out"; exit 1; }
+  echo "# mixed source and artifact" >> "$probe/harness/handoffs/20260101-000000.md" ||
+    { echo "error: cannot edit handoff fixture"; exit 1; }
+  (cd "$probe" && git add harness/handoffs/20260101-000000.md >/dev/null 2>&1) ||
+    { echo "error: cannot stage mixed artifact"; exit 1; }
+  out=$(cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe mixed commit without bead" 2>&1) &&
+    { echo "error: the hook accepted mixed source and artifact without a bead"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "names no bead" ||
+    { echo "error: mixed refusal never said why"; echo "$out"; exit 1; }
   (cd "$probe" && bd q "probe bead for the hook" >/dev/null 2>&1) ||
     { echo "error: cannot file a probe bead"; exit 1; }
   bid=$(probe_json_field "$probe" id) || exit 1
   [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
   await_bead_ready "$probe" "$bid" || exit 1
   (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe commit for $bid" >/dev/null 2>&1) ||
-    { echo "error: the hook rejected a commit naming $bid"; exit 1; }'
+    { echo "error: the hook rejected a commit naming $bid"; exit 1; }
+  echo "source before rename" > "$probe/rename-source.txt" ||
+    { echo "error: cannot write rename source"; exit 1; }
+  (cd "$probe" && git add rename-source.txt && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -m "seed rename fixture" >/dev/null 2>&1) ||
+    { echo "error: cannot seed rename fixture"; exit 1; }
+  (cd "$probe" && git mv rename-source.txt harness/handoffs/renamed.md) ||
+    { echo "error: cannot stage rename fixture"; exit 1; }
+  out=$(cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe renamed source without bead" 2>&1) &&
+    { echo "error: the hook accepted a source rename into handoffs"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "names no bead" ||
+    { echo "error: rename refusal never said why"; echo "$out"; exit 1; }'
 
 # The starter eats its own dogfood: its working tree reads as current against
 # its own template. A stale contract file here means the split already slipped —
@@ -920,6 +948,8 @@ step "the starter reads as current" bash -c '
 step "contract scripts match the template byte for byte" bash -c '
   cmp -s template/scripts/verify.sh scripts/verify.sh ||
     { echo "error: scripts/verify.sh differs from its template — change the template, not the copy"; exit 1; }
+  cmp -s template/scripts/ledger-export-check.sh scripts/ledger-export-check.sh ||
+    { echo "error: ledger-export-check.sh differs from its template — change the template, not the copy"; exit 1; }
   cmp -s template/scripts/review.sh scripts/review.sh ||
     { echo "error: scripts/review.sh differs from its template — change the template, not the copy"; exit 1; }'
 
@@ -1190,7 +1220,7 @@ probe_step "a stale ledger export fails the gate naming the bead" bash -c '
   (cd "$probe" && bd close "$bid" --reason "probe" >/dev/null 2>&1) ||
     { echo "error: cannot close the probe bead"; exit 1; }
   await_bead_closed "$probe" "$bid" || exit 1
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "FAIL  ledger export" || {
     st=$(probe_json_field "$probe" status) || st="unreadable"
     if [ "$st" != "closed" ]; then
@@ -1205,7 +1235,7 @@ probe_step "a stale ledger export fails the gate naming the bead" bash -c '
     { echo "error: the failure never said how to regen"; echo "$out"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot regen the probe export"; exit 1; }
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "ok    ledger export" ||
     { echo "error: the gate still fails after a regen"; echo "$out"; exit 1; }'
 
@@ -1236,7 +1266,7 @@ probe_step "a deleted bead still exported fails the gate naming the bead" bash -
   (cd "$probe" && bd delete "$bid" --force >/dev/null 2>&1) ||
     { echo "error: cannot delete the probe bead"; exit 1; }
   await_bead_gone "$probe" "$bid" || exit 1
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "FAIL  ledger export" || {
     echo "error: the gate passed a deleted bead still in the export";
     echo "$out"; exit 1; }
@@ -1244,7 +1274,7 @@ probe_step "a deleted bead still exported fails the gate naming the bead" bash -
     { echo "error: the failure never named the deleted bead"; echo "$out"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot regen the probe export"; exit 1; }
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "ok    ledger export" ||
     { echo "error: the gate still fails after a regen"; echo "$out"; exit 1; }'
 
@@ -1257,7 +1287,7 @@ probe_step "an untracked ledger export fails the gate saying to track it" bash -
     { echo "error: cannot file a probe bead"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot write the probe export"; exit 1; }
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "FAIL  ledger export" || {
     echo "error: the gate passed an untracked ledger export";
     echo "$out"; exit 1; }
@@ -1267,7 +1297,7 @@ probe_step "an untracked ledger export fails the gate saying to track it" bash -
     { echo "error: the failure never said how to track it"; echo "$out"; exit 1; }
   (cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot track the probe export"; exit 1; }
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "ok    ledger export" ||
     { echo "error: the gate still fails after tracking"; echo "$out"; exit 1; }'
 
@@ -1275,7 +1305,7 @@ probe_step "an untracked ledger export fails the gate saying to track it" bash -
 # than failing a project that did nothing wrong.
 probe_step "an empty install passes the ledger export check" bash -c '
   golden_probe || exit 1
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   if echo "$out" | grep -q "FAIL  ledger export"; then
     echo "error: the gate failed an empty ledger"; echo "$out"; exit 1;
   fi
@@ -1292,7 +1322,7 @@ probe_step "a clone with no live ledger skips the export check" bash -c '
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot write the probe export"; exit 1; }
   rm -rf "$probe/.beads/embeddeddolt" || { echo "error: cannot remove the probe database"; exit 1; }
-  out=$(bash "$probe/scripts/verify.sh" --quick 2>&1)
+  out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   if echo "$out" | grep -q "FAIL  ledger export"; then
     echo "error: the gate failed a clone with no live ledger"; echo "$out"; exit 1;
   fi

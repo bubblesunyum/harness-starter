@@ -180,6 +180,13 @@ preserving unrelated hooks. Re-running it does not restore `bd prime` policy.
 Codex hook trust remains local; run the brief manually until the hook is trusted.
 Claude and OpenCode keep their existing startup configuration.
 
+The gate and ledger-only probes share `scripts/ledger-export-check.sh`, so a
+probe proves export integrity without running unrelated checks. Project gate
+lanes live in `scripts/verify.steps.sh`; additive guidance in `AGENTS.local.md`
+survives contract updates. Installation disables memory-less auto-export and
+refreshes the ledger with memories explicitly. Work commits still need a bead;
+session-only handoff and laurel commits use a narrow path-based exception.
+
 ## Why it's shaped this way
 
 One account, not a team of thirteen agents, so the whole design is
