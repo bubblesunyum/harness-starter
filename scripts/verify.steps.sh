@@ -442,6 +442,132 @@ probe_step "dashboard serves the default verdict silently with no verdict sectio
     { echo "error: the fixture already has a verdict section"; exit 1; }
   probe_dashboard_default_silent "$probe" || exit 1'
 
+# The config a probe dashboard serves, through the real readers — importing
+# the module runs only definitions, never the server. Setup lives here too:
+# the golden toml carries no [theme]/[board]/[assets] tables, so appending
+# each exactly once is a fresh table, never a duplicate.
+probe_dashboard_config() {
+  local probe="$1"
+  # Bare heredoc, no || guard on the redirect line: bash 3.2 (the gate's
+  # shell) cannot re-import an exported function carrying one. A failed
+  # append fails the asserts below rather than passing silently.
+  cat >> "$probe/dashboard.toml" <<'TOMLEOF'
+[theme]
+"--probe-accent" = "#123456"
+[board]
+hidden = ["peers"]
+order = ["ready", "done"]
+[assets]
+css = ["dashboard-assets/probe.css"]
+js = ["dashboard-assets/probe.js"]
+TOMLEOF
+  (cd "$probe" && python3 - <<'PYEOF'
+import importlib.util
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+theme = db.theme()
+assert theme == {"--probe-accent": "#123456"}, "theme %r" % (theme,)
+board = db.board()
+assert board == {"hidden": ["peers"], "order": ["ready", "done"]}, "board %r" % (board,)
+assets = db.assets()
+assert assets == {"css": ["probe.css"], "js": ["probe.js"]}, "assets %r" % (assets,)
+PYEOF
+  )
+}
+export -f probe_dashboard_config
+
+# What one /assets/ path resolves to, through the same function the handler
+# answers with: an allowlisted file serves its bytes with a fixed
+# content-type, and anything else — unlisted, traversal, empty, absolute —
+# reads as missing, which the handler turns into a 404.
+probe_dashboard_asset_serving() {
+  local probe="$1"
+  mkdir -p "$probe/dashboard-assets" || { echo "error: cannot make probe assets"; return 1; }
+  printf '/* probe */\n' > "$probe/dashboard-assets/probe.css" || return 1
+  printf '// probe\n' > "$probe/dashboard-assets/probe.js" || return 1
+  printf '/* unlisted */\n' > "$probe/dashboard-assets/evil.css" || return 1
+  # Bare heredoc, same bash-3.2 reason as above.
+  cat >> "$probe/dashboard.toml" <<'TOMLEOF'
+[assets]
+css = ["dashboard-assets/probe.css"]
+js = ["dashboard-assets/probe.js"]
+TOMLEOF
+  (cd "$probe" && python3 - <<'PYEOF'
+import importlib.util
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+got = db.asset_body("probe.css")
+assert got is not None and got[0] == "text/css" and got[1] == b"/* probe */\n", "css %r" % (got,)
+got = db.asset_body("probe.js")
+assert got is not None and got[0] == "text/javascript" and got[1] == b"// probe\n", "js %r" % (got,)
+assert db.asset_body("evil.css") is None, "an unlisted file resolved"
+assert db.asset_body("../dashboard.toml") is None, "a traversal resolved"
+assert db.asset_body("a/../../dashboard.toml") is None, "a nested traversal resolved"
+assert db.asset_body("") is None, "an empty path resolved"
+assert db.asset_body("/probe.css") is None, "an absolute path resolved"
+assert db.asset_body("dashboard-assets/probe.css") is None, "a prefixed path resolved"
+PYEOF
+  )
+}
+export -f probe_dashboard_asset_serving
+
+# A broken table keeps its last good values and complains, without taking a
+# good table down with it. Good then bad in one process, because the cache
+# that holds last-good lives in the module.
+probe_dashboard_broken_config() {
+  local probe="$1"
+  (cd "$probe" && python3 - <<'PYEOF'
+import importlib.util, io, sys
+from contextlib import redirect_stderr
+toml_path = "dashboard.toml"
+with open(toml_path, "a") as f:
+    f.write("[theme]\n\"--probe-accent\" = \"#123456\"\n[board]\nhidden = []\norder = [\"ready\"]\n")
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+buf = io.StringIO()
+with redirect_stderr(buf):
+    first_theme = db.theme()
+    first_board = db.board()
+assert first_theme == {"--probe-accent": "#123456"}, "good theme %r" % (first_theme,)
+assert first_board == {"hidden": [], "order": ["ready"]}, "good board %r" % (first_board,)
+assert buf.getvalue() == "", "a good config complained: %r" % (buf.getvalue(),)
+text = open(toml_path).read()
+good_line = "\"--probe-accent\" = \"#123456\""
+assert good_line in text, "the fixture never planted the good theme"
+open(toml_path, "w").write(text.replace(good_line, "\"BAD NAME!\" = \"#123456\"", 1))
+buf = io.StringIO()
+with redirect_stderr(buf):
+    kept = db.theme()
+    board_kept = db.board()
+assert kept == {"--probe-accent": "#123456"}, "a broken theme lost last good: %r" % (kept,)
+assert "keeping last good theme" in buf.getvalue(), "no complaint: %r" % (buf.getvalue(),)
+assert board_kept == {"hidden": [], "order": ["ready"]}, "a bad theme took board down: %r" % (board_kept,)
+PYEOF
+  )
+}
+export -f probe_dashboard_broken_config
+
+# What the toml lists is what state.json carries: the theme overrides, the
+# board hide/reorder lists, and the asset paths, read through the real module.
+probe_step "dashboard serves theme, board, and assets from the toml" bash -c '
+  golden_probe || exit 1
+  probe_dashboard_config "$probe" || exit 1'
+
+# Only an allowlisted file resolves, with a fixed content-type; an unlisted
+# file and every traversal shape read as missing, which the handler 404s.
+probe_step "dashboard serves allowlisted assets and 404s the rest" bash -c '
+  golden_probe || exit 1
+  probe_dashboard_asset_serving "$probe" || exit 1'
+
+# A broken table keeps serving its last good values and says so on stderr,
+# while a good table beside it keeps updating.
+probe_step "dashboard keeps last good config on a broken table" bash -c '
+  golden_probe || exit 1
+  probe_dashboard_broken_config "$probe" || exit 1'
+
 # A pre-toml VERDICT answer still living in the shipped file moves into
 # dashboard.toml, and the file comes back byte-identical: the one migration
 # this command exists to perform, exactly once.
@@ -476,6 +602,140 @@ probe_step "update dashboard keeps the toml verdict over a stale file answer" ba
     { echo "error: update dashboard never said the toml won"; echo "$out"; exit 1; }
   probe_dashboard_verdict "$probe" "TOML-(WINS|LOSES)" ||
     { echo "error: update dashboard let the file answer win"; exit 1; }'
+
+# A diverged dashboard/index.html carrying a theme override the template
+# doesn't set moves it into dashboard.toml under [theme], exactly once: the
+# second run writes nothing more, and the fork itself stays diverged — the
+# move is lossless, and converging the file is the owning session's call,
+# never an automatic re-copy.
+probe_step "update dashboard moves fork theme vars into dashboard.toml" bash -c '
+  golden_probe || exit 1
+  python3 - "$probe/dashboard/index.html" <<'"'"'PYEOF'"'"' || { echo "error: cannot plant the fork theme var"; exit 1; }
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "--accent: #6a5acd;"
+assert old in t, "accent var missing"
+open(p, "w").write(t.replace(old, "--accent: #123456;", 1))
+PYEOF
+  grep -qF -- "--accent: #123456;" "$probe/dashboard/index.html" ||
+    { echo "error: the fixture never planted the fork var"; exit 1; }
+  printf "dashboard/index.html\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot acknowledge the fork"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "theme/board customizations into dashboard.toml" ||
+    { echo "error: update dashboard never said it moved the theme"; echo "$out"; exit 1; }
+  grep -q "\"--accent\"" "$probe/dashboard.toml" ||
+    { echo "error: update dashboard never wrote the theme into the toml"; exit 1; }
+  grep -qF -- "--accent: #123456;" "$probe/dashboard/index.html" ||
+    { echo "error: update dashboard converged a fork it must not"; exit 1; }
+  grep -qxF "dashboard/index.html" "$probe/harness/diverged.txt" ||
+    { echo "error: update dashboard dropped a diverged line it must not"; exit 1; }
+  (cd "$probe" && python3 - <<'"'"'PYEOF'"'"'
+import importlib.util
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+assert db.theme() == {"--accent": "#123456"}, "theme %r" % (db.theme(),)
+PYEOF
+  ) || { echo "error: the moved theme is not what the dashboard serves"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: the second run failed"; echo "$out"; exit 1; }
+  [ "$(grep -cx "\\[theme\\]" "$probe/dashboard.toml")" -eq 1 ] ||
+    { echo "error: the second run duplicated the theme"; exit 1; }'
+
+# Stale names the template dropped (--dusk and its kin in every old fork) are
+# staleness, not choice: the new file never reads them, so a fork carrying
+# only those migrates nothing and the toml stays without a [theme] table.
+probe_step "update dashboard leaves stale palette vars out of dashboard.toml" bash -c '
+  golden_probe || exit 1
+  python3 - "$probe/dashboard/index.html" <<'"'"'PYEOF'"'"' || { echo "error: cannot plant the stale var"; exit 1; }
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = ":root {\n"
+assert old in t, "root block missing"
+open(p, "w").write(t.replace(old, ":root {\n        --dusk: #26547c;\n", 1))
+PYEOF
+  grep -qF -- "--dusk: #26547c;" "$probe/dashboard/index.html" ||
+    { echo "error: the fixture never planted the stale var"; exit 1; }
+  printf "dashboard/index.html\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot acknowledge the fork"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "theme/board customizations"; then
+    echo "error: update dashboard moved a stale var"; echo "$out"; exit 1;
+  fi
+  [ "$(grep -cx "\\[theme\\]" "$probe/dashboard.toml")" -eq 0 ] ||
+    { echo "error: update dashboard wrote a theme from staleness"; exit 1; }'
+
+# A toml that doesn't parse fails the fork-config move loudly and writes
+# nothing: appending to a broken file would pile a second error onto the
+# first. No VERDICT planted, so the earlier move passes through untouched and
+# this is the one that refuses.
+probe_step "update dashboard fails loudly migrating fork config into a broken toml" bash -c '
+  golden_probe || exit 1
+  python3 - "$probe/dashboard/index.html" <<'"'"'PYEOF'"'"' || { echo "error: cannot plant the fork theme var"; exit 1; }
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "--accent: #6a5acd;"
+assert old in t, "accent var missing"
+open(p, "w").write(t.replace(old, "--accent: #123456;", 1))
+PYEOF
+  grep -qF -- "--accent: #123456;" "$probe/dashboard/index.html" ||
+    { echo "error: the fixture never planted the fork var"; exit 1; }
+  printf "dashboard/index.html\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot acknowledge the fork"; exit 1; }
+  printf "\n[unclosed\n" >> "$probe/dashboard.toml" ||
+    { echo "error: cannot break the probe toml"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) &&
+    { echo "error: update dashboard passed a broken toml"; exit 1; }
+  echo "$out" | grep -q "doesn'"'"'t parse" ||
+    { echo "error: update dashboard never said what was wrong"; echo "$out"; exit 1; }
+  [ "$(grep -cx "\\[theme\\]" "$probe/dashboard.toml")" -eq 0 ] ||
+    { echo "error: update dashboard appended to a toml it refused"; exit 1; }'
+
+# A fork showing lanes in its own order, minus one, moves both halves into
+# dashboard.toml under [board]: the display order and the missing lane as
+# hidden. Read back through the real board reader, and a no-op the second
+# time — no duplicate tables.
+probe_step "update dashboard moves fork lane order into dashboard.toml" bash -c '
+  golden_probe || exit 1
+  python3 - "$probe/dashboard/index.html" <<'"'"'PYEOF'"'"' || { echo "error: cannot plant the fork lanes"; exit 1; }
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "        ['"'"'ready'"'"', '"'"'ready'"'"'],\n        ['"'"'blocked'"'"', '"'"'blocked'"'"'],\n        ['"'"'in_progress'"'"', '"'"'in progress'"'"'],\n        ['"'"'review'"'"', '"'"'review'"'"'],\n        ['"'"'staging'"'"', '"'"'staging'"'"'],\n"
+assert old in t, "lane block missing"
+new = "        ['"'"'blocked'"'"', '"'"'blocked'"'"'],\n        ['"'"'ready'"'"', '"'"'ready'"'"'],\n        ['"'"'in_progress'"'"', '"'"'in progress'"'"'],\n        ['"'"'review'"'"', '"'"'review'"'"'],\n"
+open(p, "w").write(t.replace(old, new, 1))
+PYEOF
+  grep -qF "['"'"'blocked'"'"', '"'"'blocked'"'"']" "$probe/dashboard/index.html" ||
+    { echo "error: the fixture never planted the fork lanes"; exit 1; }
+  if grep -qF "['"'"'staging'"'"', '"'"'staging'"'"']" "$probe/dashboard/index.html"; then
+    echo "error: the fixture never dropped the lane"; exit 1;
+  fi
+  printf "dashboard/index.html\n" >> "$probe/harness/diverged.txt" ||
+    { echo "error: cannot acknowledge the fork"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: update dashboard failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "theme/board customizations into dashboard.toml" ||
+    { echo "error: update dashboard never said it moved the board"; echo "$out"; exit 1; }
+  (cd "$probe" && python3 - <<'"'"'PYEOF'"'"'
+import importlib.util
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+want = {"hidden": ["staging"], "order": ["blocked", "ready", "in_progress", "review"]}
+assert db.board() == want, "board %r" % (db.board(),)
+PYEOF
+  ) || { echo "error: the moved board is not what the dashboard serves"; exit 1; }
+  out=$(bin/harness update dashboard "$probe" 2>&1) ||
+    { echo "error: the second run failed"; echo "$out"; exit 1; }
+  [ "$(grep -cx "\\[board\\]" "$probe/dashboard.toml")" -eq 1 ] ||
+    { echo "error: the second run duplicated the board"; exit 1; }'
 
 # A [verdict] table with no usable pattern is already broken — the dashboard
 # complains about it on every poll — so the move refuses rather than appending

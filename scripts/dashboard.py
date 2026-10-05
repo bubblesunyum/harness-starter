@@ -629,6 +629,33 @@ def cached_stale(all_issues):
 # belong in project-owned files, never in shipped ones.
 DEFAULT_VERDICT = r"(?!)"
 
+# The dashboard.toml [theme] table maps a CSS variable name to its value, and
+# the page applies each pair as an inline custom property. Empty until a
+# project sets one — no theme section means no overrides.
+DEFAULT_THEME = {}
+_THEME_NAME = re.compile(r"^--[a-z0-9-]+$")
+
+# The [board] table hides and reorders the page's own sections. The valid keys
+# are enumerated once, here, from what dashboard/index.html actually renders:
+# the board lanes (ready/blocked/in_progress/review/staging/worktree/done),
+# the backlog strip, the harness diagram, the context-budget block, the gate
+# strip, and the peer tabs. Anything off this list is a ValueError.
+BOARD_SECTIONS = frozenset({
+    "ready", "blocked", "in_progress", "review", "staging", "worktree",
+    "done", "backlog", "harness", "budget", "gate", "peers",
+})
+
+# The [assets] table names project-owned CSS/JS served beside the page. Every
+# entry is a project-relative path that must sit under dashboard-assets/, a
+# top-level directory the dashboard updater never scans, so custom files
+# survive updates. Served as static bytes with fixed content-types, never
+# executed server-side. The state carries them stripped to their path inside
+# that directory, which is also the /assets/ URL that serves them.
+ASSETS_PREFIX = "dashboard-assets/"
+# What one served asset may weigh. Past it the request 404s rather than
+# handing a multi-megabyte bundle to every poll.
+ASSET_MAX_BYTES = 200 * 1024
+
 
 def ago_for(at):
     """How long ago, in the board's words. Empty for something that never ran."""
@@ -1021,6 +1048,9 @@ def state():
         "agents": agents,
         "harness": stages,
         "budget": cached_budget(skills, agents),
+        "theme": theme(),
+        "board": board(),
+        "assets": assets(),
     }
 
 
@@ -1329,7 +1359,10 @@ _TASK_WHERE = {"header", "gate"} | {
     ("ready", "blocked", "in_progress", "review", "done", "backlog", "staging", "worktree")}
 
 _toml = {"mtime": ("", 0.0, 0), "reported": ("", 0.0, 0), "tasks": None, "name": None,
-        "verdict": DEFAULT_VERDICT, "verdict_reported": ("", 0.0, 0)}
+        "verdict": DEFAULT_VERDICT, "verdict_reported": ("", 0.0, 0),
+        "theme": dict(DEFAULT_THEME), "theme_reported": ("", 0.0, 0),
+        "board": {"hidden": [], "order": []}, "board_reported": ("", 0.0, 0),
+        "assets": {"css": [], "js": []}, "assets_reported": ("", 0.0, 0)}
 _toml_lock = threading.Lock()
 
 
@@ -1406,13 +1439,115 @@ def _check_verdict(doc):
     return pattern
 
 
+def _check_theme(doc):
+    """dashboard.toml's [theme] overrides, validated. Returns {} when the file
+    says nothing; raises ValueError naming the fix when it says something the
+    page must not render."""
+    section = doc.get("theme", {})
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise ValueError("[theme] is not a table — map '--var' = 'value' or delete it")
+    if not section:
+        return {}
+    theme = {}
+    for name, value in section.items():
+        # A non-string key arrives from a quoted TOML key holding a number or
+        # the like; name it rather than crashing on the match below.
+        if (not isinstance(name, str) or not _THEME_NAME.match(name)
+                or len(name) > 40):
+            raise ValueError(f"[theme] has a bad variable name {name!r} — "
+                             "use --lowercase-letters-and-dashes (max 40 chars)")
+        if not isinstance(value, str) or not value or len(value) > 200:
+            raise ValueError(f"[theme] {name} must be a 1–200 character string")
+        # An override lands verbatim in a stylesheet, so markup and remote
+        # references never render: the first closes the style element, the
+        # second pulls a URL into it.
+        if "</" in value or "url(" in value.lower():
+            raise ValueError(f"[theme] {name} must not hold markup or url(...)")
+        theme[name] = value
+    return theme
+
+
+def _check_board(doc):
+    """dashboard.toml's [board] hide/reorder lists, validated. Missing keys
+    default to []; raises ValueError when a key is off BOARD_SECTIONS."""
+    section = doc.get("board", {})
+    if section is None:
+        return {"hidden": [], "order": []}
+    if not isinstance(section, dict):
+        raise ValueError("[board] is not a table — set hidden/order lists or delete it")
+    if not section:
+        return {"hidden": [], "order": []}
+    unknown = set(section) - {"hidden", "order"}
+    if unknown:
+        raise ValueError(f"[board] sets unknown key(s) {sorted(unknown)} — "
+                         "only hidden and order exist")
+    out = {}
+    for key in ("hidden", "order"):
+        entries = section.get(key, [])
+        if not isinstance(entries, list):
+            raise ValueError(f"[board].{key} must be a list of section keys or be deleted")
+        for entry in entries:
+            if not isinstance(entry, str) or entry not in BOARD_SECTIONS:
+                raise ValueError(f"[board].{key} names an unknown section {entry!r} — "
+                                 f"valid sections are: {', '.join(sorted(BOARD_SECTIONS))}")
+        out[key] = list(entries)
+    return out
+
+
+def _check_asset_path(entry, kind):
+    """One [assets] entry, validated. Project-relative, under dashboard-assets/,
+    with the extension the list demands, and no absolute path or parent escape
+    — a request can only name what this lets through."""
+    ext = ".css" if kind == "css" else ".js"
+    if not isinstance(entry, str) or not entry or len(entry) > 200:
+        raise ValueError(f"[assets].{kind} entries must be 1–200 character paths")
+    if entry.startswith("/") or "\\" in entry:
+        raise ValueError(f"[assets] must not hold absolute paths: {entry!r}")
+    if not entry.startswith(ASSETS_PREFIX):
+        raise ValueError(f"[assets].{kind} entries must sit under {ASSETS_PREFIX}: {entry!r}")
+    rel = entry[len(ASSETS_PREFIX):]
+    if not rel or rel.startswith("/") or not rel.endswith(ext):
+        raise ValueError(f"[assets].{kind} entries must name a {ext} file "
+                         f"under {ASSETS_PREFIX}: {entry!r}")
+    # Dot-segments, not substrings: "a..b.css" is a filename, "../" is a jailbreak.
+    if any(part in (".", "..") for part in rel.split("/")):
+        raise ValueError(f"[assets] must not escape {ASSETS_PREFIX}: {entry!r}")
+    return rel
+
+
+def _check_assets(doc):
+    """dashboard.toml's [assets] file lists, validated. Returns the paths
+    stripped to their location inside dashboard-assets/, which is also the
+    /assets/ URL that serves them."""
+    section = doc.get("assets", {})
+    if section is None:
+        return {"css": [], "js": []}
+    if not isinstance(section, dict):
+        raise ValueError("[assets] is not a table — set css/js lists or delete it")
+    if not section:
+        return {"css": [], "js": []}
+    unknown = set(section) - {"css", "js"}
+    if unknown:
+        raise ValueError(f"[assets] sets unknown key(s) {sorted(unknown)} — "
+                         "only css and js exist")
+    out = {}
+    for kind in ("css", "js"):
+        entries = section.get(kind, [])
+        if not isinstance(entries, list):
+            raise ValueError(f"[assets].{kind} must be a list of paths or be deleted")
+        out[kind] = [_check_asset_path(e, kind) for e in entries]
+    return out
+
+
 def _refresh_toml():
     """Re-read dashboard.toml when it changed. Missing file: the defaults,
     silently. Broken file: keep serving the last good values and complain once
     per change, not once per snapshot build — the stamp only advances past a
-    file that fully parsed, so a torn read retries instead of sticking. The
-    task table and the verdict pattern are read independently: one bad section
-    must not take the other one down with it."""
+    file that fully parsed, so a torn read retries instead of sticking. Every
+    section is read independently: one bad table must not take the others down
+    with it."""
     global _toml
     try:
         st = (ROOT / "dashboard.toml").stat()
@@ -1426,7 +1561,10 @@ def _refresh_toml():
             return
         if stamp == ("", 0.0, 0):
             _toml = {"mtime": stamp, "reported": stamp, "tasks": dict(DEFAULT_TASKS), "name": None,
-                     "verdict": DEFAULT_VERDICT, "verdict_reported": stamp}
+                     "verdict": DEFAULT_VERDICT, "verdict_reported": stamp,
+                     "theme": dict(DEFAULT_THEME), "theme_reported": stamp,
+                     "board": {"hidden": [], "order": []}, "board_reported": stamp,
+                     "assets": {"css": [], "js": []}, "assets_reported": stamp}
             return
         try:
             with open(ROOT / "dashboard.toml", "rb") as f:
@@ -1454,9 +1592,33 @@ def _refresh_toml():
                            "verdict_reported")
         else:
             fresh["verdict_reported"] = stamp
+        try:
+            fresh["theme"] = _check_theme(doc)
+        except ValueError as e:
+            _complain_once(fresh, stamp, f"dashboard: {e} — keeping last good theme",
+                           "theme_reported")
+        else:
+            fresh["theme_reported"] = stamp
+        try:
+            fresh["board"] = _check_board(doc)
+        except ValueError as e:
+            _complain_once(fresh, stamp, f"dashboard: {e} — keeping last good board",
+                           "board_reported")
+        else:
+            fresh["board_reported"] = stamp
+        try:
+            fresh["assets"] = _check_assets(doc)
+        except ValueError as e:
+            _complain_once(fresh, stamp, f"dashboard: {e} — keeping last good assets",
+                           "assets_reported")
+        else:
+            fresh["assets_reported"] = stamp
         # The stamp advances only past a file that fully parsed; anything less
         # retries on the next cycle instead of sticking.
-        if fresh["reported"] == stamp and fresh["verdict_reported"] == stamp:
+        if (fresh["reported"] == stamp and fresh["verdict_reported"] == stamp
+                and fresh["theme_reported"] == stamp
+                and fresh["board_reported"] == stamp
+                and fresh["assets_reported"] == stamp):
             fresh["mtime"] = stamp
         _toml = fresh
 
@@ -1495,6 +1657,58 @@ def project_name():
     """Display name for the title. The TOML's, or the directory's."""
     _refresh_toml()
     return _toml["name"] or ROOT.name
+
+
+def theme():
+    """The [theme] overrides from dashboard.toml, or {} — copied, so a caller
+    can never mutate the last-good table the refresher keeps."""
+    _refresh_toml()
+    return dict(_toml["theme"])
+
+
+def board():
+    """The [board] hide/reorder lists from dashboard.toml, or empty lists."""
+    _refresh_toml()
+    return {"hidden": list(_toml["board"]["hidden"]),
+            "order": list(_toml["board"]["order"])}
+
+
+def assets():
+    """The [assets] file lists from dashboard.toml, as paths inside
+    dashboard-assets/ — the same strings /assets/ serves them at."""
+    _refresh_toml()
+    return {"css": list(_toml["assets"]["css"]),
+            "js": list(_toml["assets"]["js"])}
+
+
+def asset_body(rel):
+    """The bytes for one /assets/ path, with its fixed content-type — or None,
+    which the handler answers as a 404. Only a validated [assets] entry
+    resolves: the allowlist is the toml the refresher last accepted, so a path
+    the project never listed, a traversal, an overweight file, or a file that
+    isn't there all read as missing. Static bytes only; nothing here ever runs
+    server-side."""
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or "\\" in rel:
+        return None
+    if any(part in (".", "..") for part in rel.split("/")):
+        return None
+    allowed = assets()
+    if rel not in allowed["css"] and rel not in allowed["js"]:
+        return None
+    base = ROOT / ASSETS_PREFIX.rstrip("/")
+    try:
+        # Resolved before the containment check, so a symlink pointing out of
+        # the directory reads as missing rather than as an escape.
+        path = (base / rel).resolve()
+        if not path.is_relative_to(base.resolve()):
+            return None
+        if not path.is_file() or path.stat().st_size > ASSET_MAX_BYTES:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    content_type = "text/css" if rel.endswith(".css") else "text/javascript"
+    return content_type, data
 
 _runs = {}
 
@@ -1795,6 +2009,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if body is None:
                 return self.send_error(404)
             return self.send_json({"id": wanted, "body": body})
+        # Project-owned static files from dashboard-assets/, allowlisted by the
+        # [assets] table. A path the toml never validated 404s, whatever it is.
+        if urlparse(self.path).path.startswith("/assets/"):
+            rel = unquote(urlparse(self.path).path[len("/assets/"):])
+            got = asset_body(rel)
+            if got is None:
+                return self.send_error(404)
+            content_type, data = got
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         super().do_GET()
 
     def send_json(self, payload):
@@ -2033,6 +2262,9 @@ def switch_root(payload):
             _toml["tasks"] = None
             _toml["name"] = None
             _toml["verdict"] = DEFAULT_VERDICT
+            _toml["theme"] = dict(DEFAULT_THEME)
+            _toml["board"] = {"hidden": [], "order": []}
+            _toml["assets"] = {"css": [], "js": []}
     touch()
     return {"ok": True}
 

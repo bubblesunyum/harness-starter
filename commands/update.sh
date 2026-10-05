@@ -91,7 +91,9 @@ everywhere. Contract files acknowledged in harness/diverged.txt are left
 alone, like 'harness update --apply' leaves them. A diverged entry naming a
 file the template no longer ships fails loudly — fix the list, 'harness
 update' says the same. Run 'harness add' first if the project has no dashboard
-at all.
+at all. A diverged dashboard/index.html's theme and lane customizations move
+into dashboard.toml the same way, when the new config tables can express
+them; anything else stays forked, with the line still on it.
 USAGE
   }
   dashboard_target=""

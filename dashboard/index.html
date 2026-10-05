@@ -2086,6 +2086,138 @@
       const row = (label, value, cls = '') =>
         `<div class="row"><span class="name">${esc(label)}</span><span class="v ${cls}">${esc(value)}</span></div>`
 
+      /* ---- project theme, layout, and assets -------------------------------- */
+      /* Optional state the server adds from dashboard.toml (empty or missing
+         when unconfigured): d.theme as {var: value}, d.board as
+         {hidden: [keys], order: [keys]}, d.assets as {css: [relpaths],
+         js: [relpaths]} served under assets/. Every key is optional — without
+         them the page paints exactly today's board. */
+      const THEME_VAR_RE = /^(--)?[A-Za-z_][A-Za-z0-9_-]*$/
+      // Custom-property names the last state applied, so a var a new state no
+      // longer names reverts — an emptied [theme] is today's board again.
+      let appliedThemeVars = new Set()
+
+      /* Each entry becomes an inline custom-property override on :root, applied
+         at every repaint from the state rather than cached — inline wins over
+         the vendor stylesheet without touching it. setProperty keeps values as
+         inert text; nothing is ever interpolated into a stylesheet. */
+      function applyTheme(theme) {
+        const next = new Set()
+        if (theme && typeof theme === 'object' && !Array.isArray(theme)) {
+          for (const [rawKey, rawValue] of Object.entries(theme)) {
+            if (typeof rawKey !== 'string' || typeof rawValue !== 'string') continue
+            if (!THEME_VAR_RE.test(rawKey)) continue
+            const name = rawKey.startsWith('--') ? rawKey : `--${rawKey}`
+            next.add(name)
+            document.documentElement.style.setProperty(name, rawValue)
+          }
+        }
+        for (const name of appliedThemeVars) {
+          if (!next.has(name)) document.documentElement.style.removeProperty(name)
+        }
+        appliedThemeVars = next
+      }
+
+      function boardConfig(d) {
+        const b = d && d.board
+        if (!b || typeof b !== 'object' || Array.isArray(b)) return {hidden: new Set(), order: []}
+        return {
+          hidden: new Set(Array.isArray(b.hidden) ? b.hidden.filter((k) => typeof k === 'string') : []),
+          order: Array.isArray(b.order) ? b.order.filter((k) => typeof k === 'string') : [],
+        }
+      }
+
+      /* Listed sections lead in listed order; unlisted ones hold their default
+         relative order after (sort is stable). Unknown keys name nothing — the
+         rank lookup simply never matches them. */
+      function orderSections(items, order) {
+        const rank = new Map(order.map((k, i) => [k, i]))
+        return [...items].sort((a, b) => (rank.get(a.key) ?? Infinity) - (rank.get(b.key) ?? Infinity))
+      }
+
+      // Relative asset paths the server serves under assets/. Plain relative
+      // paths only — nothing absolute, nothing escaping upward — so a state
+      // that names one can only load a project file, never a URL.
+      const ASSET_REL_RE = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/
+      // Injected elements by key, across every repaint: each loads once, never
+      // twice, and a delisted one can be found and removed again.
+      const injectedAssets = new Map()
+      // Dot-segments, not substrings: "a..b.css" is a filename, "../" is a
+      // jailbreak — the same rule the server enforces, so both sides agree.
+      const hasDotSegment = (rel) => rel.split('/').some((part) => part === '.' || part === '..')
+
+      /* One <link> per css path, one <script> per js path, appended after the
+         vendor stylesheet so project rules win ties. A failing file drops its
+         key as well as its element, so the next poll retries instead of
+         never loading until a full reload. Returns the key, or '' when skipped. */
+      function injectAsset(kind, rel) {
+        if (typeof rel !== 'string' || !ASSET_REL_RE.test(rel) || hasDotSegment(rel)) return ''
+        const url = `assets/${rel}`
+        const key = `${kind}:${url}`
+        if (injectedAssets.has(key)) return key
+        const el =
+          kind === 'css'
+            ? Object.assign(document.createElement('link'), {rel: 'stylesheet', href: url})
+            : Object.assign(document.createElement('script'), {src: url})
+        injectedAssets.set(key, el)
+        el.onerror = () => {
+          injectedAssets.delete(key)
+          el.remove()
+        }
+        document.head.appendChild(el)
+        return key
+      }
+
+      /* Listed assets load; a delisted one's element leaves so its CSS stops
+         applying. A <script> that already ran cannot be un-run — its element
+         goes anyway so later polls start clean. */
+      function loadAssets(assets) {
+        if (!assets || typeof assets !== 'object' || Array.isArray(assets)) return
+        const live = new Set()
+        if (Array.isArray(assets.css))
+          assets.css.forEach((rel) => {
+            const key = injectAsset('css', rel)
+            if (key) live.add(key)
+          })
+        if (Array.isArray(assets.js))
+          assets.js.forEach((rel) => {
+            const key = injectAsset('js', rel)
+            if (key) live.add(key)
+          })
+        for (const [key, el] of injectedAssets) {
+          if (!live.has(key)) {
+            el.remove()
+            injectedAssets.delete(key)
+          }
+        }
+      }
+
+      /* Project section order across the page column: the backlog strip above
+         the board, the board itself, and the harness panel below. Lanes sort
+         within the board (see drawBoard); these three blocks only move when the
+         order names 'backlog' or 'harness' — a lanes-only order leaves today's
+         layout exactly alone. Reinserted before the scrim, which follows every
+         block, so the fixed overlays never shift. */
+      function orderPageSections(order) {
+        if (!order.some((k) => k === 'backlog' || k === 'harness')) return
+        const rank = new Map(order.map((k, i) => [k, i]))
+        const at = (keys) => {
+          let r = Infinity
+          for (const k of keys) if (rank.has(k) && rank.get(k) < r) r = rank.get(k)
+          return r
+        }
+        const laneKeys = [...$('board').children].map((el) => el.dataset.lane).filter(Boolean)
+        const blocks = [
+          {el: $('backlog'), keys: ['backlog']},
+          {el: $('board'), keys: laneKeys},
+          {el: $('harness'), keys: ['harness']},
+        ]
+          .map((b) => ({el: b.el, rank: at(b.keys)}))
+          .sort((a, b) => a.rank - b.rank)
+        const anchor = $('scrim')
+        for (const b of blocks) anchor.parentNode.insertBefore(b.el, anchor)
+      }
+
       /* ---- the board -------------------------------------------------------- */
       /* Bead lanes hold work. Stage lanes hold the state of the machinery the work
          has to pass through — they report rather than accumulate, which is why they
@@ -2230,6 +2362,9 @@
 
       function drawBoard(d, force = false) {
         lastLedger = d
+        // Project layout for this repaint: hidden sections never reach the
+        // paint, listed ones lead in listed order (see orderSections below).
+        const layout = boardConfig(d)
         // No `bd` on PATH is not an empty ledger — it is no ledger. The lanes
         // vanish rather than standing there saying "nothing", and the work-tree
         // lane (which comes from git, not bd) is the only one allowed through.
@@ -2317,7 +2452,7 @@
 
         // Counts name the families rendered in each section.
         const doneItems = cards.filter((i) => lanesOf(i).has('done'))
-        const lanes = [
+        const candidates = [
           ...beadLanes,
           {key: 'done', label: 'done', count: doneItems.length, items: doneItems},
           // An empty lane says nothing worth the room it takes. Staging is the
@@ -2326,9 +2461,23 @@
           // Ready is the other: the plus that files the next bead lives in its
           // header, and an empty worklist is news rather than nothing.
           // Neither exception applies with no ledger behind them.
-        ].filter((l) =>
-          noLedger ? !!l.worktree : l.key === 'ready' || (l.worktree ? (d.worktree || []).length : l.items.length || l.slot),
+        ]
+        const lanes = candidates.filter(
+          (l) =>
+            !layout.hidden.has(l.key) &&
+            (noLedger
+              ? !!l.worktree
+              : l.key === 'ready' || (l.worktree ? (d.worktree || []).length : l.items.length || l.slot)),
         )
+        // Every lane hidden is a choice, not an empty ledger — no "nothing" text.
+        // Same when only some lanes hide but the hidden ones hold the work: the
+        // ledger isn't empty, it's configured out of sight. Counts already name
+        // each lane's families, so no lane walk is needed to ask.
+        const hiddenWork = (l) =>
+          layout.hidden.has(l.key) &&
+          (l.worktree ? (d.worktree || []).length : l.items.length)
+        const allHidden = !lanes.length && candidates.every((l) => layout.hidden.has(l.key))
+        const someHiddenWork = !lanes.length && !allHidden && candidates.some(hiddenWork)
 
         // Rebuilt only when something changed: two lanes carry hover popovers, and
         // replacing one under the pointer would close it mid-read.
@@ -2338,17 +2487,23 @@
         // would otherwise sit there stale until something else forced a repaint. The
         // markup also carries the fold and the load-more limit, so those need no
         // separate accounting.
-        const rendered = lanes.map((l) => ({key: l.key, html: l.worktree ? worktreeLane(d) : laneCard(l)}))
+        const rendered = orderSections(lanes, layout.order).map((l) => ({
+          key: l.key,
+          html: l.worktree ? worktreeLane(d) : laneCard(l),
+        }))
         const signature = JSON.stringify(rendered)
         if (signature === boardSignature) return
         boardSignature = signature
 
-        paintBoard(rendered)
+        paintBoard(rendered, noLedger, allHidden || someHiddenWork)
       }
 
       /* Lanes are swapped in place rather than the board being thrown away, so one
          arriving or leaving can be animated while the rest hold still. */
-      function paintBoard(rendered) {
+      // noLedger rides along because a paint can be empty now — every lane
+      // hidden, or no ledger behind a clean tree — and the outer scope's flag
+      // doesn't exist here, so reading it would throw on exactly that paint.
+      function paintBoard(rendered, noLedger = false, allHidden = false) {
         const board = $('board')
         const keys = new Set(rendered.map((l) => l.key))
         const leaving = [...board.children].filter((el) => el.dataset.lane && !keys.has(el.dataset.lane))
@@ -2358,7 +2513,8 @@
           // With no ledger there is no "nothing in the ledger" either — the
           // board is just the work tree, or nothing at all.
           board.innerHTML =
-            rendered.map((l) => l.html).join('') || (noLedger ? '' : '<div class="empty">nothing in the ledger</div>')
+            rendered.map((l) => l.html).join('') ||
+            (noLedger || allHidden ? '' : '<div class="empty">nothing in the ledger</div>')
           for (const el of board.children) {
             if (el.dataset.lane && !had.has(el.dataset.lane)) el.classList.add('entering')
           }
@@ -2751,8 +2907,9 @@
       /* Filed, not offered. It sits above the board because it's the shelf the board
          draws from, and collapsed because nothing here is the next thing to do. */
       function drawBacklog(d, force = false) {
-        // No ledger, no shelf: the strip hides rather than drawing an empty one.
-        if (!d.ledger || d.ledger.available === false) {
+        // No ledger, no shelf: the strip hides rather than drawing an empty one —
+        // and a section the project hid never draws, even with beads on it.
+        if (!d.ledger || d.ledger.available === false || boardConfig(d).hidden.has('backlog')) {
           $('backlog').hidden = true
           backlogSignature = ''
           return
@@ -2947,10 +3104,10 @@
         const stages = d.harness || []
         // No .claude/ on disk means no stages with anything in them, and a
         // panel of "nothing here" rows is a confused shape — the whole panel
-        // hides instead. Set before the signature check so a return to nothing
-        // still lands.
+        // hides instead, as it does when the project hid the section. Set
+        // before the signature check so a return to nothing still lands.
         const nodes = stages.flatMap((s) => s.nodes)
-        $('harness').hidden = nodes.length === 0
+        $('harness').hidden = nodes.length === 0 || boardConfig(d).hidden.has('harness')
         if (!nodes.length) return
         const signature = JSON.stringify(stages)
         if (signature === harnessSignature) return
@@ -4014,7 +4171,8 @@
 
       function drawGate(d) {
         const v = d.verify || {status: 'never run'}
-        $('gate').hidden = !gateVisible(d)
+        // A section the project hid stays hid, whatever the gate reports.
+        $('gate').hidden = !gateVisible(d) || boardConfig(d).hidden.has('gate')
         // The dot before the gate separates it from the branch; a hidden gate
         // leaves a doubled separator.
         const dot = $('gate').previousElementSibling
@@ -4103,6 +4261,9 @@
          board. `p.self` is only ever set on that local fallback; listed peers
          compare roots against the endpoint's `self`. */
       function peerGroup(d) {
+        // A section the project hid never renders, even while switching —
+        // the in-flight label lives on the tab being hidden.
+        if (boardConfig(d).hidden.has('peers')) return ''
         const list = peers.length ? peers : [{name: d.project, root: '', self: true}]
         const buttons = list
           .map((p) => {
@@ -4134,13 +4295,16 @@
         // The popover rebuilds wholesale, which drops the focus of anyone
         // tabbing through the peer tabs — so an unchanged popover is left
         // alone. The signature covers everything drawn, peers and the
-        // in-flight start included.
-        const signature = JSON.stringify([peers, startingPeerRoot, b, d.ledger, d.skills, d.agents, d.git.commits_today])
+        // in-flight start included, plus the raw board config: hiding a
+        // section must repaint once, not wait for the numbers to move.
+        const signature = JSON.stringify([peers, startingPeerRoot, b, d.ledger, d.skills, d.agents, d.git.commits_today, d.board])
         if (signature === metaSignature) return
         metaSignature = signature
 
+        // A section the project hid never renders, even with numbers on it.
+        const showBudget = !boardConfig(d).hidden.has('budget')
         $('metaTip').innerHTML =
-          peerGroup(d) + `
+          peerGroup(d) + (showBudget ? `
            <div class="group">
              <h3>context budget</h3>
             <div class="bar">
@@ -4155,7 +4319,7 @@
             <div class="note save">The session brief costs <b>${b.brief_tokens} tokens</b> where
               <code>bd prime</code> cost ~${b.prime_tokens} — <b>${b.prime_tokens - b.brief_tokens}
               saved</b> on every session, not just the first.</div>
-          </div>
+          </div>` : ``) + `
           <div class="group">
             <h3>ledger health</h3>
             ${row('ready to claim', d.ledger.counts.ready, d.ledger.counts.ready ? '' : 'warn')}
@@ -4178,9 +4342,14 @@
         // Before anything else: every run button on the page reads this.
         runStates = d.runs || {}
         drawRuns()
+        // Project theming and assets ride the same repaint as the board, read
+        // from the state rather than cached — an empty config is today's board.
+        applyTheme(d.theme)
+        loadAssets(d.assets)
         drawBoard(d)
         drawBacklog(d)
         drawHarness(d)
+        orderPageSections(boardConfig(d).order)
         refreshSheet()
         drawVerify(d)
         drawReview(d)

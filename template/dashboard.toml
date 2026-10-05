@@ -1,4 +1,4 @@
-# dashboard.toml — project-owned run buttons and display name.
+# dashboard.toml — project-owned run buttons, display name, and dashboard look.
 #
 # The harness installs this file once and never touches it again: add buttons
 # here freely, this is the file for them. dashboard.py reads it on every
@@ -7,6 +7,15 @@
 # A missing file serves the two standard buttons (run + push) and names the
 # project after its directory. A broken one keeps serving the last good table
 # and complains on the server's stderr.
+#
+# Three optional tables restyle the page without touching shipped files (see
+# the commented examples at the end of this file):
+#   [theme]  — CSS variable overrides, e.g. --accent = "#6a5acd".
+#   [board]  — hidden = [...] / order = [...] over the page's sections.
+#   [assets] — css = [...] / js = [...] naming files under dashboard-assets/,
+#              served at /assets/<path-inside-that-dir>. Each table is read
+#              independently: one bad table keeps its last good values and
+#              complains, while the good ones keep updating.
 
 [project]
 # Display name for the title. Defaults to the directory name.
@@ -43,3 +52,37 @@ where = "lane:staging"
 # (?:...) — or the dashboard rejects it rather than serve a wrong answer.
 # [verdict]
 # pattern = '\*\* (?:BUILD|TEST) (SUCCEED|FAIL)[A-Z]* \*\*'
+
+# Restyle the page without forking shipped files. All three tables are
+# optional; an absent one serves its default silently, a broken one keeps its
+# last good values and complains on the server's stderr.
+#
+# [theme] maps a CSS variable name to its value, applied as an inline custom
+# property. Names look like --lowercase-letters-and-dashes (max 40 chars);
+# values are at most 200 chars and must not hold markup (</) or url(...),
+# which never render. Served in state.json as "theme": {"--var": "value"}.
+# [theme]
+# "--accent" = "#6a5acd"
+# "--bg" = "#f6f6f4"
+#
+# [board] hides and reorders the page's own sections. hidden lists sections
+# to hide, order lists sections front to back (unlisted sections keep their
+# usual place after the ordered ones). Valid keys: ready, blocked,
+# in_progress, review, staging, worktree, done, backlog, harness, budget,
+# gate, peers. Anything else is rejected loudly. Served as
+# "board": {"hidden": [...], "order": [...]}.
+# [board]
+# hidden = ["peers"]
+# order = ["ready", "in_progress", "done"]
+#
+# [assets] lists project-owned files served beside the page. Every entry is a
+# project-relative path that MUST sit under dashboard-assets/ — a top-level
+# directory the dashboard updater never scans, so custom files survive
+# updates — with a .css extension in css and .js in js. No absolute paths, no
+# ".." escapes. Served in state.json stripped to the path inside that
+# directory ({"css": ["brand.css"]}), fetched at /assets/brand.css as text/css
+# or text/javascript, 200KB cap, 404 for anything unlisted. Static bytes only,
+# never executed server-side.
+# [assets]
+# css = ["dashboard-assets/brand.css"]
+# js = ["dashboard-assets/extra.js"]

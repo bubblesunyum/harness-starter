@@ -82,6 +82,57 @@ An optional `[verdict].pattern` is a regular expression with exactly one
 capturing group for the verdict word. If the gate has no verdict pattern, the
 dashboard falls back to its error-line check.
 
+## Restyle it
+
+Three optional `dashboard.toml` tables restyle the page without forking
+shipped files. Each is read independently: one bad table keeps its last good
+values and complains on the server's stderr, while the good ones keep
+updating. `state.json` carries all three as `theme`, `board`, and `assets`.
+
+An optional `[theme]` table maps a CSS variable name to its value, applied as
+an inline custom property:
+
+```toml
+[theme]
+"--accent" = "#6a5acd"
+```
+
+Names look like `--lowercase-letters-and-dashes` (max 40 characters); values
+are at most 200 characters and must not hold markup (`</`) or `url(...)`,
+which never render.
+
+An optional `[board]` table hides and reorders the page's own sections:
+
+```toml
+[board]
+hidden = ["peers"]
+order = ["ready", "in_progress", "done"]
+```
+
+`hidden` lists sections to hide; `order` lists sections front to back, and
+sections it doesn't name keep their usual place after the ordered ones.
+Valid keys are the sections the page renders: `ready`, `blocked`,
+`in_progress`, `review`, `staging`, `worktree`, `done`, `backlog`, `harness`,
+`budget`, `gate`, `peers`. Anything else is rejected loudly.
+
+An optional `[assets]` table lists project-owned files served beside the
+page:
+
+```toml
+[assets]
+css = ["dashboard-assets/brand.css"]
+js = ["dashboard-assets/extra.js"]
+```
+
+Every entry is a project-relative path that must sit under `dashboard-assets/`,
+a top-level directory the dashboard updater never scans, so custom files
+survive updates. `css` entries end in `.css`, `js` entries in `.js`; no
+absolute paths, no `..` escapes. The state lists them stripped to the path
+inside that directory (`{"css": ["brand.css"]}`), fetched at
+`/assets/brand.css` as `text/css` or `text/javascript`. Files over 200KB and
+paths the table never listed answer 404. Assets are static bytes only and are
+never executed server-side.
+
 The installer creates `dashboard.toml` once and later dashboard updates leave
 it project-owned. To refresh the page and dashboard server from the starter, run:
 
