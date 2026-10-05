@@ -311,6 +311,32 @@ probe_step "update --apply converges contract files" bash -c '
   out=$(bin/harness update "$probe" 2>&1) || {
     echo "error: update still stale after apply"; echo "$out"; exit 1; }'
 
+# `update --apply` reinstalls a missing contract file from the template: the
+# gate hard-depends on scripts the template added after some installs, so a
+# missing one must converge, not linger until a manual `harness add`.
+probe_step "update --apply reinstalls missing contract files" bash -c '
+  golden_probe || exit 1
+  [ -f "$probe/scripts/ledger-export-check.sh" ] || { echo "error: install produced no ledger-export-check.sh"; exit 1; }
+  rm "$probe/scripts/ledger-export-check.sh" || { echo "error: cannot remove ledger-export-check.sh"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) ||
+    { echo "error: update --apply failed on a missing contract file"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "applied" ||
+    { echo "error: apply never said it applied"; echo "$out"; exit 1; }
+  [ -f "$probe/scripts/ledger-export-check.sh" ] ||
+    { echo "error: apply never reinstalled the missing file"; exit 1; }
+  cmp template/scripts/ledger-export-check.sh "$probe/scripts/ledger-export-check.sh" ||
+    { echo "error: the reinstalled file differs from the template"; exit 1; }
+  [ -x "$probe/scripts/ledger-export-check.sh" ] ||
+    { echo "error: the reinstalled file lost its executable bit"; exit 1; }
+  out=$(bin/harness update "$probe" 2>&1) ||
+    { echo "error: update still stale after apply"; echo "$out"; exit 1; }
+  rm "$probe/.claude/agents/reviewer-taste.md" || { echo "error: cannot remove the customised source"; exit 1; }
+  out=$(bin/harness update --apply "$probe" 2>&1) || true
+  [ -e "$probe/.claude/agents/reviewer-taste.md" ] &&
+    { echo "error: apply installed a missing customised file"; exit 1; }
+  echo "$out" | grep -q "harness add" ||
+    { echo "error: apply never pointed a missing customised file at add"; echo "$out"; exit 1; }'
+
 # A contract file carrying bd's managed block plus real drift is left for a
 # hand merge: the template has no copy of that block, so overwriting would
 # delete it. The block survives and the file stays stale, loudly.

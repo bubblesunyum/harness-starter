@@ -126,11 +126,13 @@ that already exists, which is the whole reason it's safe everywhere else.
 ```bash
 harness update            # which files here differ from template/
 harness update --diff     # and how
-harness update --apply    # write the template over stale contract files
+harness update --apply    # write the template over stale contract files,
+                        # and install the missing contract ones
 ```
 
 It reports and never writes — unless asked with `--apply`, which writes the
-rendered template over stale contract files, never customised ones, and names
+rendered template over stale contract files and installs the missing contract
+ones, never customised ones, and names
 each file it changed. A file carrying a beads block is left for a hand merge.
 Files carrying the contract — `AGENTS.md`,
 `opencode.json`, the skills, the scripts behind them — make it exit non-zero,

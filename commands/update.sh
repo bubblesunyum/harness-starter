@@ -4,7 +4,8 @@
 #   harness update           check the current directory
 #   harness update <path>    check that project instead
 #   harness update --diff    also print what actually differs
-#   harness update --apply   write the rendered template over stale contract files
+#   harness update --apply   write the rendered template over stale contract files,
+#                            and install the missing contract ones
 #
 # `harness add` never overwrites, which is what makes re-running it safe — but it
 # also means a fix that ships in the starter never reaches a project that already
@@ -15,8 +16,9 @@
 # Report-only by default. Merging is a judgment call — half these files have
 # local edits in them by design — and an overwrite-by-default here would be a
 # command nobody could afford to run. --apply is the exception, asked for by
-# name: it writes the rendered template over the stale contract files, never
-# over customised ones, and names every file it changed.
+# name: it writes the rendered template over the stale contract files and
+# installs the missing contract ones, never over customised ones, and names
+# every file it changed.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -33,7 +35,8 @@ Reports harness files in a project that differ from the starter's template.
   harness update                  check the current directory
   harness update <path>           check that project instead
   harness update --diff           also print a unified diff of each difference
-  harness update --apply          write the rendered template over stale contract files
+  harness update --apply          write the rendered template over stale contract files,
+                                  and install the missing contract ones
   harness update dashboard        re-copy the dashboard files over the project
   harness update dashboard <path>  re-copy the dashboard into that project instead
 
@@ -51,11 +54,12 @@ listed quietly, for you to check against the template yourself. Project-owned
 overlay files — project guidance in AGENTS.local.md, gate steps, review scope —
 are installed once and never compared at all.
 
-Report-only, unless --apply: that rewrites the stale contract files that
-exist — never customised ones, never missing ones — and prints each file it
-changed. A file carrying a beads block is left for a hand merge, and reviewer
-sources still need their follow-ups below. Run 'harness add' to install files
-that are missing. A deliberate local fork goes in harness/diverged.txt
+Report-only, unless --apply: that rewrites the stale contract files and
+installs the missing contract ones — never customised ones — and prints each
+file it changed. A file carrying a beads block is left for a hand merge, and
+reviewer sources still need their follow-ups below. Run 'harness add' to
+install files that are missing and carry no contract. A deliberate local fork
+goes in harness/diverged.txt
 ('harness diverge <file>') — acknowledged forks are shown but no longer fail.
 For a live ledger, --apply also disables bd auto-export and refreshes the export
 with memories. Without --apply, a missing manual export policy is reported only.
@@ -216,6 +220,23 @@ while IFS= read -r rel; do
     # A contract file that isn't there is the same failure as a stale one, with
     # a louder cause — opencode.json simply absent from an older install is the
     # case this whole command was written for.
+    if [ "$apply" -eq 1 ] && harness_is_contract "$rel" "$src"; then
+      # Asked for by name: a missing contract file carries no local answers to
+      # protect — no beads block, no filled FILL THIS IN — so the template is
+      # installed outright and named with the applied files below. Anything
+      # else missing stays report-only: `harness add` installs it.
+      mkdir -p "$(dirname "$dst")" || { echo "✗ cannot create $(dirname "$dst")" >&2; exit 1; }
+      harness_render "$src" > "$dst" || { echo "✗ cannot write $dst" >&2; exit 1; }
+      [ -x "$src" ] && chmod +x "$dst"
+      applied="$applied  $rel"$'\n'
+      case "$rel" in
+        # Installed sources owe the same rebuilds as merged ones: without this
+        # the follow-ups below never print for a source the template added
+        # after the install, and the generated copies stay stale silently.
+        .claude/agents/*) agents_contract=1 ;;
+      esac
+      continue
+    fi
     missing="$missing  $rel"$'\n'
     harness_is_contract "$rel" "$src" && missing_contract=$((missing_contract + 1))
     continue
