@@ -32,8 +32,9 @@ roster; `budget` never prompts, so review.sh can call it from hooks and gates.
 A role may also name a "variant" — the provider's reasoning effort (minimal,
 low, medium, high, xhigh, max; which exist depends on the model, and
 opencode's models.dev cache lists them). It reaches opencode through agent.py
-as `-m provider/model#variant` — the only path; no generated file carries one.
-Absent, the model's own default applies. The ensure probe doesn't cover it:
+as `-m provider/model#variant`, and through the generated agent files as the
+`#variant` suffix on their `model:` line. Absent, the model's own default
+applies. The ensure probe doesn't cover it:
 it sends a bare -m, so a variant problem surfaces at runtime, not at prompt
 time.
 """

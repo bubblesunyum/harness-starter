@@ -735,30 +735,35 @@ EOF
   echo "$out" | grep -q "review-packet" ||
     { echo "error: review never printed the packet"; echo "$out"; exit 1; }'
 
-# The roster is machine-local and gitignored, so generated agents must not
-# carry it: a model line baked in here passes check on this machine and fails
-# it on every fresh clone. Asserted both ways — a populated roster leaks
-# nothing into the output, and check passes with the roster removed.
-probe_step "generated opencode agents ignore the roster" bash -c '
+# The roster is baked into generated agents so native opencode spawns run
+# each role's effort (har-8ox reverses har-64r): a populated roster emits
+# `model: provider/model#variant` lines, and a rosterless machine fails check
+# with guidance instead of silently passing model-free. Asserted both ways.
+probe_step "generated opencode agents bake in the roster" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
-{"reviewer-taste": {"model": "some-provider/some-model", "context": 12345},
+{"reviewer-taste": {"model": "some-provider/some-model", "context": 12345, "variant": "low"},
  "reviewer-correctness": "other-provider/other-model",
- "reviewer-design": {"model": "third-provider/third-model"},
+ "reviewer-design": {"model": "third-provider/third-model", "variant": "medium"},
  "librarian": "fourth-provider/fourth-model"}
 EOF
     { echo "error: cannot write test roster"; exit 1; }
   (cd "$probe" && ./scripts/opencode-agents.py >/dev/null 2>&1) ||
     { echo "error: generate failed with a populated roster"; exit 1; }
-  if grep -H "^model:\|^variant:" "$probe"/.opencode/agent/*.md; then
-    echo "error: roster leaked into generated agents — a fresh clone fails check"; exit 1;
+  grep -q "^model: some-provider/some-model#low" "$probe/.opencode/agent/reviewer-taste.md" ||
+    { echo "error: taste model#variant not baked in"; exit 1; }
+  grep -q "^model: other-provider/other-model" "$probe/.opencode/agent/reviewer-correctness.md" ||
+    { echo "error: correctness model not baked in"; exit 1; }
+  if grep -H "^variant:" "$probe"/.opencode/agent/*.md; then
+    echo "error: bare variant line emitted — variant rides on the model line"; exit 1;
   fi
   (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1) ||
     { echo "error: check failed with a populated roster"; exit 1; }
   rm "$probe/harness/models.json" ||
     { echo "error: cannot remove test roster"; exit 1; }
-  (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1) ||
-    { echo "error: check failed with no roster — the fresh-clone case"; exit 1; }'
+  if (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1); then
+    echo "error: check passed with no roster — fresh clone must fail with guidance"; exit 1;
+  fi'
 
 # A .opencode/opencode.json without instructions shadows the root file —
 # opencode reads only the deeper one — so update fails naming the shadow, the

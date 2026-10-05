@@ -738,8 +738,8 @@ harness_diverged_want() {
 
 # missing | invalid | empty | ok for a target's per-role model roster, read
 # through its own models.py — one parser, not two. Anything but ok suggests
-# running ensure: agent.py runs and review budgets need a roster, though the
-# generated agents never do. No python3, no models.py,
+# running ensure: agent.py runs, review budgets, and the generated agents'
+# model lines need a roster. No python3, no models.py,
 # any error: missing, which is the direction that suggests running ensure.
 harness_roster_state() {
   python3 - "$1" 2>/dev/null <<'PYEOF' || echo missing

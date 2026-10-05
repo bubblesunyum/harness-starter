@@ -277,9 +277,10 @@ def parse_events(stdout, session):
 def run_agent(agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
     fail loudly."""
-    # No generated file carries the variant, so the model suffix is the whole
-    # mechanism — including for `implement`, which runs opencode's own build
-    # agent with no file of ours at all. opencode 2 dropped `--variant` for
+    # The model suffix is this script's whole variant mechanism — including
+    # for `implement`, which runs opencode's own build agent with no file of
+    # ours at all. (Native opencode spawns get their variant from the `model:`
+    # line the generator baked in instead.) opencode 2 dropped `--variant` for
     # `-m provider/model#variant`.
     # `--standalone`: opencode 2 otherwise hands the run to a shared background
     # service, which never sees this process's OPENCODE_CONFIG_CONTENT (so no

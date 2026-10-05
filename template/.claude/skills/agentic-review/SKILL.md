@@ -33,7 +33,7 @@ that's the packet's job, and pasting it doubles the cost.
 **In opencode, always spawn the reviewers natively as parallel subagents —
 never `scripts/agent.py`.** That script is how every tool except opencode
 runs reviewers against the roster; inside opencode the generated agents
-inherit the session model and always resolve, so shelling out buys nothing.
+already carry the roster's `model:` lines, so shelling out buys nothing.
 
 Everywhere else, go off the account when the roster allows. Run each reviewer
 with a model in `harness/models.json` through opencode — each as its own
@@ -98,8 +98,8 @@ nobody looked at is the defect.
   effort in the reviewer's `.claude/agents/` frontmatter. Through
   `scripts/agent.py` — how every tool except opencode reaches the roster —
   each role runs whatever `harness/models.json` gives it. A native opencode
-  spawn inherits the session's model, and under Codex every role inherits the
-  host model.
+  spawn runs the `model:` line the generator baked from the roster, and under
+  Codex every role inherits the host model.
 - **One reviewer looks at pixels.** In the project this came from, both diff
   readers passed a card that clipped every value it existed to show — and were
   right to: nothing in the diff was wrong. The defect lived in the render, in a

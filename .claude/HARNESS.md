@@ -270,35 +270,36 @@ it worked and fails at spawn. So the prompt body has one home,
 header around it into `.opencode/agent/`. The gate checks the two match, because
 nothing about editing the source makes opencode complain.
 
-The generated agents carry no `model:` line — by design, not omission. The
-roster is machine-local and gitignored: it names models this machine happens
-to have, so a model line would bake one machine's answers into every clone's
-committed files, and a fresh clone with an empty roster would generate
-model-free files that fail check against them. Without a line the agent
-inherits the session's model, which always resolves — the cost is that
-`reviewer-taste` stops being the cheap one under a native opencode spawn. The
-roster still picks the model everywhere a model is actually chosen:
-`scripts/agent.py` passes it as `-m`.
+The generated agents bake the roster in: a role with a roster entry gets a
+`model: provider/model#variant` line (bare model when no variant), so a
+native opencode spawn runs the role's effort rather than inheriting the
+session's. A role with no roster entry gets no model line and inherits.
+Baking is deliberate — it is what keeps `reviewer-taste` the cheap one under
+a native opencode spawn — and it costs a fresh clone without
+harness/models.json a guided failure: check refuses with the `ensure`
+command instead of silently passing model-free. The roster still picks the
+model everywhere else a model is actually chosen: `scripts/agent.py` passes
+it as `-m`.
 
 A role's roster entry may add a `variant` — the provider's reasoning effort,
-such as `xhigh` — which agent.py sends as `-m provider/model#variant`. Only there: no
-generated file carries one, and `implement` runs opencode's own build agent,
-which has no generated file at all.
+such as `xhigh` — which agent.py sends as `-m provider/model#variant` and
+the generator writes after `#` on the `model:` line. `implement` runs
+opencode's own build agent, which has no generated file at all.
 
 Three paths to a model: the `.claude/agents/` frontmatter names Claude Code's
-reviewers; the roster names `scripts/agent.py`'s; opencode's generated agents
-and Codex inherit the session's and the host's. A model named in one path says
-nothing about the others.
+reviewers; the roster names `scripts/agent.py`'s and the generated opencode
+agents'; Codex inherits the host's. A model named in one path says nothing
+about the others.
 
 **`scripts/agent.py` is how every tool except opencode reaches the roster.**
 
 It runs one role through `opencode run` — so Claude Code can put its
 reviewers, and delegated implementation, on another provider's bill without
 the packet ever entering its own context. Inside opencode itself, reviewers
-always run as native subagents on the session model — no reviewer is ever
-routed through `agent.py` from an opencode session. (Delegated implementation
-is the exception: the `delegate` skill sends it through `agent.py` from any
-tool, for the roster model.) Three behaviours of `opencode run` shaped it, all
+always run as native subagents on their pinned roster models — no reviewer is
+ever routed through `agent.py` from an opencode session. (Delegated
+implementation is the exception: the `delegate` skill sends it through
+`agent.py` from any tool, for the roster model.) Three behaviours of `opencode run` shaped it, all
 found by running it:
 
 - `--agent` given a `mode: subagent` agent prints a warning and falls back to
