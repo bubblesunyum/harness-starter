@@ -4791,7 +4791,11 @@
         const shotWait = setInterval(() => {
           if (document.documentElement.getAttribute('data-board-ready') !== 'true') return
           clearInterval(shotWait)
-          SHOT_ACTIONS[SHOT]?.()
+          // SHOT is query-string input: dispatch only a real action, so a
+          // prototype-chain name (?shot=__proto__) does nothing instead of
+          // throwing and withholding data-shot-ready from the capture.
+          const shotAction = Object.hasOwn(SHOT_ACTIONS, SHOT) ? SHOT_ACTIONS[SHOT] : undefined
+          if (typeof shotAction === 'function') shotAction()
           document.documentElement.setAttribute('data-shot-ready', SHOT)
         }, 250)
       }
