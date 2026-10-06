@@ -150,8 +150,8 @@ discover them there. Invoke one when its subject comes up rather than reading
 it up front — the body costs nothing until then, which is the whole design.
 
 User-facing prose always follows the `output-style` skill: load
-`.claude/skills/output-style/SKILL.md` before writing any report, summary,
-handoff note, or other text the user will read, and apply its voice there.
+`.claude/skills/output-style/SKILL.md` before writing anything the user will
+read, and apply its voice there.
 
 ## Closing a session
 
