@@ -2321,6 +2321,9 @@ def build_peers():
     without. Self is always in the list and always live — the board answering
     is proof enough it is serving."""
     claims = live_claims()
+    siblings = sibling_roots()
+    sibling_paths = {str(d) for d in siblings}
+    switch_targets = sibling_paths | {str(ROOT)}
     own_port = _bound_port["port"]
     if own_port is None:
         own_port = claims.get(str(ROOT))
@@ -2332,8 +2335,11 @@ def build_peers():
             "port": port,
             "url": f"http://localhost:{port}/",
             "live": True,
+            # Per-peer capability so the page greys out boards that predate
+            # the switch marker instead of stranding their tabs.
+            "switch_capable": root in switch_targets and switch_capable(root),
         }
-    for d in sibling_roots():
+    for d in siblings:
         if str(d) == str(ROOT) or str(d) in by_root:
             continue
         by_root[str(d)] = {
@@ -2342,6 +2348,7 @@ def build_peers():
             "port": None,
             "url": "",
             "live": False,
+            "switch_capable": str(d) in switch_targets and switch_capable(str(d)),
         }
     if str(ROOT) not in by_root:
         by_root[str(ROOT)] = {
@@ -2350,6 +2357,7 @@ def build_peers():
             "port": own_port,
             "url": f"http://localhost:{own_port}/" if own_port else "",
             "live": True,
+            "switch_capable": True,
         }
     peers = sorted(by_root.values(), key=lambda p: (p["name"].lower(), p["root"]))
     return {"self": str(ROOT), "peers": peers}

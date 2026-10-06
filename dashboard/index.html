@@ -1082,16 +1082,75 @@
       .peer-seg {
         display: flex;
         flex-wrap: nowrap;
+        flex: 1 1 auto;
+        min-width: 0;
         max-width: 100%;
         overflow-x: auto;
+        scrollbar-width: auto;
+        scrollbar-color: var(--dim) var(--panel);
+      }
+      /* The tab row scrolls behind visible arrow controls: a bare scrollbar
+      stays hidden on some platforms, so an overflowing row gets padded
+      buttons plus a trailing fade that disappears at the end. */
+      .peer-scroll {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        position: relative;
+      }
+      .peer-scroll[hidden] { display: none; }
+      .peer-scroll.has-more::after {
+        content: '';
+        position: absolute;
+        z-index: 1;
+        top: 0;
+        right: 35px;
+        bottom: 8px;
+        width: 18px;
+        pointer-events: none;
+        background: linear-gradient(90deg, transparent, var(--panel));
+      }
+      .peer-scroll-control {
+        flex: 0 0 30px;
+        width: 30px;
+        height: 30px;
+        padding: 3px 7px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        color: var(--ink);
+        background: var(--panel);
+        cursor: pointer;
+        font: inherit;
+      }
+      .peer-scroll-control:hover {
+        color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 11%, var(--panel));
+      }
+      .peer-seg::-webkit-scrollbar {
+        height: 8px;
+      }
+      .peer-seg::-webkit-scrollbar-track {
+        background: var(--panel);
+      }
+      .peer-seg::-webkit-scrollbar-thumb {
+        background: var(--dim);
+        border: 2px solid var(--panel);
+        border-radius: 8px;
       }
       .peer-seg button {
-        flex: 1 1 auto;
+        flex: 1 0 auto;
         white-space: nowrap;
       }
       .peer-seg button[aria-disabled='true'] {
         opacity: 0.45;
         cursor: default;
+      }
+      /* Dimmed means busy, nothing else — the label, not the segment. The
+      current tab is inert too but stays lit: dimming the tab that says where
+      you are would make it the faintest of the row. */
+      .peer-seg button[aria-busy='true'],
+      .peer-seg button[aria-busy='true']:hover {
+        color: var(--dim);
       }
       /* The peer tabs open the popover with no header and no rule below them:
       the next group's top border would read as their underline, so it goes,
@@ -1116,6 +1175,7 @@
       name it rather than relying on each browser's default. */
       .card:focus-visible,
       .seg button:focus-visible,
+      .peer-scroll-control:focus-visible,
       .mini:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 2px;
@@ -3659,6 +3719,12 @@
          repaints this same page as the new project — title, branch, board all
          change, the URL does not. The self tab is pressed and inert. */
       document.addEventListener('click', (e) => {
+        const scroll = e.target.closest('[data-peer-scroll]')
+        if (scroll) {
+          const seg = $('peerSeg')
+          seg?.scrollBy({left: Number(scroll.dataset.peerScroll) * Math.max(100, seg.clientWidth * 0.75), behavior: 'smooth'})
+          return
+        }
         const peer = e.target.closest('[data-peer-root]')
         if (!peer || peer.getAttribute('aria-disabled') === 'true') return
         // One switch at a time: a second press mid-flight would poll for a
@@ -3669,11 +3735,19 @@
 
       async function switchPeer(peer) {
         const root = peer.dataset.peerRoot
-        if (!root || peer.getAttribute('aria-disabled') === 'true') return
-        const label = peer.textContent
+        if (!root || startingPeerRoot || peer.getAttribute('aria-disabled') === 'true') return
         startingPeerRoot = root
-        peer.textContent = 'starting…'
-        peer.setAttribute('aria-disabled', 'true')
+        ++drawGen
+        cancelStatePoll()
+        cancelPeerPoll()
+        // Busy treatment on the pressed node at once — the name stays, so the
+        // row doesn't re-divide under the pointer at the moment of the press —
+        // and the whole row reads inert while the switch is in flight: presses
+        // elsewhere are swallowed by the single-flight guard, so no tab
+        // advertises pressable. Applied to the nodes directly; a repaint here
+        // would drop keyboard focus.
+        peer.setAttribute('aria-busy', 'true')
+        for (const b of document.querySelectorAll('.peer-seg button')) b.setAttribute('aria-disabled', 'true')
         try {
           const r = await (
             await fetch('dashboards/switch', {method: 'POST', body: JSON.stringify({root})})
@@ -3686,10 +3760,14 @@
           const deadline = Date.now() + 60000
           for (;;) {
             let d = null
+            const ctrl = new AbortController()
+            const to = setTimeout(() => ctrl.abort(), 10000)
             try {
-              d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
+              d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store', signal: ctrl.signal})).json()
             } catch {
               // Not rebuilt yet — keep polling until the cap.
+            } finally {
+              clearTimeout(to)
             }
             if (d && d.root === root) break
             if (Date.now() > deadline) throw new Error('the board did not switch in time')
@@ -3699,14 +3777,13 @@
           await tick()
         } catch (err) {
           if (startingPeerRoot === root) startingPeerRoot = ''
-          // The poll may have repainted the tab bar mid-flight; restore
-          // whichever node carries the root now, not just the pressed one.
-          const seg = peer.isConnected
-            ? peer
-            : document.querySelector(`[data-peer-root="${CSS.escape(root)}"]`)
-          if (seg) {
-            seg.textContent = label
-            seg.removeAttribute('aria-disabled')
+          // The poll may have repainted the tab bar mid-flight, so clear by
+          // state, not by node: drop the busy treatment wherever it landed and
+          // let every non-current tab read pressable again. Nothing else to
+          // restore — the name never left.
+          for (const b of document.querySelectorAll('.peer-seg button')) {
+            b.removeAttribute('aria-busy')
+            if (b.getAttribute('aria-checked') !== 'true' && !b.hasAttribute('data-peer-incapable')) b.removeAttribute('aria-disabled')
           }
           toast(err instanceof SyntaxError ? 'switch failed' : err && err.message ? err.message : 'switch failed')
         }
@@ -4329,27 +4406,74 @@
         // A section the project hid never renders, even while switching —
         // the in-flight label lives on the tab being hidden.
         if (boardConfig(d).hidden.has('peers')) return ''
-        const list = peers.length ? peers : [{name: d.project, root: '', self: true}]
+        // Foreign entries make the whole list absent, not dead tabs — and a
+        // lone board simply arrives as a list of one.
+        const shaped = (p) =>
+          p && typeof p.root === 'string' && p.root !== '' && typeof p.name === 'string'
+        const known = peers.filter(shaped)
+        const list = known.length ? known : [{name: d.project, root: '', self: true}]
         const buttons = list
           .map((p) => {
-            const self = p.self || (selfRoot && p.root === selfRoot)
+            // The in-flight tab first, so no current check below can steal
+            // its busy state: it keeps its root and its name — the row doesn't
+            // reflow mid-flight — and carries the busy treatment until the
+            // board on screen is actually the one it names (see switchPeer).
+            const starting = startingPeerRoot && p.root === startingPeerRoot
+            if (starting)
+              return (
+                `<button aria-checked="false" aria-disabled="true" aria-busy="true"` +
+                ` data-peer-root="${esc(p.root)}" title="${esc(p.root)}">${esc(p.name)}</button>`
+              )
+            // Current is the board on screen. The `self` flag is only ever set
+            // on the local lone-board fallback above — a listed entry carrying
+            // one must not out-rank the endpoint's own root.
+            const self = (p.self && !p.root) || (selfRoot && p.root === selfRoot)
             if (self)
               return (
                 `<button aria-checked="true" aria-disabled="true"` +
                 `${p.root ? ` title="${esc(p.root)}"` : ''}>${esc(p.name)}</button>`
               )
-            const starting = startingPeerRoot && p.root === startingPeerRoot
+            // A board from before the switch speaks only `start`: landing there
+            // would strand the tab bar with no way back, so its tab is inert
+            // and says it needs an update. Older endpoints omit the flag —
+            // their peers stay usable.
+            const incapable = p.switch_capable === false
+            const disabled = startingPeerRoot || incapable
+            const title = incapable
+              ? `${p.root} — this board needs an update before it can switch`
+              : p.root
+            // While a switch is in flight every other tab is inert too:
+            // presses there are swallowed by the single-flight guard, so the
+            // row must not advertise pressable. Only the switching tab is
+            // dimmed — the dim is its busy message.
             return (
-              `<button aria-checked="false"${starting ? ' aria-disabled="true"' : ''}` +
-              ` data-peer-root="${esc(p.root)}" title="${esc(p.root)}">${esc(starting ? 'starting…' : p.name)}</button>`
+              `<button aria-checked="false"${disabled ? ' aria-disabled="true"' : ''}` +
+              `${incapable ? ' data-peer-incapable="true"' : ` data-peer-root="${esc(p.root)}"`}` +
+              ` title="${esc(title)}">${esc(p.name)}</button>`
             )
           })
           .join('')
         return (
           `<div class="group peer-group">` +
-          `<div class="seg peer-seg" role="listbox" aria-label="dashboards">${buttons}</div></div>`
+          `<div class="peer-scroll" id="peerScroll">` +
+          `<button class="peer-scroll-control" type="button" data-peer-scroll="-1" aria-label="Scroll boards left" hidden>‹</button>` +
+          `<div class="seg peer-seg" id="peerSeg" role="listbox" aria-label="dashboards">${buttons}</div>` +
+          `<button class="peer-scroll-control" type="button" data-peer-scroll="1" aria-label="Scroll boards right" hidden>›</button>` +
+          `</div></div>`
         )
       }
+
+      function updatePeerScroll() {
+        const seg = $('peerSeg')
+        const wrap = $('peerScroll')
+        if (!seg || !wrap) return
+        const controls = [...wrap.querySelectorAll('[data-peer-scroll]')]
+        const overflowing = seg.scrollWidth > seg.clientWidth + 1
+        for (const control of controls) control.hidden = !overflowing
+        wrap.classList.toggle('has-more', overflowing && seg.scrollLeft + seg.clientWidth < seg.scrollWidth - 1)
+        if (!seg.onscroll) seg.onscroll = updatePeerScroll
+      }
+      window.addEventListener('resize', updatePeerScroll)
 
       function drawMeta(d) {
         const b = d.budget
@@ -4359,10 +4483,11 @@
 
         // The popover rebuilds wholesale, which drops the focus of anyone
         // tabbing through the peer tabs — so an unchanged popover is left
-        // alone. The signature covers everything drawn, peers and the
-        // in-flight start included, plus the raw board config: hiding a
-        // section must repaint once, not wait for the numbers to move.
-        const signature = JSON.stringify([peers, startingPeerRoot, b, d.ledger, d.skills, d.agents, d.git.commits_today, d.board])
+        // alone. On the peer slice the signature covers what is drawn and
+        // nothing more — the tab bar's names and roots (not the endpoint's
+        // live/port churn), the in-flight start, and the project and root the
+        // tabs read — plus the popover's own data below, as always.
+        const signature = JSON.stringify([peers.map((p) => [p.name, p.root, p.switch_capable]), startingPeerRoot, selfRoot, d.project, d.root, b, d.ledger, d.skills, d.agents, d.git.commits_today, d.board])
         if (signature === metaSignature) return
         metaSignature = signature
 
@@ -4400,6 +4525,7 @@
             <div class="note">Skills cost their description until invoked. Reviewers run on
               cheap models, off the diff.</div>
           </div>`
+        updatePeerScroll()
       }
 
       /* ---- polling ---------------------------------------------------------- */
@@ -4427,6 +4553,70 @@
         drawDeploy(d)
       }
 
+      /* Monotonic draw generation: polls overlap and the switch's repaint can
+         land while an older tick is still awaiting its fetches — a tick whose
+         data predates a newer one must never paint its stale board over the
+         new one, which is exactly when a late tick arrives (just after a
+         switch). */
+      let drawGen = 0
+      let statePoll = null
+      let peerPoll = null
+
+      function cancelStatePoll() {
+        if (!statePoll) return
+        statePoll.controller.abort()
+        statePoll = null
+      }
+
+      function cancelPeerPoll() {
+        if (!peerPoll) return
+        peerPoll.controller.abort()
+        peerPoll = null
+      }
+
+      // Peer discovery decorates a state that already painted. One bounded
+      // request at a time; a newer poll or a switch makes its result obsolete.
+      async function pollPeers(d) {
+        if (peerPoll || startingPeerRoot) return
+        const flight = {controller: new AbortController()}
+        peerPoll = flight
+        let timeout
+        let next = []
+        let nextSelf = null
+        try {
+          const res = await Promise.race([
+            fetch('dashboards?t=' + Date.now(), {cache: 'no-store', signal: flight.controller.signal})
+              .then((r) => r.json()),
+            new Promise((_, reject) => {
+              timeout = setTimeout(() => {
+                flight.controller.abort()
+                reject(new Error('peer discovery timed out'))
+              }, 2000)
+            }),
+          ])
+          // Only the endpoint's own shape is accepted — anything else is a
+          // regression to hear about, not a shape to guess at.
+          const shaped = (p) =>
+            p && typeof p.root === 'string' && p.root !== '' && typeof p.name === 'string'
+          next = res && Array.isArray(res.peers) && res.peers.every(shaped) ? res.peers : []
+          nextSelf = res && typeof res.self === 'string' ? res.self : null
+        } catch {
+          // An absent or slow optional endpoint leaves the current board's tab.
+        } finally {
+          clearTimeout(timeout)
+          if (peerPoll === flight) peerPoll = null
+        }
+        // Ordinary state polls do not make peer discovery stale. Only a root
+        // change or an active switch does; render the latest state if it did
+        // advance while this bounded request was in flight. The endpoint's
+        // self moves with a switch, so it lands here too — never from a
+        // response that arrived too late to paint.
+        if (startingPeerRoot || lastLedger?.root !== d.root) return
+        peers = next
+        if (nextSelf !== null) selfRoot = nextSelf
+        drawMeta(lastLedger || d)
+      }
+
       /* A dropped poll and a broken repaint are different failures and are caught
          apart. They used to share one try: a fetch that didn't come back jumped
          past every draw, so the pulse read offline while the board silently held
@@ -4435,10 +4625,28 @@
          business. The board keeps showing the last state that arrived, because a
          few seconds stale is still the truest picture anyone has. */
       async function tick() {
+        // Interval ticks never invalidate an in-flight request. The owning
+        // poll paints when it returns; only an explicit switch cancels it.
+        if (statePoll || startingPeerRoot) return
+        const gen = ++drawGen
+        const flight = {controller: new AbortController()}
+        statePoll = flight
         let d
+        let timeout
         try {
-          d = await (await fetch('state.json?t=' + Date.now(), {cache: 'no-store'})).json()
+          const response = await Promise.race([
+            fetch('state.json?t=' + Date.now(), {cache: 'no-store', signal: flight.controller.signal}),
+            new Promise((_, reject) => {
+              timeout = setTimeout(() => {
+                flight.controller.abort()
+                reject(new Error('state poll timed out'))
+              }, 10000)
+            }),
+          ])
+          d = await response.json()
         } catch (e) {
+          if (statePoll !== flight || gen !== drawGen) return
+          statePoll = null
           $('pulse').className = 'pulse stale'
           $('pulseLabel').textContent = 'offline'
           $('pulseTip').innerHTML =
@@ -4450,22 +4658,13 @@
             } If this stays, start the server with
             <code>scripts/dashboard.py</code>.</div>`
           return
+        } finally {
+          clearTimeout(timeout)
         }
 
-        // Peer boards decorate the title menu, not the board itself: a failed
-        // fetch hides the tab bar rather than crying offline. Only the
-        // endpoint's own shape is accepted — anything else is a regression
-        // to hear about, not a shape to guess at.
-        try {
-          const res = await (
-            await fetch('dashboards?t=' + Date.now(), {cache: 'no-store'})
-          ).json()
-          peers = res && Array.isArray(res.peers) ? res.peers : []
-          if (res && typeof res.self === 'string') selfRoot = res.self
-        } catch (e) {
-          peers = []
-        }
-
+        if (statePoll !== flight || gen !== drawGen) return
+        statePoll = null
+        if (startingPeerRoot && d.root !== startingPeerRoot) return
         try {
           draw(d)
         } catch (e) {
@@ -4492,6 +4691,7 @@
              <code>scripts/dashboard.py</code>, which rebuilds on a thread of its
              own. Every poll after the first is handed the last snapshot it
              finished, rather than waiting for a new one.</div>`
+        void pollPeers(d)
       }
       /* Pane placement is measured, not guessed. Which lane sits nearest an edge
          changes with the wrap, so a nth-child rule was always going to be wrong on

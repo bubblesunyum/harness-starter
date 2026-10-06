@@ -35,6 +35,8 @@ step "python parses" bash -c '
   done'
 
 step "dashboard board regression" python3 scripts/test-dashboard-board.py
+step "dashboard switch regression" python3 scripts/test-dashboard-switch.py
+step "dashboard polling regression" node scripts/test-dashboard-polling.mjs
 
 # A throwaway repo for the probe steps below: `fresh_probe || exit 1`, then
 # use $probe. Called bare, never captured — inside $(...) the EXIT trap would
