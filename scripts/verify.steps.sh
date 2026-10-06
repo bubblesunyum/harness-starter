@@ -562,6 +562,165 @@ probe_step "dashboard serves allowlisted assets and 404s the rest" bash -c '
   golden_probe || exit 1
   probe_dashboard_asset_serving "$probe" || exit 1'
 
+# Vercel chip probes: link + token fixtures through the real reader, with the
+# fetch stubbed — no network in the gate. Bare heredocs, no || guard on a
+# redirect line: bash 3.2 (the gate's shell) cannot re-import an exported
+# function carrying one. A failed fixture fails the asserts below rather than
+# passing silently.
+#
+# The loader plus link fixture the three vercel probes share: the caller feeds
+# the test body on stdin and it runs with db preloaded. Mode names whether the
+# fixture links, stays missing, or carries a torn file. One helper, called by
+# all three probes below.
+probe_dashboard_vercel_run() {
+  local probe="$1"
+  local mode="${2:-linked}"
+  local body
+  body=$(cat)
+  rm -f "$probe/.env.local" || return 1
+  if [ "$mode" = "linked" ]; then
+    mkdir -p "$probe/.vercel" || return 1
+    printf '{"projectId":"probe-proj","orgId":"probe-org"}' > "$probe/.vercel/project.json" || return 1
+    grep -q probe-proj "$probe/.vercel/project.json" ||
+      { echo "error: the fixture never linked"; return 1; }
+  elif [ "$mode" = "torn" ]; then
+    mkdir -p "$probe/.vercel" || return 1
+    printf '{torn' > "$probe/.vercel/project.json" || return 1
+  else
+    rm -rf "$probe/.vercel" || return 1
+  fi
+  (cd "$probe" && python3 - "$body" <<'PYEOF'
+import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location("probedb", "scripts/dashboard.py")
+db = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(db)
+exec(sys.argv[1])
+PYEOF
+  )
+}
+export -f probe_dashboard_vercel_run
+
+probe_dashboard_vercel_unlinked() {
+  local probe="$1"
+  [ ! -e "$probe/.vercel/project.json" ] || { echo "error: the fixture is already linked"; return 1; }
+  # Empty assignment, not env -u: env cannot invoke a shell function, and an
+  # empty token reads as absent the same way an unset one does.
+  VERCEL_API_TOKEN= probe_dashboard_vercel_run "$probe" unlinked <<'PYEOF'
+assert db.vercel_state() is None, "unlinked served %r" % (db.vercel_state(),)
+st = db.state(fast=True)
+assert "vercel" not in st, "unlinked state carries a vercel key"
+PYEOF
+  [ $? -eq 0 ] || return 1
+  VERCEL_API_TOKEN= probe_dashboard_vercel_run "$probe" torn <<'PYEOF'
+got = db.vercel_state()
+assert got == {"configured": False, "why": "link"}, "torn link %r" % (got,)
+st = db.state(fast=True)
+assert st.get("vercel") == {"configured": False, "why": "link"}, "state key %r" % (st.get("vercel"),)
+PYEOF
+}
+export -f probe_dashboard_vercel_unlinked
+
+# A linked checkout missing the token or the upstream ref reads as
+# unconfigured with why — never an exception — and the state key carries
+# exactly that.
+probe_dashboard_vercel_misconfigured() {
+  local probe="$1"
+  # Empty assignment, not env -u: env cannot invoke a shell function, and an
+  # empty token reads as absent the same way an unset one does.
+  VERCEL_API_TOKEN= probe_dashboard_vercel_run "$probe" linked <<'PYEOF'
+got = db.vercel_state()
+assert got == {"configured": False, "why": "token"}, "token case %r" % (got,)
+st = db.state(fast=True)
+assert st.get("vercel") == {"configured": False, "why": "token"}, "state key %r" % (st.get("vercel"),)
+open(".env.local", "wb").write(b"\xff\xfeVERCEL_API_TOKEN=probe-token\n")
+assert db.vercel_token() == "", "bad bytes read as a token"
+db._vercel["at"] = 0.0
+got = db.vercel_state()
+assert got == {"configured": False, "why": "token"}, "bad bytes %r" % (got,)
+PYEOF
+  [ $? -eq 0 ] || return 1
+  VERCEL_API_TOKEN=probe-token probe_dashboard_vercel_run "$probe" linked <<'PYEOF'
+import urllib.error
+# The fetch stays stubbed to fail: no shape under test may reach the network.
+def boom(*a):
+    raise urllib.error.URLError("probe must not fetch")
+db.vercel_fetch = boom
+got = db.vercel_state()
+assert got == {"configured": False, "why": "upstream"}, "upstream case %r" % (got,)
+PYEOF
+}
+export -f probe_dashboard_vercel_misconfigured
+
+# API states map to chip labels through the real reader with the fetch
+# stubbed: READY lands deployed, building states land deploying, anything
+# else failed, no match behind — a ragged payload and a dead API land
+# unreachable.
+probe_dashboard_vercel_labels() {
+  local probe="$1"
+  # --no-verify: the empty commit is scaffolding in a throwaway repo, and add
+  # wired the bead-naming hook here. Its message names nothing real.
+  (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --no-verify --allow-empty -m probe-init) || return 1
+  (cd "$probe" && git update-ref refs/remotes/origin/main HEAD) || return 1
+  [ -n "$(cd "$probe" && git rev-parse --verify origin/main 2>/dev/null || true)" ] ||
+    { echo "error: the fixture never grew an origin/main"; return 1; }
+  VERCEL_API_TOKEN=probe-token probe_dashboard_vercel_run "$probe" linked <<'PYEOF'
+import json
+import urllib.error
+head = db.vercel_head()
+assert head and len(head) == 40, "the fixture has no origin/main to match"
+def dep(state):
+    return {"state": state, "url": "probe.vercel.app", "createdAt": 1720000000000,
+            "meta": {"githubCommitSha": head, "githubCommitCreatedAt": 1720000000000}}
+def read(deps):
+    db.vercel_fetch = lambda *a, _d=deps: _d
+    db._vercel["at"] = 0.0
+    return db.vercel_state()
+got = read([dep("READY")])
+assert got.get("status") == "deployed" and got.get("sha") == head[:7], "ready %r" % (got,)
+assert got.get("url") == "https://probe.vercel.app", "url %r" % (got,)
+for building in ("QUEUED", "INITIALIZING", "BUILDING"):
+    got = read([dep(building)])
+    assert got.get("status") == "deploying", "%s %r" % (building, got)
+for failed in ("ERROR", "CANCELED"):
+    got = read([dep(failed)])
+    assert got.get("status") == "failed", "%s %r" % (failed, got)
+other = dep("READY")
+other["meta"] = {"githubCommitSha": "0" * 40}
+got = read([other])
+assert got.get("status") == "behind" and got.get("sha") is None, "no match %r" % (got,)
+got = read([None])
+assert got.get("status") == "unreachable", "ragged payload served %r" % (got,)
+def boom(*a):
+    raise urllib.error.URLError("probe offline")
+db.vercel_fetch = boom
+db._vercel["at"] = 0.0
+got = db.vercel_state()
+assert got.get("configured") is True and got.get("status") == "unreachable", "dead api %r" % (got,)
+assert "probe offline" in got.get("error", ""), "error lost %r" % (got,)
+assert "probe-token" not in json.dumps(got), "the token leaked into state: %r" % (got,)
+PYEOF
+}
+export -f probe_dashboard_vercel_labels
+
+# An unlinked checkout serves no vercel key: the page renders no chip and the
+# board reads as before this reader existed.
+probe_step "dashboard vercel unlinked serves no vercel key" bash -c '
+  golden_probe || exit 1
+  probe_dashboard_vercel_unlinked "$probe" || exit 1'
+
+# A linked checkout missing the token or the upstream ref reads as
+# unconfigured with why, never an exception.
+probe_step "dashboard vercel misconfigured reads unconfigured with why" bash -c '
+  golden_probe || exit 1
+  probe_dashboard_vercel_misconfigured "$probe" || exit 1'
+
+# API states map to chip labels; a dead API reads unreachable with the token
+# nowhere in what the reader serves.
+probe_step "dashboard vercel maps api states to chip labels" bash -c '
+  golden_probe || exit 1
+  probe_dashboard_vercel_labels "$probe" || exit 1'
+
 # A broken table keeps serving its last good values and says so on stderr,
 # while a good table beside it keeps updating.
 probe_step "dashboard keeps last good config on a broken table" bash -c '

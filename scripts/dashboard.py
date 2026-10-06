@@ -952,6 +952,159 @@ def cached_budget(skills, agents):
     return _budget["data"]
 
 
+# Vercel deploy status: is production at origin/main yet? Polled from the
+# deployments API on its own slower clock — every poll would burn rate limit
+# for a number that moves when Vercel finishes something, not between polls.
+# The token lives in VERCEL_API_TOKEN (env) or .env.local (gitignored) and
+# never leaves the server: the state carries only states, shas, and API
+# status text with any credential material scrubbed out. Unlinked checkouts
+# carry no `.vercel/project.json` and serve no key at all — no chip, no noise.
+_vercel = {"at": 0.0, "head": "", "data": None}
+VERCEL_TTL = 60.0
+# After a push lands, Vercel needs a minute or three to pick it up and build
+# it — asleep on the 60s clock the chip would miss deploying entirely and jump
+# from behind to deployed. So origin/main moving arms a hot poll: 10s cadence
+# until the deploy for the new head lands or ten minutes pass. This watches
+# the ref, not the button, so pushes from a terminal count too.
+_vercel_boost = {"until": 0.0}
+VERCEL_BOOST_TTL = 10.0
+VERCEL_BOOST_WINDOW = 600.0
+
+
+def vercel_ttl():
+    """This poll's refetch cadence: hot while a fresh push is still building."""
+    return VERCEL_BOOST_TTL if time.time() < _vercel_boost["until"] else VERCEL_TTL
+
+
+def vercel_ids():
+    """The project and org the link names, or blanks — a missing or torn
+    `.vercel/project.json` reads as unlinked, never as an error."""
+    try:
+        proj = json.loads((ROOT / ".vercel" / "project.json").read_text())
+        return proj.get("projectId", ""), proj.get("orgId", "")
+    except (OSError, ValueError):
+        return "", ""
+
+
+def vercel_token():
+    """The API token from the environment or the gitignored `.env.local`.
+    Quoted and `export`-prefixed shapes both read; anything unreadable reads
+    as absent. Never logged — only states and scrubbed status cross into state."""
+    tok = os.environ.get("VERCEL_API_TOKEN", "").strip()
+    if tok:
+        return tok
+    try:
+        with open(ROOT / ".env.local") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
+                key, eq, val = line.partition("=")
+                if eq and key.strip() == "VERCEL_API_TOKEN":
+                    return val.strip().strip("\"'")
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
+def vercel_fetch(project_id, org_id, token):
+    """The newest deployments for this project, most recent first."""
+    # Limit headroom: this sha may sit pages deep among other-branch deploys.
+    url = ("https://api.vercel.com/v6/deployments"
+           f"?projectId={project_id}&limit=10")
+    if org_id:
+        url += f"&teamId={org_id}"  # the API calls the org the team
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r).get("deployments", [])
+
+
+def vercel_summarize(deps, head):
+    """Match a deployment to origin/main by full sha. Only states and shas
+    come back — no secret ever touches this dict."""
+    match = next((d for d in deps
+                  if (d.get("meta") or {}).get("githubCommitSha") == head), None)
+    if match is None:
+        return {"status": "behind", "sha": None, "state": None,
+                "url": None, "when": None}
+    meta, state = match.get("meta") or {}, match.get("state")
+    status = ("deployed" if state == "READY"
+              else "deploying" if state in ("QUEUED", "INITIALIZING", "BUILDING")
+              else "failed")
+    created = meta.get("githubCommitCreatedAt") or match.get("createdAt", 0)
+    try:
+        when = time.strftime("%m-%d %H:%M", time.localtime(int(created) / 1000))
+    except (TypeError, ValueError):
+        when = None
+    return {"status": status, "sha": head[:7], "state": state,
+            "url": "https://" + match["url"] if match.get("url") else None,
+            "when": when}
+
+
+def vercel_scrub_error(e):
+    """One short line for the chip, with any credential material blanked."""
+    text = str(e).splitlines()[0][:120] if str(e) else "fetch failed"
+    return re.sub(r"(Bearer\s+)\S+", r"\1…", text)
+
+
+def vercel_head():
+    """origin/main's sha, or "". `--verify`, because a bare rev-parse echoes
+    an unresolvable ref onto stdout even while failing — which would read
+    here as a sha and burn a fetch for it."""
+    try:
+        r = subprocess.run(["git", "rev-parse", "--verify", "origin/main"],
+                           capture_output=True, text=True, timeout=25, cwd=ROOT)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def vercel_state(fast=False):
+    """This checkout's deploy status, or None when it links nowhere. Token,
+    link, upstream, and API failures all read as reasons, never exceptions —
+    the state build must not break over a chip."""
+    project_id, org_id = vercel_ids()
+    if not project_id:
+        # A torn link reads as re-link, not silence: the file exists but
+        # names no project, so the page can say so. Missing stays None.
+        if (ROOT / ".vercel" / "project.json").is_file():
+            return {"configured": False, "why": "link"}
+        return None
+    # The ref is read ahead of the cache so a push arms the hot poll even on
+    # a poll that reuses the last fetch.
+    head = vercel_head()
+    prev = _vercel.get("head")
+    _vercel["head"] = head
+    if head and prev and head != prev:
+        _vercel_boost["until"] = time.time() + VERCEL_BOOST_WINDOW
+        _vercel["at"] = 0.0
+    # The snapshot form runs cold on the hook path: reuse the last fetch
+    # rather than stalling session-end on a live round trip. The serving
+    # refresher always fetches, so the board still converges within a minute.
+    if fast or time.time() - _vercel["at"] < vercel_ttl():
+        return _vercel["data"]
+    token = vercel_token()
+    if not token:
+        data = {"configured": False, "why": "token"}
+    elif not head:
+        data = {"configured": False, "why": "upstream"}
+    else:
+        data = {"configured": True, "head": head[:7]}
+        try:
+            deps = vercel_fetch(project_id, org_id, token)
+            # A ragged payload reads as unreachable, never as an exception —
+            # a null entry or explicit-null list must not freeze the build.
+            data.update(vercel_summarize(deps, head))
+        except Exception as e:
+            data.update({"status": "unreachable", "error": vercel_scrub_error(e)})
+        else:
+            if data.get("status") in ("deployed", "failed"):
+                _vercel_boost["until"] = 0.0
+    _vercel["data"] = data
+    _vercel["at"] = time.time()
+    return data
+
+
 def budget(skills, agents):
     claude_md = (ROOT / "CLAUDE.md")
     brief = run("bash", str(ROOT / "scripts/brief.sh"))
@@ -979,7 +1132,7 @@ def budget(skills, agents):
 _harness_files = {}
 
 
-def state():
+def state(fast=False):
     skills, agents = catalog()
     git, verify, ledger = git_state(), verify_state(), ledger_state()
     # Swapped whole, not cleared and refilled: a sheet opening mid-rebuild would
@@ -1033,7 +1186,7 @@ def state():
 
     ledger["issues"] = live + [i for i in closed if i["id"] in keep]
 
-    return {
+    out = {
         "generated": time.strftime("%H:%M:%S"),
         # The checkout this snapshot describes. The page matches it after a
         # peer switch and repaints only once the rebuild has landed there.
@@ -1052,6 +1205,13 @@ def state():
         "board": board(),
         "assets": assets(),
     }
+    # Linked-only: an unlinked checkout carries no `.vercel/project.json`,
+    # so the key stays absent and the page renders no chip — the board reads
+    # exactly as before this reader existed.
+    vercel = vercel_state(fast=fast)
+    if vercel is not None:
+        out["vercel"] = vercel
+    return out
 
 
 # The work-tree row actions. Each takes the path straight off a request body,
@@ -1358,7 +1518,10 @@ _TASK_WHERE = {"header", "gate"} | {
     f"lane:{k}" for k in
     ("ready", "blocked", "in_progress", "review", "done", "backlog", "staging", "worktree")}
 
-_toml = {"mtime": ("", 0.0, 0), "reported": ("", 0.0, 0), "tasks": None, "name": None,
+# First-read defaults: a missing file returns early on the ("", 0.0, 0)
+# stamp below, so the table starts as the documented defaults rather than
+# Nones that tasks() would hand to an iterator.
+_toml = {"mtime": ("", 0.0, 0), "reported": ("", 0.0, 0), "tasks": dict(DEFAULT_TASKS), "name": None,
         "verdict": DEFAULT_VERDICT, "verdict_reported": ("", 0.0, 0),
         "theme": dict(DEFAULT_THEME), "theme_reported": ("", 0.0, 0),
         "board": {"hidden": [], "order": []}, "board_reported": ("", 0.0, 0),
@@ -2250,6 +2413,11 @@ def switch_root(payload):
         _verify["key"] = None
         _budget["data"] = None
         _stale["at"] = 0.0
+        # The deploy cache and its hot poll describe the old checkout's ref.
+        _vercel["data"] = None
+        _vercel["head"] = ""
+        _vercel["at"] = 0.0
+        _vercel_boost["until"] = 0.0
         # Run history belongs to the old checkout. The generation moves too, so
         # a run pressed over there that finishes over here lands nowhere.
         _runs.clear()
@@ -2259,7 +2427,9 @@ def switch_root(payload):
         # must not leak across as this checkout's buttons and verdict.
         with _toml_lock:
             _toml["mtime"] = None
-            _toml["tasks"] = None
+            # Defaults, never None: a read landing between here and the
+            # forced re-read must serve buttons, not crash on them.
+            _toml["tasks"] = dict(DEFAULT_TASKS)
             _toml["name"] = None
             _toml["verdict"] = DEFAULT_VERDICT
             _toml["theme"] = dict(DEFAULT_THEME)
@@ -2363,7 +2533,7 @@ def write_snapshot():
     # Path and build under one lock: ROOT must not move between them, or the
     # snapshot lands in a checkout whose board it doesn't describe.
     with _state_lock:
-        data = state()
+        data = state(fast=True)
         out = ROOT / "dashboard/state.json"
         out.parent.mkdir(exist_ok=True)
         out.write_text(json.dumps(data, indent=2))

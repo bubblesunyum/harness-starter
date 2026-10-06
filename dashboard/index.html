@@ -2017,6 +2017,11 @@
           <span id="pulseLabel">connecting</span>
           <span class="tip" id="pulseTip"></span>
         </span>
+        <span class="dot" hidden>·</span>
+        <span class="gate hoverable" id="deploy" tabindex="0" role="note" aria-label="Deploy detail" hidden>
+          <span id="deployLabel">—</span>
+          <span class="tip" id="deployTip"></span>
+        </span>
       </span>
       <div class="runs" id="runs"></div>
     </header>
@@ -4183,6 +4188,66 @@
         $('gate').className = 'gate hoverable ' + (v.status === 'passed' ? 'good' : v.status === 'failed' ? 'bad' : '')
       }
 
+      /* ---- the deploy chip ---------------------------------------------------- */
+      /* One word in the header, only while the project is Vercel-linked: green
+         means production is the push, anything else names where the push is.
+         Unlinked boards carry no d.vercel, so the chip and its dot stay hid
+         and the header reads exactly as before. */
+      let deploySignature = ''
+      function drawDeploy(d) {
+        const v = d.vercel
+        const show = !!v
+        $('deploy').hidden = !show
+        // The dot before the chip separates it from the pulse; a hidden chip
+        // leaves a doubled separator (see drawGate).
+        const dot = $('deploy').previousElementSibling
+        if (dot && dot.classList.contains('dot')) dot.hidden = !show
+        if (!show) return
+        const LABEL = {deployed: 'deployed', deploying: 'deploying', behind: 'behind', failed: 'failed', unreachable: 'unreachable'}
+        const WHY = {token: 'no token', link: 'not linked', upstream: 'no upstream'}
+        $('deployLabel').textContent = !v.configured ? WHY[v.why] || 'off' : LABEL[v.status] || 'unreachable'
+        $('deploy').className =
+          'gate hoverable ' + (v.status === 'deployed' ? 'good' : v.status === 'failed' || v.status === 'unreachable' ? 'bad' : '')
+        // The tip rebuilds wholesale, so an unchanged tip is left alone — the
+        // signature covers everything drawn, so a status change repaints.
+        const signature = JSON.stringify(v)
+        if (signature === deploySignature) return
+        deploySignature = signature
+        const tip = $('deployTip')
+        if (!tip) return
+        if (!v.configured) {
+          tip.innerHTML =
+            `<h3>deploy</h3>` +
+            (v.why === 'link'
+              ? `<div class="note"><code>.vercel/project.json</code> is missing — run
+                 <code>vercel link</code> once (per machine, gitignored).</div>`
+              : v.why === 'upstream'
+                ? `<div class="note"><code>origin/main</code> doesn't resolve here yet — fetch once.</div>`
+                : `<div class="note">Needs a token: create one at
+                   <code>vercel.com/account/tokens</code> and add
+                   <code>VERCEL_API_TOKEN=…</code> to <code>.env.local</code>.
+                   It lights up within a minute, no restart.</div>`)
+          return
+        }
+        const stateNote =
+          v.status === 'deployed'
+            ? `<div class="note">Production is this push.</div>`
+            : v.status === 'deploying'
+              ? `<div class="note">Vercel picked up the push and is building it.</div>`
+              : v.status === 'behind'
+                ? `<div class="note">No deployment for this push yet — Vercel hasn't picked it up.</div>`
+                : v.status === 'failed'
+                  ? `<div class="note">The newest deployment for this push failed or was canceled.</div>`
+                  : `<div class="note">Vercel didn't answer${v.error ? `: ${esc(v.error)}` : ''}.</div>`
+        tip.innerHTML =
+          `<h3>deploy</h3>` +
+          row('origin/main', v.head || '—') +
+          (v.sha ? row('deployment', `${v.sha} · ${v.state || ''}`, v.status === 'deployed' ? 'ok' : v.status === 'failed' ? 'bad' : 'warn') : '') +
+          (v.url ? row('url', v.url) : '') +
+          (v.when ? row('created', v.when) : '') +
+          stateNote
+      }
+
       let verifySignature = ''
       // The detected harness boards — drawn as the tab bar at the top of the
       // title popover. Empty until the first dashboards poll lands. selfRoot
@@ -4359,6 +4424,7 @@
         document.title = `${d.project} · harness`
         $('projectName').textContent = d.project
         drawGate(d)
+        drawDeploy(d)
       }
 
       /* A dropped poll and a broken repaint are different failures and are caught
