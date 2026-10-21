@@ -36,6 +36,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -221,10 +222,15 @@ def agent_config(agent):
 def rounds_so_far(session):
     """User messages already in a session, read back from opencode itself so
     the cap can't be dodged by losing a counter file."""
+    # Export to a file, not a pipe: opencode exits before draining a pipe, so
+    # a long session's JSON arrives truncated and reads as a bad id.
     try:
-        out = subprocess.run([opencode_bin(), "session", "export", session], capture_output=True,
-                             text=True, stdin=subprocess.DEVNULL, cwd=ROOT,
-                             timeout=EXPORT_TIMEOUT_SECONDS)
+        with tempfile.TemporaryFile(mode="w+") as sink:
+            code = subprocess.run([opencode_bin(), "session", "export", session], stdout=sink,
+                                  stderr=subprocess.DEVNULL, text=True, stdin=subprocess.DEVNULL,
+                                  cwd=ROOT, timeout=EXPORT_TIMEOUT_SECONDS).returncode
+            sink.seek(0)
+            out = subprocess.CompletedProcess([], code, sink.read(), "")
     except FileNotFoundError:
         fail("opencode is not on PATH or in ~/.opencode/bin — install it, set OPENCODE_BIN, "
              "or spawn the role natively")
