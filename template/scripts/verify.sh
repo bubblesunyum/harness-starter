@@ -123,6 +123,7 @@ step "codex regression" python3 scripts/test-codex-support.py
 step "agent runner" python3 scripts/test-agent.py
 step "model probes" python3 scripts/test-models-probe.py
 step "opencode permissions" python3 scripts/test-opencode-permissions.py
+step "opencode pin probes" python3 scripts/test-opencode-pin.py
 
 # The knowledge layer gets the same treatment as the code. A doc that quietly
 # stopped being true is worse than a missing one, and it can't be caught by
@@ -145,6 +146,17 @@ if agents_out="$(scripts/opencode-agents.py check 2>&1)"; then
 else
   failed=1
   echo "$agents_out"
+fi
+
+# opencode runs on one model at one variant (scripts/models.py), and every
+# file that could pick another — the roster, the generated agents,
+# opencode.json, the scripts, the docs — is held to it here. The prose rule
+# came first and a session with no terminal walked straight past it.
+if pin_out="$(scripts/opencode-pin.py check 2>&1)"; then
+  echo "$pin_out"
+else
+  failed=1
+  echo "$pin_out"
 fi
 
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────

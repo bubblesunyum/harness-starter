@@ -26,9 +26,10 @@ and refuses to replace a copied skill until its contents have been reconciled.
 
 For the review pass, run each configured reviewer through `scripts/agent.py`.
 Start the applicable roles together so they independently inspect the same
-packet through OpenCode. A visual review requires an image-capable roster model;
-`scripts/agent.py` checks that capability before running it.
-If a role has no suitable model, or an OpenCode run exits non-zero, run it as a
+packet through OpenCode, which runs every role on the one pinned model in
+`scripts/models.py` — never choose or pass another. A visual review requires
+that model to accept images; `scripts/agent.py` checks before running it.
+If it refuses, or an OpenCode run exits non-zero, run the role as a
 Codex subagent; a failed run is not a clean review. If a native role is
 unavailable, give a default subagent its `.claude/agents/<role>.md` prompt and
 the review packet.

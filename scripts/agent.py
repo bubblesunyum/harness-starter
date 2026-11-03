@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs one harness role through opencode, on the model the roster gives it.
+"""Runs one harness role through opencode, on the one model opencode runs on.
 
     scripts/agent.py <role> <message...>                   # a fresh session
     scripts/agent.py <role> --session <id> <message...>    # one more round in it
@@ -18,9 +18,11 @@ written without what it asked for.
 
 This is how a session in any tool — Claude Code included — hands work to a
 model that isn't its own: the packet or the brief is read in a separate
-opencode process, off the caller's context, on whatever model
-harness/models.json names for the role. (Reviewers are the exception: under
-opencode they always run as native subagents, never through this script.)
+opencode process, off the caller's context, on OPENCODE_MODEL at
+OPENCODE_VARIANT (scripts/models.py). There is no flag or variable to pick
+another: a roster naming one is refused before opencode is spawned.
+(Reviewers are the exception: under opencode they always run as native
+subagents, never through this script.)
 
 Roles with an agent in .opencode/agent/ (the reviewers, the librarian) run that
 agent. `implement` runs opencode's own build agent behind a short contract,
@@ -36,15 +38,17 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from models import catalog_entry, model_for, opencode_bin, variant_for
+from models import (OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT,
+                    ForeignModel, catalog_entry, model_for, opencode_bin,
+                    variant_for)
 
 MAX_ROUNDS = 3
 # Long enough for an implementer that runs the gate twice; short enough that a
@@ -134,7 +138,7 @@ def agent_for(role):
     if (OPENCODE_AGENTS / f"{role}.md").is_file():
         return role
     fail(f"no .opencode/agent/{role}.md — run scripts/opencode-agents.py, "
-         f"or check the role name against harness/models.json")
+         f"or check the role name against .claude/agents/")
 
 
 def catalog_accepts_images(model):
@@ -180,9 +184,38 @@ def require_image_model(model):
     fail(f"cannot verify image support for {model}; run reviewer-design natively")
 
 
+def pin_config(config):
+    """Every model choice in an inherited config, overwritten with the pin.
+    OPENCODE_CONFIG_CONTENT outranks opencode.json, so a `general` or
+    `explore` model inherited from the caller's environment would otherwise
+    run the implementer's own subagents on it — -m covers only the primary."""
+    config["model"] = OPENCODE_MODEL_ARG
+    for group in ("agent", "agents", "mode"):
+        agents = config.get(group)
+        if not isinstance(agents, dict):
+            continue
+        for settings in agents.values():
+            if isinstance(settings, dict):
+                settings["model"], settings["variant"] = OPENCODE_MODEL, OPENCODE_VARIANT
+    return config
+
+
+def inherited_config():
+    """The caller's OPENCODE_CONFIG_CONTENT as an object, or fail loudly."""
+    existing = os.environ.get("OPENCODE_CONFIG_CONTENT", "").strip()
+    try:
+        config = json.loads(existing) if existing else {}
+    except json.JSONDecodeError:
+        fail("OPENCODE_CONFIG_CONTENT is set but is not JSON — unset it or fix it")
+    if not isinstance(config, dict) or not isinstance(config.get("agent", {}), dict):
+        fail("OPENCODE_CONFIG_CONTENT is set but is not a JSON object with an "
+             "object for `agent`")
+    return config
+
+
 def agent_config(agent):
     """OPENCODE_CONFIG_CONTENT that lets `opencode run --agent` use a generated
-    agent, and lets it read what review.sh hands it.
+    agent, and lets it read what review.sh hands it — pinned throughout.
 
     The generated agents are `mode: subagent` so they stay out of opencode's
     agent picker, and `run --agent` quietly falls back to the default agent for
@@ -193,14 +226,7 @@ def agent_config(agent):
     and headless opencode auto-rejects every read out there. Both spellings are
     granted because /tmp is a symlink on macOS and opencode checks the path as
     the agent wrote it."""
-    existing = os.environ.get("OPENCODE_CONFIG_CONTENT", "").strip()
-    try:
-        config = json.loads(existing) if existing else {}
-    except json.JSONDecodeError:
-        fail("OPENCODE_CONFIG_CONTENT is set but is not JSON — unset it or fix it")
-    if not isinstance(config, dict) or not isinstance(config.get("agent", {}), dict):
-        fail("OPENCODE_CONFIG_CONTENT is set but is not a JSON object with an "
-             "object for `agent`")
+    config = inherited_config()
     if not isinstance(config.get("agent", {}).get(agent, {}), dict):
         fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent} to something that "
              f"isn't an object — unset it or fix it")
@@ -216,15 +242,15 @@ def agent_config(agent):
              f"to something that isn't an object — unset it or fix it")
     for tmp in sorted({"/tmp", os.path.realpath("/tmp")}):
         outside[f"{tmp}/*"] = "allow"
-    return json.dumps(config)
+    return json.dumps(pin_config(config))
 
 
 def rounds_so_far(session):
     """User messages already in a session, read back from opencode itself so
     the cap can't be dodged by losing a counter file."""
-    # Export to a file, not a pipe: opencode exits before draining a pipe, so
-    # a long session's JSON arrives truncated and reads as a bad id.
     try:
+        # Export to a file, not a pipe: opencode exits before draining a pipe, so
+        # a long session's JSON arrives truncated and reads as a bad id.
         with tempfile.TemporaryFile(mode="w+") as sink:
             code = subprocess.run([opencode_bin(), "session", "export", session], stdout=sink,
                                   stderr=subprocess.DEVNULL, text=True, stdin=subprocess.DEVNULL,
@@ -253,10 +279,6 @@ def explain(error):
     data = error.get("data", {})
     message = data.get("message") if isinstance(data, dict) else None
     message = message or error.get("message") or error.get("name") or str(error)
-    if "free tier can only be used from within OpenCode" in message:
-        return (f"{message}\n  OpenCode's free models refuse every agent but "
-                f"opencode's built-in ones. Point this role at a paid model "
-                f"in harness/models.json.")
     return message
 
 
@@ -280,24 +302,32 @@ def parse_events(stdout, session):
     return texts, errors, session_id
 
 
+def require_pin(model, variant):
+    """The last check before opencode is spawned: whatever the roster said,
+    the run goes out on the pin or not at all. Redundant with model_for today,
+    on purpose — a future caller that skips it still can't reach opencode."""
+    if (model, variant) != (OPENCODE_MODEL, OPENCODE_VARIANT):
+        fail(f"refusing to run opencode on {model}#{variant} — opencode runs "
+             f"only on {OPENCODE_MODEL_ARG} (scripts/models.py)")
+
+
 def run_agent(agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
     fail loudly."""
-    # The model suffix is this script's whole variant mechanism — including
-    # for `implement`, which runs opencode's own build agent with no file of
-    # ours at all. (Native opencode spawns get their variant from the `model:`
-    # line the generator baked in instead.) opencode 2 dropped `--variant` for
-    # `-m provider/model#variant`.
+    require_pin(model, variant)
+    # -m carries the variant too, including for `implement`, which runs
+    # opencode's own build agent with no file of ours at all. opencode 2
+    # dropped `--variant` for `-m provider/model#variant`.
     # `--standalone`: opencode 2 otherwise hands the run to a shared background
     # service, which never sees this process's OPENCODE_CONFIG_CONTENT (so no
     # agent promotion and no /tmp grant) and interrupts runs sharing it.
     command = [opencode_bin(), "run", "--standalone", "--format", "json", "--agent", agent,
-               "-m", f"{model}#{variant}" if variant else model]
+               "-m", OPENCODE_MODEL_ARG]
     if session:
         command += ["--session", session]
     env = dict(os.environ)
-    if agent != "build":
-        env["OPENCODE_CONFIG_CONTENT"] = agent_config(agent)
+    env["OPENCODE_CONFIG_CONTENT"] = (json.dumps(pin_config(inherited_config()))
+                                      if agent == "build" else agent_config(agent))
     try:
         # `--`, or a message starting with "-" is read as a flag and dropped.
         out = subprocess.run(command + ["--", prompt], capture_output=True, text=True,
@@ -334,10 +364,10 @@ def main(argv):
     role, session, message = parse_args(argv)
     require_opencode_v2()
     agent = agent_for(role)
-    model = model_for(role)
-    if not model:
-        fail(f"no model for {role} in harness/models.json — "
-             f"run scripts/models.py ensure")
+    try:
+        model, variant = model_for(role), variant_for(role)
+    except ForeignModel as exc:
+        fail(str(exc))
     if role == "reviewer-design":
         require_image_model(model)
 
@@ -353,11 +383,9 @@ def main(argv):
     prompt = message
     if role == "implement" and not session:
         prompt = IMPLEMENT_CONTRACT + message
-    variant = variant_for(role)
     reply, session_id, refused = run_agent(agent, model, variant, session, prompt)
     print(reply)
-    model_label = f"{model} ({variant})" if variant else model
-    print(f"agent.py: {role} on {model_label} · session {session_id} · "
+    print(f"agent.py: {role} on {model} ({variant}) · session {session_id} · "
           f"round {round_number} of {MAX_ROUNDS}", file=sys.stderr)
     if refused:
         # The reply is printed anyway — an implementer's report still says what

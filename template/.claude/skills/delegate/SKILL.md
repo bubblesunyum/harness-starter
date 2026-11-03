@@ -1,12 +1,13 @@
 ---
 name: delegate
-description: Hand implementation to an opencode agent on another model and review what comes back — brief it, read its diff, send at most two rounds of revisions, then accept, finish it yourself, or re-brief. Use when a bead is specced well enough that the work is typing rather than deciding, or when the user asks to delegate or to spend fewer of this account's tokens on implementation.
+description: Hand implementation to an opencode agent and review what comes back — brief it, read its diff, send at most two rounds of revisions, then accept, finish it yourself, or re-brief. Use when a bead is specced well enough that the work is typing rather than deciding, or when the user asks to delegate or to spend fewer of this account's tokens on implementation.
 ---
 
 # Delegating implementation
 
 `scripts/agent.py implement` runs the change in a separate opencode process, on
-the model `harness/models.json` gives the `implement` role. You stay the
+the one model opencode runs on (`OPENCODE_MODEL` in `scripts/models.py` — never
+pick or pass another). You stay the
 reviewer: the implementer never sees your context, and you never pay for its
 reads. That split only earns its keep when you actually review — a delegated
 change you wave through is an unreviewed change with extra steps.
@@ -71,8 +72,8 @@ approach one message at a time is the long thread this cap exists to prevent.
 
 ## Leave a trace
 
-Note it on the bead — `bd note <id> "delegated: <model>, <rounds> rounds,
+Note it on the bead — `bd note <id> "delegated: <rounds> rounds,
 <accepted | finished by hand | re-briefed>"`. Over a few dozen of these, that is
-the record of which models can carry which work, and it's the only one there is.
+the record of which work delegation can carry, and it's the only one there is.
 
 <!-- tracks: scripts/agent.py -->

@@ -14,12 +14,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# Per-role models live machine-locally in harness/models.json, and a fresh
-# clone has none. First review writes it (prompting in a terminal, guidance
-# otherwise); later runs are silent — so the reviewers below always know what
-# they run on, and the gate's agent check has something to compare against.
-# Stderr stays visible: the no-terminal guidance and any traceback are the
-# signal here, not noise. `|| true` only keeps a failing ensure from taking
+# The per-role roster lives machine-locally in harness/models.json, and a
+# fresh clone has none. First review writes it, pinned and without prompting;
+# later runs are silent, and a foreign roster is rewritten and named. Stderr
+# stays visible: what ensure replaced and any traceback are the signal here,
+# not noise. `|| true` only keeps a failing ensure from taking
 # the packet down with it.
 scripts/models.py ensure || true
 

@@ -69,12 +69,13 @@ else. One message per worker:
 Spawn one implementer per partition, in parallel, all on opencode — the same
 rule reviewers already follow. Inside opencode, spawn native background
 subagents. From Claude Code or Codex, run them through the opencode CLI
-(`scripts/agent.py` with the `harness/models.json` roster — never the
-host-native Task/agent mechanism for a round). The parallel same-tree
-contract below travels in every brief regardless of tool. (The roster needs
-an implement role carrying that contract; until it has one, the CLI call
-must pass the brief through as-is — do not duplicate the contract
-here — this skill *is* it.)
+(`scripts/agent.py implement` — never the host-native Task/agent
+mechanism for a round). Every worker runs on the one pinned opencode model
+(`scripts/models.py`): never choose, pass or configure another, and never
+reach for a cheaper "bulk" model to afford a wider round — narrow the round
+instead. The parallel same-tree contract below travels in every brief
+regardless of tool; pass it through in the brief as-is — do not duplicate
+the contract here — this skill *is* it.
 
 **Parallel same-tree contract** (in every brief, no exceptions):
 
@@ -134,7 +135,7 @@ file the rest as beads, and say plainly what you left and why.
   and get an answer.
 - Close each bead with the reason (`bd close <id> --reason "<what
   actually happened>"`), and note ledger identity for subagent work
-  on the bead (`bd note <id> "round: <worker-model>, <rounds> rounds,
+  on the bead (`bd note <id> "round: <rounds> rounds,
   <accepted | revised | finished by hand>"`) — over a few dozen
   rounds that is the only record of what parallel implementation
   actually costs and carries.

@@ -1124,26 +1124,31 @@ probe_step "harness diverge validates before acknowledging" bash -c '
   grep -qxF "scripts/review.sh" "$probe/harness/diverged.txt" ||
     { echo "error: diverge never recorded the fork"; exit 1; }'
 
-# A role's packet budget is its explicit "context", else a heuristic from the
-# model id — Claude-pattern ids read as 200000, anything else as 8192 — and an
-# unconfigured role has no budget at all rather than a guessed one.
-probe_step "models.py budget resolves explicit, pattern, and default budgets" bash -c '
+# A role's packet budget is its explicit "context", else the catalog's limit
+# for the pinned model, else the pin's own window — and a role the harness doesn't know has
+# no budget at all rather than a guessed one. A foreign roster entry is
+# refused rather than budgeted.
+probe_step "models.py budget resolves explicit and default budgets" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
-{"reviewer-taste": {"model": "ollama/qwen3:27b", "context": 12345},
- "reviewer-correctness": "opencode/anthropic/claude-opus-5-5",
- "reviewer-design": {"model": "ollama/qwen3:27b"}}
+{"reviewer-taste": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 12345},
+ "reviewer-design": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh"},
+ "librarian": {"model": "ollama/qwen3:27b", "variant": "xhigh"}}
 EOF
     { echo "error: cannot write test roster"; exit 1; }
+  # An empty catalog cache, so the default is OPENCODE_CONTEXT rather than
+  # whatever this machine has cached for the pinned model.
+  export XDG_CACHE_HOME="$probe/no-cache"
   [ "$(python3 "$probe/scripts/models.py" budget reviewer-taste)" = "12345" ] ||
     { echo "error: explicit context not honored"; exit 1; }
-  [ "$(python3 "$probe/scripts/models.py" budget reviewer-correctness)" = "200000" ] ||
-    { echo "error: claude pattern not 200k"; exit 1; }
-  [ "$(python3 "$probe/scripts/models.py" budget reviewer-design)" = "8192" ] ||
-    { echo "error: default not conservative"; exit 1; }
+  [ "$(python3 "$probe/scripts/models.py" budget reviewer-design)" = "1048576" ] ||
+    { echo "error: default is not the pin window"; exit 1; }
   # if-form, not trailing &&: a failed && as the last line exits the step 1.
   if python3 "$probe/scripts/models.py" budget nobody >/dev/null 2>&1; then
-    echo "error: budget passed for an unconfigured role"; exit 1;
+    echo "error: budget passed for an unknown role"; exit 1;
+  fi
+  if python3 "$probe/scripts/models.py" budget librarian >/dev/null 2>&1; then
+    echo "error: budget passed for a foreign roster entry"; exit 1;
   fi'
 
 # An over-budget packet refuses with the binding role and the narrower command
@@ -1151,9 +1156,9 @@ EOF
 probe_step "review.sh refuses a packet over the smallest reviewer budget" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
-{"reviewer-taste": {"model": "ollama/qwen3:27b", "context": 100},
- "reviewer-correctness": {"model": "ollama/qwen3:27b", "context": 100},
- "reviewer-design": {"model": "ollama/qwen3:27b", "context": 100}}
+{"reviewer-taste": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 100},
+ "reviewer-correctness": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 100},
+ "reviewer-design": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 100}}
 EOF
     { echo "error: cannot write test roster"; exit 1; }
   echo "# change" >> "$probe/scripts/brief.sh" ||
@@ -1170,9 +1175,9 @@ EOF
 probe_step "review.sh passes a packet within budget" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
-{"reviewer-taste": {"model": "ollama/qwen3:27b", "context": 1000000},
- "reviewer-correctness": {"model": "ollama/qwen3:27b", "context": 1000000},
- "reviewer-design": {"model": "ollama/qwen3:27b", "context": 1000000}}
+{"reviewer-taste": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 1000000},
+ "reviewer-correctness": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 1000000},
+ "reviewer-design": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 1000000}}
 EOF
     { echo "error: cannot write test roster"; exit 1; }
   echo "# change" >> "$probe/scripts/brief.sh" ||
@@ -1182,34 +1187,35 @@ EOF
   echo "$out" | grep -q "review-packet" ||
     { echo "error: review never printed the packet"; echo "$out"; exit 1; }'
 
-# The roster is baked into generated agents so native opencode spawns run
-# each role's effort (har-8ox reverses har-64r): a populated roster emits
-# `model: provider/model#variant` lines, and a rosterless machine fails check
-# with guidance instead of silently passing model-free. Asserted both ways.
-probe_step "generated opencode agents bake in the roster" bash -c '
+# A fresh install runs opencode on the pin and nothing else (har-wbbe): the
+# generated agents carry it with no roster at all, ensure writes the pinned
+# roster with no terminal, the pin check passes the install as it stands,
+# and a foreign roster planted afterwards fails it.
+probe_step "a fresh install pins opencode to one model" bash -c '
   golden_probe || exit 1
-  cat > "$probe/harness/models.json" <<EOF ||
-{"reviewer-taste": {"model": "some-provider/some-model", "context": 12345, "variant": "low"},
- "reviewer-correctness": "other-provider/other-model",
- "reviewer-design": {"model": "third-provider/third-model", "variant": "medium"},
- "librarian": "fourth-provider/fourth-model"}
-EOF
-    { echo "error: cannot write test roster"; exit 1; }
-  (cd "$probe" && ./scripts/opencode-agents.py >/dev/null 2>&1) ||
-    { echo "error: generate failed with a populated roster"; exit 1; }
-  grep -q "^model: some-provider/some-model#low" "$probe/.opencode/agent/reviewer-taste.md" ||
-    { echo "error: taste model#variant not baked in"; exit 1; }
-  grep -q "^model: other-provider/other-model" "$probe/.opencode/agent/reviewer-correctness.md" ||
-    { echo "error: correctness model not baked in"; exit 1; }
-  if grep -H "^variant:" "$probe"/.opencode/agent/*.md; then
-    echo "error: bare variant line emitted — variant rides on the model line"; exit 1;
-  fi
+  pin="opencode-go/muse-spark-1.3-contributor"
+  rm -f "$probe/harness/models.json"
   (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1) ||
-    { echo "error: check failed with a populated roster"; exit 1; }
-  rm "$probe/harness/models.json" ||
-    { echo "error: cannot remove test roster"; exit 1; }
-  if (cd "$probe" && ./scripts/opencode-agents.py check >/dev/null 2>&1); then
-    echo "error: check passed with no roster — fresh clone must fail with guidance"; exit 1;
+    { echo "error: generated agents stale on a fresh install"; exit 1; }
+  for agent in "$probe"/.opencode/agent/*.md; do
+    grep -qxF "model: $pin#xhigh" "$agent" ||
+      { echo "error: $agent does not carry the pin"; exit 1; }
+  done
+  (cd "$probe" && ./scripts/models.py ensure </dev/null >/dev/null 2>&1) ||
+    { echo "error: ensure failed without a terminal"; exit 1; }
+  python3 - "$probe/harness/models.json" "$pin" <<EOF ||
+import json, sys
+roster = json.load(open(sys.argv[1]))
+pinned = {"model": sys.argv[2], "variant": "xhigh"}
+sys.exit(0 if roster and all(entry == pinned for entry in roster.values()) else 1)
+EOF
+    { echo "error: ensure wrote something other than the pin"; exit 1; }
+  out=$(cd "$probe" && ./scripts/opencode-pin.py check 2>&1) ||
+    { echo "error: pin check failed a fresh install"; echo "$out"; exit 1; }
+  echo "{\"implement\": {\"model\": \"opencode-go/cheap\"}}" > "$probe/harness/models.json" ||
+    { echo "error: cannot plant a foreign roster"; exit 1; }
+  if (cd "$probe" && ./scripts/opencode-pin.py check >/dev/null 2>&1); then
+    echo "error: pin check passed a foreign roster"; exit 1;
   fi'
 
 # A .opencode/opencode.json without instructions shadows the root file —

@@ -147,8 +147,8 @@ session-only handoff and laurel commits use a narrow path-based exception.
 ## Why it's shaped this way
 
 One account, not a team of thirteen agents, so the whole design is
-token-budgeted: progressive disclosure over always-loaded context, cheap models
-for bulk reading, diff-scoped review. The stock beads SessionStart hook
+token-budgeted: progressive disclosure over always-loaded context, cheap
+Claude tiers for bulk reading, diff-scoped review. The stock beads SessionStart hook
 (`bd prime`, ~1900 tokens every session) is replaced by `scripts/brief.sh`
 (~500) — see below, because that replacement does not stay done on its own.
 
@@ -227,36 +227,35 @@ it worked and fails at spawn. So the prompt body has one home,
 header around it into `.opencode/agent/`. The gate checks the two match, because
 nothing about editing the source makes opencode complain.
 
-The generated agents bake the roster in: a role with a roster entry gets a
-`model: provider/model#variant` line (bare model when no variant), so a
-native opencode spawn runs the role's effort rather than inheriting the
-session's. A role with no roster entry gets no model line and inherits.
-Baking is deliberate — it is what keeps `reviewer-taste` the cheap one under
-a native opencode spawn — and it costs a fresh clone without
-harness/models.json a guided failure: check refuses with the `ensure`
-command instead of silently passing model-free. The roster still picks the
-model everywhere else a model is actually chosen: `scripts/agent.py` passes
-it as `-m`.
+**opencode runs on one model at one variant, and the harness enforces it.**
+`OPENCODE_MODEL` and `OPENCODE_VARIANT` in `scripts/models.py` are the only
+definition. `scripts/agent.py` sends them as `-m model#variant` and refuses to
+spawn on anything else; the generator bakes them onto every agent's `model:`
+line; `opencode.json` pins the session model and every built-in agent to them;
+`scripts/opencode-pin.py` fails the gate on any roster entry, agent file,
+config, script or doc example that names another. `harness/models.json` only
+records the pin per role plus an optional packet budget, and `ensure` writes
+it without prompting.
 
-A role's roster entry may add a `variant` — the provider's reasoning effort,
-such as `xhigh` — which agent.py sends as `-m provider/model#variant` and
-the generator writes after `#` on the `model:` line. `implement` runs
-opencode's own build agent, which has no generated file at all.
+This used to be a choice, and the choice is what went wrong: on 2026-11-03 a
+project's `ensure` couldn't prompt (no terminal in the desktop app), a session
+hand-wrote a roster of paid models across every role, and two orchestrate
+rounds spawned ~15 sessions on them and exhausted the provider's limit. The
+rule had been prose. Now there is nothing to choose, and every path that could
+choose is checked.
 
-Three paths to a model: the `.claude/agents/` frontmatter names Claude Code's
-reviewers; the roster names `scripts/agent.py`'s and the generated opencode
-agents'; Codex inherits the host's. A model named in one path says nothing
-about the others.
+Two paths to a model: the `.claude/agents/` frontmatter names Claude Code's
+reviewers; the pin names everything opencode runs. Codex inherits the host's.
 
-**`scripts/agent.py` is how every tool except opencode reaches the roster.**
+**`scripts/agent.py` is how every tool except opencode reaches opencode.**
 
 It runs one role through `opencode run` — so Claude Code can put its
 reviewers, and delegated implementation, on another provider's bill without
 the packet ever entering its own context. Inside opencode itself, reviewers
-always run as native subagents on their pinned roster models — no reviewer is
+always run as native subagents on the pinned model — no reviewer is
 ever routed through `agent.py` from an opencode session. (Delegated
 implementation is the exception: the `delegate` skill sends it through
-`agent.py` from any tool, for the roster model.) Three behaviours of `opencode run` shaped it, all
+`agent.py` from any tool.) Three behaviours of `opencode run` shaped it, all
 found by running it:
 
 - `--agent` given a `mode: subagent` agent prints a warning and falls back to
@@ -264,9 +263,6 @@ found by running it:
   promotes the agent to primary for its own process through
   `OPENCODE_CONFIG_CONTENT`, leaving the generated files — and the picker —
   alone.
-- OpenCode's free models answer the built-in agents and refuse every custom one
-  (a 403 naming the free tier). A roster pointing a reviewer at a `-free` model
-  works for `implement`, which runs `build`, and fails for every reviewer.
 - Headless, every permission prompt is answered no and the agent carries on
   without it — including reads outside the project, which is where review.sh
   puts the packet. Reviewers are granted `/tmp`, and any other refusal makes

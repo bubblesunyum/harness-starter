@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Exercise the models.py roster probe against a fake opencode on PATH.
+"""Exercise models.py — the pin, the roster that records it, the ensure probe
+and the packet budget — against a fake opencode on PATH.
 
     python3 scripts/test-models-probe.py
 
-A probe is one trivial `opencode run` per distinct pick at `ensure` time, so
-a candidate that can't run here fails at prompt time instead of mid-review.
-The fake answers runs; what's under test is the error reading, the argv the
-probe sends, and the pick-again-or-keep loop around it.
+What's under test: the probe sends only the pinned model, `ensure` writes
+the pinned roster with or without a terminal and never offers another model,
+and a roster naming anything else is refused by every reader.
 """
 
 import json
@@ -72,7 +72,7 @@ class ProbeErrorTests(unittest.TestCase):
         self.assertIn("no reply", models.probe_error("", 0, ""))
 
 
-class ProbeModelTests(unittest.TestCase):
+class ProbePinnedTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="models probe ")
         self.addCleanup(self.temp.cleanup)
@@ -86,23 +86,19 @@ class ProbeModelTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
                         FAKE_LOG=str(self.log),
                         FAKE_EVENTS=text_event("ok"))
+        self.env.pop("OPENCODE_BIN", None)
 
     def calls(self):
         if not self.log.exists():
             return []
         return [json.loads(l)["argv"] for l in self.log.read_text().splitlines()]
 
-    def test_answering_model_probes_clean(self):
-        # The fake is on PATH through the environment; the probe inherits it.
-        # No variant: the probe certifies the model answers, nothing more —
-        # variants ride -m only once the runner speaks it, so the probe
-        # must not bless what the runtime can't execute.
+    def test_the_probe_sends_the_pin_and_only_the_pin(self):
         with mock.patch.dict(os.environ, self.env):
-            err = models.probe_model("go/fine")
+            err = models.probe_pinned()
         self.assertIsNone(err)
         argv = self.calls()[0]
-        self.assertIn("-m", argv)
-        self.assertEqual(argv[argv.index("-m") + 1], "go/fine")
+        self.assertEqual(argv[argv.index("-m") + 1], models.OPENCODE_MODEL_ARG)
         self.assertIn("--standalone", argv)
         self.assertNotIn("--variant", argv)
         self.assertEqual(argv[-1], models.PROBE_PROMPT)
@@ -111,7 +107,7 @@ class ProbeModelTests(unittest.TestCase):
         env = dict(self.env, FAKE_EVENTS=error_event("region not enabled"),
                    FAKE_EXIT="1")
         with mock.patch.dict(os.environ, env):
-            err = models.probe_model("go/region-locked")
+            err = models.probe_pinned()
         self.assertEqual(err, "region not enabled")
 
     def test_live_error_shape_reads_the_message(self):
@@ -120,103 +116,129 @@ class ProbeModelTests(unittest.TestCase):
                                     "message": "Model unavailable: x/y"}}) + "\n"
         self.assertEqual(models.probe_error(out, 1, ""), "Model unavailable: x/y")
 
-    def test_missing_opencode_keeps_on_trust(self):
+    def test_missing_opencode_is_named(self):
         # An empty HOME so the ~/.opencode/bin fallback misses too: without
         # it the test reads this machine's real install instead of nothing.
         home = Path(self.temp.name) / "home"
         home.mkdir()
         with mock.patch.dict(os.environ, {"PATH": self.temp.name,
                                            "HOME": str(home)}):
-            err = models.probe_model("go/whatever")
+            err = models.probe_pinned()
         self.assertIn("cannot probe", err)
 
     def test_hung_model_reports_the_timeout(self):
         env = dict(self.env, FAKE_SLEEP="5")
         with mock.patch.dict(os.environ, env):
             with mock.patch.object(models, "PROBE_TIMEOUT_SECONDS", 1):
-                err = models.probe_model("go/slow")
+                err = models.probe_pinned()
         self.assertIn("no reply in 1s", err)
 
 
-class EnsureLoopTests(unittest.TestCase):
+class RosterTests(unittest.TestCase):
+    """ensure, the readers, and the states between them, in a throwaway root."""
+
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="models ensure ")
+        self.temp = tempfile.TemporaryDirectory(prefix="models roster ")
         self.addCleanup(self.temp.cleanup)
         self.fake_root = Path(self.temp.name)
         self.roster = self.fake_root / "harness" / "models.json"
+        for patch in (mock.patch.object(models, "ROOT", self.fake_root),
+                      mock.patch.object(models, "ROSTER", self.roster)):
+            patch.start()
+            self.addCleanup(patch.stop)
 
-    def ensure(self, inputs, previous=None, probes=None,
-               which="/fake/opencode", candidates=("m1", "m2")):
-        if previous is not None:
-            self.roster.parent.mkdir(parents=True, exist_ok=True)
-            self.roster.write_text(json.dumps(previous))
-        probed = probes if probes is not None else {}
-        calls = []
+    def write(self, data):
+        self.roster.parent.mkdir(parents=True, exist_ok=True)
+        self.roster.write_text(data if isinstance(data, str) else json.dumps(data))
 
-        def fake_probe(model):
-            calls.append(model)
-            return probed.get(model, None)
-
+    def ensure(self, tty, again=False, probe=None):
         stdin = mock.Mock()
-        stdin.isatty.return_value = True
-        with mock.patch.object(models, "ROOT", self.fake_root), \
-             mock.patch.object(models, "ROSTER", self.roster), \
-             mock.patch.object(models, "detect", return_value=(list(candidates), ["opencode"])), \
-             mock.patch.object(models, "probe_model", side_effect=fake_probe), \
-             mock.patch("builtins.input", side_effect=inputs), \
-             mock.patch.object(models.sys, "stdin", stdin), \
-             mock.patch.object(models.shutil, "which", return_value=which):
-            self.assertEqual(models.ensure(again=True), 0)
-        return json.loads(self.roster.read_text()), calls
+        stdin.isatty.return_value = tty
+        probes = []
 
-    def test_failed_probe_re_picks_and_probes_once_per_model(self):
-        roster, calls = self.ensure(["1", "2", "", "", "", "", ""],
-                                    probes={"m1": "region not enabled"})
-        self.assertTrue(all(entry["model"] == "m2" for entry in roster.values()))
-        self.assertEqual(calls, ["m1", "m2"])
+        def fake_probe():
+            probes.append(True)
+            return probe
 
-    def test_re_picking_the_failed_model_keeps_it_on_trust(self):
-        roster, calls = self.ensure(["1", "1", "", "", "", "", ""],
-                                    probes={"m1": "region not enabled"})
-        self.assertTrue(all(entry["model"] == "m1" for entry in roster.values()))
-        self.assertEqual(calls, ["m1"])
+        err = io.StringIO()
+        with mock.patch.object(models.sys, "stdin", stdin), \
+             mock.patch.object(models, "probe_pinned", side_effect=fake_probe), \
+             mock.patch.object(models.shutil, "which", return_value="/fake/opencode"), \
+             mock.patch("builtins.input", side_effect=AssertionError("ensure prompted")), \
+             mock.patch("sys.stdout", io.StringIO()), mock.patch("sys.stderr", err):
+            self.assertEqual(models.ensure(again=again), 0)
+        return json.loads(self.roster.read_text()), probes, err.getvalue()
 
-    def test_previous_variant_and_context_survive(self):
-        previous = {"reviewer-taste": {"model": "old", "variant": "xhigh", "context": 99}}
-        roster, calls = self.ensure(["2", "", "", "", "", ""],
-                                    previous=previous)
-        taste = roster["reviewer-taste"]
-        self.assertEqual((taste["model"], taste["variant"], taste["context"]),
-                         ("m2", "xhigh", 99))
-        self.assertIn("m2", calls)
+    def assert_pinned(self, roster):
+        self.assertEqual(set(roster), set(models.ROLES) | set(roster))
+        for role, entry in roster.items():
+            self.assertEqual((entry["model"], entry["variant"]),
+                             (models.OPENCODE_MODEL, models.OPENCODE_VARIANT), role)
 
-    def test_no_opencode_writes_without_probing(self):
-        roster, calls = self.ensure(["", "", "", "", "", ""],
-                                    which=None, candidates=("m1",))
-        self.assertTrue(all(entry["model"] == "m1" for entry in roster.values()))
-        self.assertEqual(calls, [])
+    def test_no_terminal_writes_the_pinned_roster_without_probing(self):
+        roster, probes, _ = self.ensure(tty=False)
+        self.assert_pinned(roster)
+        self.assertEqual(set(roster), set(models.ROLES))
+        self.assertEqual(probes, [])
+        self.assertEqual(models.roster_state(), "ok")
 
-    def test_first_default_skips_free_tier_ids(self):
-        # Free-tier ids refuse every custom agent, so the chained default
-        # starts at the first paid id — free stays pickable by number.
-        roster, _ = self.ensure(["", "", "", "", "", ""],
-                                candidates=("m1-free", "m2"))
-        self.assertTrue(all(entry["model"] == "m2" for entry in roster.values()))
+    def test_a_terminal_probes_the_pin_once_and_offers_nothing_else(self):
+        roster, probes, _ = self.ensure(tty=True)
+        self.assert_pinned(roster)
+        self.assertEqual(probes, [True])
 
-    def test_all_free_candidates_still_default_to_first(self):
-        roster, _ = self.ensure(["", "", "", "", "", ""],
-                                candidates=("m1-free",))
-        self.assertTrue(all(entry["model"] == "m1-free"
-                            for entry in roster.values()))
+    def test_a_failed_probe_still_writes_the_pin_and_says_so(self):
+        roster, _, err = self.ensure(tty=True, probe="region not enabled")
+        self.assert_pinned(roster)
+        self.assertIn("region not enabled", err)
 
-    def test_explicit_free_pick_for_a_reviewer_warns(self):
-        buf = io.StringIO()
-        with mock.patch("sys.stdout", buf):
-            roster, _ = self.ensure(["1", "", "", "", "", ""],
-                                    candidates=("m1-free", "m2"))
-        self.assertTrue(all(entry["model"] == "m1-free"
-                            for entry in roster.values()))
-        self.assertIn("free-tier", buf.getvalue())
+    def test_a_foreign_roster_is_rewritten_and_named(self):
+        self.write({"implement": {"model": "opencode-go/cheap", "variant": "low",
+                                  "context": 99},
+                    "custom": "ollama/qwen3:4b"})
+        self.assertEqual(models.roster_state(), "foreign")
+        roster, _, err = self.ensure(tty=False)
+        self.assert_pinned(roster)
+        self.assertIn("custom", roster)
+        self.assertIn("opencode-go/cheap", err)
+        # Measured for another model, so it says nothing about the pin's window.
+        self.assertNotIn("context", roster["implement"])
+
+    def test_a_context_measured_for_the_pin_survives_a_rewrite(self):
+        self.write({"implement": {"model": models.OPENCODE_MODEL, "variant": "low",
+                                  "context": 99}})
+        roster, _, _ = self.ensure(tty=False)
+        self.assertEqual(roster["implement"]["context"], 99)
+
+    def test_a_corrupt_roster_is_rewritten(self):
+        self.write("{not json")
+        self.assertEqual(models.roster_state(), "invalid")
+        roster, _, err = self.ensure(tty=False)
+        self.assert_pinned(roster)
+        self.assertIn("unreadable", err)
+
+    def test_a_pinned_roster_is_left_alone(self):
+        self.ensure(tty=False)
+        before = self.roster.read_text()
+        self.ensure(tty=True)
+        self.assertEqual(self.roster.read_text(), before)
+
+    def test_readers_return_the_pin_with_or_without_a_roster(self):
+        self.assertEqual(models.model_for("implement"), models.OPENCODE_MODEL)
+        self.assertEqual(models.variant_for("implement"), models.OPENCODE_VARIANT)
+        self.ensure(tty=False)
+        self.assertEqual(models.model_for("reviewer-taste"), models.OPENCODE_MODEL)
+
+    def test_readers_refuse_a_foreign_model_or_variant(self):
+        for entry in ({"model": "opencode-go/cheap", "variant": "xhigh"},
+                      {"model": models.OPENCODE_MODEL, "variant": "low"},
+                      {"model": models.OPENCODE_MODEL},
+                      "opencode-go/cheap"):
+            with self.subTest(entry=entry):
+                self.write({"implement": entry})
+                for reader in (models.model_for, models.variant_for, models.budget_for):
+                    with self.assertRaises(models.ForeignModel):
+                        reader("implement")
 
 
 class BudgetTests(unittest.TestCase):
@@ -227,9 +249,12 @@ class BudgetTests(unittest.TestCase):
         self.roster = self.fake_root / "harness" / "models.json"
         self.xdg = self.fake_root / "cache"
 
-    def budget(self, role, roster, catalog="absent"):
+    def budget(self, role, context=None, catalog="absent"):
+        entry = {"model": models.OPENCODE_MODEL, "variant": models.OPENCODE_VARIANT}
+        if context is not None:
+            entry["context"] = context
         self.roster.parent.mkdir(parents=True, exist_ok=True)
-        self.roster.write_text(json.dumps(roster))
+        self.roster.write_text(json.dumps({"reviewer-taste": entry}))
         if catalog != "absent":
             cache_file = self.xdg / "opencode" / "models.json"
             cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -241,43 +266,36 @@ class BudgetTests(unittest.TestCase):
             return models.budget_for(role)
 
     def catalog(self, context):
-        return {"p": {"models": {"m": {"limit": {"context": context}}}}}
+        provider, _, name = models.OPENCODE_MODEL.partition("/")
+        return {provider: {"models": {name: {"limit": {"context": context}}}}}
 
     def test_explicit_context_wins_over_the_catalog(self):
-        roster = {"reviewer-taste": {"model": "p/m", "context": 99}}
-        self.assertEqual(self.budget("reviewer-taste", roster,
-                                     self.catalog(1048576)), 99)
+        self.assertEqual(self.budget("reviewer-taste", 99, self.catalog(1048576)), 99)
 
-    def test_catalog_limit_replaces_the_8192_fallback(self):
-        roster = {"reviewer-taste": {"model": "p/m"}}
-        self.assertEqual(self.budget("reviewer-taste", roster,
-                                     self.catalog(1048576)), 1048576)
+    def test_catalog_limit_wins_over_the_pins_fallback(self):
+        self.assertEqual(self.budget("reviewer-taste", catalog=self.catalog(2000)), 2000)
 
-    def test_missing_cache_falls_back_to_the_heuristic(self):
-        self.assertEqual(self.budget("reviewer-taste",
-                                     {"reviewer-taste": {"model": "p/m"}}), 8192)
-        self.assertEqual(self.budget("reviewer-taste",
-                                     {"reviewer-taste": {"model": "anthropic/sonnet"}}),
-                         200000)
+    def test_missing_cache_falls_back_to_the_pins_window(self):
+        # A machine whose opencode never cached the catalog must not refuse
+        # every ordinary packet at 8192.
+        self.assertEqual(self.budget("reviewer-taste"), models.OPENCODE_CONTEXT)
 
-    def test_misshapen_cache_falls_back_to_the_heuristic(self):
-        roster = {"reviewer-taste": {"model": "p/m"}}
-        for catalog in ("not json", {}, {"p": {}},
-                        {"p": {"models": {}}},
-                        {"p": {"models": {"m": {}}}},
-                        self.catalog(0), self.catalog(-5),
-                        self.catalog("1048576"), self.catalog(True),
-                        {"p": {"models": {"other": {"limit": {"context": 1}}}}}):
+    def test_misshapen_values_fall_back(self):
+        for context in (True, 0, -5, "x", 1.5):
+            with self.subTest(context=context):
+                self.assertEqual(self.budget("reviewer-taste", context),
+                                 models.OPENCODE_CONTEXT)
+        for catalog in ("not json", {}, self.catalog(0), self.catalog(True),
+                        self.catalog("1048576")):
             with self.subTest(catalog=catalog):
-                self.assertEqual(self.budget("reviewer-taste", roster, catalog), 8192)
+                self.assertEqual(self.budget("reviewer-taste", catalog=catalog),
+                                 models.OPENCODE_CONTEXT)
 
-    def test_model_without_a_provider_misses_the_catalog(self):
-        self.assertEqual(self.budget("reviewer-taste",
-                                     {"reviewer-taste": {"model": "bare"}},
-                                     self.catalog(1048576)), 8192)
+    def test_a_role_with_no_roster_entry_still_has_the_pins_budget(self):
+        self.assertEqual(self.budget("reviewer-design"), models.OPENCODE_CONTEXT)
 
-    def test_role_without_a_model_has_no_budget(self):
-        self.assertEqual(self.budget("reviewer-taste", {}), 0)
+    def test_an_unknown_role_has_no_budget(self):
+        self.assertEqual(self.budget("nonsense"), 0)
 
 
 if __name__ == "__main__":

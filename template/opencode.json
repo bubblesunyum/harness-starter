@@ -1,5 +1,16 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/muse-spark-1.3-contributor#xhigh",
+  "small_model": "opencode-go/muse-spark-1.3-contributor",
+  "agent": {
+    "build": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" },
+    "plan": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" },
+    "general": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" },
+    "explore": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" },
+    "title": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" },
+    "summary": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" },
+    "compaction": { "model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh" }
+  },
   "instructions": ["AGENTS.md", "CLAUDE.md"],
   "permission": {
     "external_directory": {

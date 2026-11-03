@@ -48,9 +48,11 @@ ledger reaches git" in `AGENTS.md`.
 ## The four ideas worth keeping
 
 **Everything is token-budgeted.** One account means progressive disclosure over
-always-loaded context, cheap models for bulk reading, and review scoped to the
-diff rather than the tree. The brief replaces `bd prime` (~1900 tokens every
-session, whether or not the ledger gets touched) with ~500.
+always-loaded context, cheap Claude tiers for bulk reading, and review scoped to
+the diff rather than the tree. The brief replaces `bd prime` (~1900 tokens
+every session, whether or not the ledger gets touched) with ~500. Whatever
+runs on opencode runs on one pinned model at one variant (`scripts/models.py`),
+and the gate fails on any file that names another.
 
 That replacement is an override, not a default, and it does not stay done:
 `bd setup claude` reinstalls the `bd prime` hook every time it runs, beside the

@@ -32,13 +32,13 @@ that's the packet's job, and pasting it doubles the cost.
 
 **In opencode, always spawn the reviewers natively as parallel subagents —
 never `scripts/agent.py`.** That script is how every tool except opencode
-runs reviewers against the roster; inside opencode the generated agents
-already carry the roster's `model:` lines, so shelling out buys nothing.
+runs reviewers through opencode; inside opencode the generated agents
+already carry the pinned `model:` line, so shelling out buys nothing.
 
-Everywhere else, go off the account when the roster allows. Run each reviewer
-with a model in `harness/models.json` through opencode — each as its own
-background command, so the applicable roles run at once. The design model must
-support image input. Outside opencode only (in opencode, spawn native
+Everywhere else, go off the account: run each reviewer through opencode —
+each as its own background command, so the applicable roles run at once.
+opencode runs every role on the one pinned model (`scripts/models.py`); never
+pick, pass or configure another. The design model must support image input. Outside opencode only (in opencode, spawn native
 subagents instead — never run these):
 
 ```bash
@@ -50,8 +50,8 @@ scripts/agent.py reviewer-design "Review <packet> — <what it was meant to do>"
 Run `reviewer-design` only when the change affects the screen; it must inspect
 every listed capture. Through `scripts/agent.py`, each role gets its own prompt
 and the same packet, outside the calling session. A non-zero exit is a reviewer
-that didn't run, not one that found nothing — spawn it natively instead. Run a
-role with no suitable roster model natively too.
+that didn't run, not one that found nothing — spawn it natively instead.
+`reviewer-design` refused for lack of image support runs natively too.
 
 Review a change that doesn't build yet and you'll get findings about the
 breakage instead of the design, so keep the order.
@@ -94,12 +94,11 @@ nobody looked at is the defect.
   intent-to-add entry left in the index gets committed in full by the next
   `git commit -a`, which would ride an untracked scratch file into someone
   else's commit.
-- **Fit the model to the read.** A native Claude Code spawn runs the model and
+- **Know which model each path runs.** A native Claude Code spawn runs the model and
   effort in the reviewer's `.claude/agents/` frontmatter. Through
-  `scripts/agent.py` — how every tool except opencode reaches the roster —
-  each role runs whatever `harness/models.json` gives it. A native opencode
-  spawn runs the `model:` line the generator baked from the roster, and under
-  Codex every role inherits the host model.
+  `scripts/agent.py`, and in any native opencode spawn, every role runs on
+  the one pinned opencode model — there is nothing to fit. Under Codex every
+  role inherits the host model.
 - **One reviewer looks at pixels.** In the project this came from, both diff
   readers passed a card that clipped every value it existed to show — and were
   right to: nothing in the diff was wrong. The defect lived in the render, in a

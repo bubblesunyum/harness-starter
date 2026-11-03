@@ -18,6 +18,10 @@ import unittest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+from models import OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT
+
+PINNED = {"model": OPENCODE_MODEL, "variant": OPENCODE_VARIANT}
 
 # Replays whatever $FAKE_EVENTS holds as `run` output, answers `export` with
 # $FAKE_ROUNDS user messages, and records its argv and the config it was given.
@@ -37,7 +41,7 @@ if sys.argv[1:3] == ["session", "export"]:
     print(json.dumps({"messages": [{"type": "user"}] * n}))
     sys.exit(0)
 if sys.argv[1] == "models":
-    print(os.environ.get("FAKE_MODEL", "go/vision"))
+    print(os.environ["FAKE_MODEL"])
     print(json.dumps({"capabilities": {"input": {
         "image": os.environ.get("FAKE_IMAGE", "true") == "true"}}}))
     sys.exit(int(os.environ.get("FAKE_MODELS_EXIT", "0")))
@@ -66,10 +70,11 @@ class AgentTests(unittest.TestCase):
         for name in ("agent.py", "models.py"):
             shutil.copy(SCRIPTS / name, root / "scripts" / name)
         (root / "harness").mkdir()
-        (root / "harness/models.json").write_text(json.dumps({
-            "reviewer-taste": {"model": "go/taste"},
-            "reviewer-design": {"model": "go/vision", "variant": "xhigh"},
-            "implement": {"model": "go/impl", "variant": " xhigh "},
+        self.roster = root / "harness/models.json"
+        self.roster.write_text(json.dumps({
+            "reviewer-taste": PINNED,
+            "reviewer-design": PINNED,
+            "implement": PINNED,
         }))
         (root / ".opencode/agent").mkdir(parents=True)
         (root / ".opencode/agent/reviewer-taste.md").write_text("---\nmode: subagent\n---\n")
@@ -82,7 +87,7 @@ class AgentTests(unittest.TestCase):
         fake.chmod(0o755)
         self.root, self.log = root, root / "calls.jsonl"
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
-                        FAKE_LOG=str(self.log))
+                        FAKE_LOG=str(self.log), FAKE_MODEL=OPENCODE_MODEL)
         self.env.pop("OPENCODE_CONFIG_CONTENT", None)
         # An empty home, so the ~/.opencode/bin fallback never reaches this
         # machine's real install: every test runs the fake or nothing.
@@ -109,7 +114,7 @@ class AgentTests(unittest.TestCase):
         call = self.calls()[0]
         self.assertEqual(call["argv"][:8],
                          ["run", "--standalone", "--format", "json", "--agent", "reviewer-taste",
-                          "-m", "go/taste"])
+                          "-m", OPENCODE_MODEL_ARG])
         self.assertEqual(call["argv"][-2:], ["--", "review it"])
         settings = json.loads(call["config"])["agent"]["reviewer-taste"]
         self.assertEqual(settings["mode"], "primary")
@@ -121,14 +126,31 @@ class AgentTests(unittest.TestCase):
         self.agent("reviewer-taste", "go", events=text_event("ok"))
         config = json.loads(self.calls()[0]["config"])
         self.assertEqual(config["theme"], "x")
-        self.assertEqual(config["agent"]["other"], {"mode": "all"})
+        self.assertEqual(config["agent"]["other"]["mode"], "all")
         self.assertEqual(config["agent"]["reviewer-taste"]["mode"], "primary")
+
+    def test_every_inherited_config_model_is_overwritten_with_the_pin(self):
+        # OPENCODE_CONFIG_CONTENT outranks opencode.json, and -m covers only
+        # the primary — an inherited `general` would run the subagents.
+        for role in ("reviewer-taste", "implement"):
+            with self.subTest(role=role):
+                self.env["OPENCODE_CONFIG_CONTENT"] = json.dumps({
+                    "model": "go/cheap",
+                    "agent": {"reviewer-taste": {"model": "go/cheap", "variant": "low"},
+                              "general": {"model": "go/cheap"}},
+                    "agents": {"explore": {"model": "go/cheap"}}})
+                self.agent(role, "go", events=text_event("ok"))
+                config = json.loads(self.calls()[-1]["config"])
+                self.assertEqual(config["model"], OPENCODE_MODEL_ARG)
+                for settings in (*config["agent"].values(), *config["agents"].values()):
+                    self.assertEqual((settings["model"], settings["variant"]),
+                                     (OPENCODE_MODEL, OPENCODE_VARIANT))
 
     def test_implement_runs_build_behind_the_contract_on_the_first_round_only(self):
         self.agent("implement", "do the thing", events=text_event("done"))
         first = self.calls()[0]
         self.assertIn("build", first["argv"])
-        self.assertIsNone(first["config"])
+        self.assertEqual(json.loads(first["config"])["model"], OPENCODE_MODEL_ARG)
         self.assertTrue(first["argv"][-1].startswith("You are a delegated implementer"))
         self.assertTrue(first["argv"][-1].endswith("do the thing"))
         self.agent("implement", "--session", "ses_1", "fix it", events=text_event("fixed"), rounds="1")
@@ -136,14 +158,39 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(revision["argv"][-1], "fix it")
         self.assertIn("--session", revision["argv"])
 
-    def test_a_roster_variant_reaches_opencode_and_its_absence_sends_none(self):
-        out = self.agent("implement", "go", events=text_event("done"))
-        self.assertIn("on go/impl (xhigh)", out.stderr)
-        argv = self.calls()[0]["argv"]
-        self.assertEqual(argv[argv.index("-m") + 1], "go/impl#xhigh")
-        self.agent("reviewer-taste", "go", events=text_event("ok"))
-        argv = self.calls()[-1]["argv"]
-        self.assertNotIn("#", argv[argv.index("-m") + 1])
+    def test_every_role_runs_on_the_pin(self):
+        for role in ("implement", "reviewer-taste", "reviewer-correctness"):
+            with self.subTest(role=role):
+                out = self.agent(role, "go", events=text_event("done"))
+                self.assertEqual(out.returncode, 0, out.stderr)
+                self.assertIn(f"on {OPENCODE_MODEL} ({OPENCODE_VARIANT})", out.stderr)
+                argv = self.calls()[-1]["argv"]
+                self.assertEqual(argv[argv.index("-m") + 1], OPENCODE_MODEL_ARG)
+
+    def test_a_foreign_roster_model_is_refused_before_opencode_runs(self):
+        for entry in ({"model": "opencode-go/cheap-bulk", "variant": OPENCODE_VARIANT},
+                      {"model": "ollama/qwen3:4b"},
+                      "opencode-go/cheap-bulk"):
+            with self.subTest(entry=entry):
+                self.log.unlink(missing_ok=True)
+                self.roster.write_text(json.dumps({"implement": entry}))
+                out = self.agent("implement", "go", events=text_event("done"))
+                self.assertEqual(out.returncode, 1)
+                self.assertIn(f"opencode runs only on {OPENCODE_MODEL}", out.stderr)
+                self.assertNotIn("run", [c["argv"][0] for c in self.calls()])
+
+    def test_a_variant_mismatch_is_refused_before_opencode_runs(self):
+        for variant in ("low", "max", None):
+            with self.subTest(variant=variant):
+                self.log.unlink(missing_ok=True)
+                entry = {"model": OPENCODE_MODEL}
+                if variant:
+                    entry["variant"] = variant
+                self.roster.write_text(json.dumps({"reviewer-taste": entry}))
+                out = self.agent("reviewer-taste", "go", events=text_event("ok"))
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("scripts/models.py ensure", out.stderr)
+                self.assertNotIn("run", [c["argv"][0] for c in self.calls()])
 
     def test_visual_reviewer_runs_only_with_an_image_capable_model(self):
         out = self.agent("reviewer-design", "review", events=text_event("visual ok"))
@@ -151,7 +198,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "visual ok")
         self.assertEqual([c["argv"][0] for c in self.calls()], ["models", "run"])
         argv = self.calls()[1]["argv"]
-        self.assertEqual(argv[argv.index("-m") + 1], "go/vision#xhigh")
+        self.assertEqual(argv[argv.index("-m") + 1], OPENCODE_MODEL_ARG)
 
     def test_visual_reviewer_refuses_a_text_only_or_unknown_model(self):
         for fake in ({"image": "false"}, {"model": "go/other"},
@@ -216,11 +263,10 @@ class AgentTests(unittest.TestCase):
                 self.assertNotIn("Traceback", out.stderr)
                 self.assertIn("OPENCODE_CONFIG_CONTENT", out.stderr)
 
-    def test_free_tier_refusal_names_the_fix(self):
-        out = self.agent("reviewer-taste", "review", events=error_event(
-            "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"))
+    def test_a_provider_error_is_reported(self):
+        out = self.agent("reviewer-taste", "review", events=error_event("rate limited"))
         self.assertEqual(out.returncode, 1)
-        self.assertIn("harness/models.json", out.stderr)
+        self.assertIn("rate limited", out.stderr)
 
     def test_v2_error_shape_reads_the_message_directly(self):
         # Live v2 errors carry the message on the error itself ({type,
@@ -238,19 +284,21 @@ class AgentTests(unittest.TestCase):
         # the cached models.dev catalog is what's left to ask.
         cache = Path(self.env["HOME"]) / ".cache/opencode"
         cache.mkdir(parents=True)
+        provider, _, name = OPENCODE_MODEL.partition("/")
         (cache / "models.json").write_text(json.dumps({
-            "go": {"models": {"vision":
-                              {"modalities": {"input": ["text", "image"]}}}}}))
+            provider: {"models": {name:
+                                  {"modalities": {"input": ["text", "image"]}}}}}))
         out = self.agent("reviewer-design", "review", models_exit="1",
                          events=text_event("visual ok"))
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(), "visual ok")
 
-    def test_a_role_without_a_model_is_refused(self):
-        out = self.agent("reviewer-correctness", "review")
-        self.assertEqual(out.returncode, 1)
-        self.assertIn("scripts/models.py ensure", out.stderr)
-        self.assertEqual(self.calls(), [])
+    def test_no_roster_at_all_still_runs_on_the_pin(self):
+        self.roster.unlink()
+        out = self.agent("reviewer-correctness", "review", events=text_event("ok"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        argv = self.calls()[-1]["argv"]
+        self.assertEqual(argv[argv.index("-m") + 1], OPENCODE_MODEL_ARG)
 
     def test_a_role_without_an_agent_is_refused(self):
         out = self.agent("nonsense", "review")

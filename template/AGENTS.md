@@ -119,9 +119,16 @@ judgment call and not an option to offer the user; a diff reviewed in the
 context that wrote it mostly gets agreement. Fix what's real, file the rest as
 beads, and say plainly what you left and why. In opencode, always spawn the
 reviewers natively — never `scripts/agent.py`. Elsewhere, run each reviewer
-through `scripts/agent.py` when `harness/models.json` names its model. The visual
-reviewer's model must accept images. The `agentic-review` skill covers the
-commands and native fallback.
+through `scripts/agent.py`. The visual reviewer's model must accept images. The
+`agentic-review` skill covers the commands and native fallback.
+
+**opencode runs on one model, at one variant — nothing else, ever.** Every
+opencode session, subagent, reviewer and implementer runs on
+`OPENCODE_MODEL` at `OPENCODE_VARIANT`, defined once in `scripts/models.py`.
+Never choose, change, add or substitute an opencode model — not per role, not
+for "bulk" work, not by hand-editing `harness/models.json`. `scripts/agent.py`
+refuses anything else before spawning, and the gate fails on any file that
+names another.
 
 ## Commits
 
@@ -150,8 +157,8 @@ discover them there. Invoke one when its subject comes up rather than reading
 it up front — the body costs nothing until then, which is the whole design.
 
 User-facing prose always follows the `output-style` skill: load
-`.claude/skills/output-style/SKILL.md` before writing any report, summary,
-handoff note, or other text the user will read, and apply its voice there.
+`.claude/skills/output-style/SKILL.md` before writing anything the user will
+read, and apply its voice there.
 
 ## Closing a session
 

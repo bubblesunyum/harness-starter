@@ -487,10 +487,10 @@ if [ "$agents_contract" -eq 1 ]; then
   echo "    python3 scripts/codex-support.py write"
   if [ -f "$target/scripts/models.py" ] &&
      [ "$(harness_roster_state "$target")" != "ok" ]; then
-    # The roster is machine-local and no commit carries it, so a fresh machine
-    # has none until someone runs this once per role — agent.py runs,
-    # review budgets, and the generated agents' model lines need it.
-    echo "    scripts/models.py ensure   (no usable roster — agent.py runs need one)"
+    # The roster is machine-local and no commit carries it. It no longer
+    # chooses anything — ensure writes the pin without prompting — but a
+    # foreign one fails agent.py and the gate until it's rewritten.
+    echo "    scripts/models.py ensure   (rewrites the roster pinned)"
   fi
   [ -f "$target/scripts/opencode-agents.py" ] && echo "    scripts/opencode-agents.py"
   echo "    scripts/context.py bless"
