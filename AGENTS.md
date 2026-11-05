@@ -2,6 +2,7 @@
   scripts/brief.sh
   scripts/review.sh
   scripts/verify.sh
+  scripts/wrap-up.sh
 -->
 
 # Working on this project
