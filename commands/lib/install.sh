@@ -772,3 +772,135 @@ harness_dolt_remote_url() {
     *)                            printf '\n' ;;
   esac
 }
+
+# Ensure bd is on PATH, installing it when missing: brew first (macOS and
+# Linuxbrew), then the upstream install script — brew may be absent on Linux,
+# so the curl fallback is real, not decorative. Prints what it did; the caller
+# fails loud when this returns non-zero.
+harness_ensure_bd() {
+  command -v bd >/dev/null 2>&1 && return 0
+  if command -v brew >/dev/null 2>&1; then
+    echo "  bd not found — installing with brew..."
+    if brew install beads >/dev/null 2>&1; then
+      hash -r 2>/dev/null || true
+      if command -v bd >/dev/null 2>&1; then
+        echo "  installed bd (brew)"
+        return 0
+      fi
+    fi
+    echo "  ! brew install of bd failed — trying the install script."
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    echo "  bd not found — installing with the beads install script..."
+    if curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash >/dev/null 2>&1; then
+      hash -r 2>/dev/null || true
+      # The script can land bd outside PATH (e.g. ~/.local/bin) — pick that up
+      # for the rest of this run rather than reporting a success that isn't.
+      [ -x "$HOME/.local/bin/bd" ] && export PATH="$HOME/.local/bin:$PATH"
+      if command -v bd >/dev/null 2>&1; then
+        echo "  installed bd (install script)"
+        return 0
+      fi
+    fi
+    echo "  ! beads install script failed." >&2
+  else
+    echo "  ! curl not found — cannot fetch the beads install script." >&2
+  fi
+  return 1
+}
+
+# Fail loud when python3 is missing: the prefix lookup, the tidier, the
+# reviewer merge and the roster check all need it, and continuing without it
+# leaves each of them silently dead. No auto-install — which python is the
+# project's call — so this says exactly how, per OS.
+harness_require_python3() {
+  command -v python3 >/dev/null 2>&1 && return 0
+  case "$(uname -s 2>/dev/null)" in
+    Darwin)
+      echo "✗ python3 not found — install it with 'brew install python' and re-run." >&2 ;;
+    Linux)
+      echo "✗ python3 not found — install it with your package manager and re-run," >&2
+      echo "  e.g. 'sudo apt install python3' (Debian/Ubuntu) or 'sudo dnf install python3' (Fedora)." >&2 ;;
+    *)
+      echo "✗ python3 not found — install Python 3 (https://www.python.org/downloads/) and re-run." >&2 ;;
+  esac
+  return 1
+}
+
+# Whether the target's ledger already holds an open bead whose title contains
+# $2 (case-insensitive), for idempotent filing on re-add. Read through
+# `bd list` only — never config/info/stats, which auto-import a stale
+# issues.jsonl and resurrect deleted beads. Fails when the ledger can't be
+# read, so the caller files nothing on a guess.
+harness_bead_open() {
+  local target="$1" want="$2" json
+  json="$(cd "$target" && bd list --json --all --limit 0 2>/dev/null)" || return 1
+  [ -n "$json" ] || return 1
+  printf '%s' "$json" | python3 -c '
+import json
+import sys
+want = sys.argv[1].casefold()
+try:
+    beads = json.loads(sys.stdin.read() or "[]")
+except Exception:
+    sys.exit(1)
+for bead in beads:
+    if str(bead.get("status", "")).lower() in ("open", "in_progress"):
+        if want in str(bead.get("title", "")).casefold():
+            sys.exit(0)
+sys.exit(1)
+' "$want"
+}
+
+# File one bead in the target's ledger, unless an open bead already carries the
+# title: re-add files no duplicates. Adds only — an existing ledger's beads are
+# never touched. Reports what it did; fails when the create fails.
+harness_file_bead() {
+  local target="$1" title="$2" design="$3" acceptance="$4" labels="$5" id
+  if harness_bead_open "$target" "$title"; then
+    echo "  bead already open: $title"
+    return 0
+  fi
+  if [ -n "$labels" ]; then
+    id="$(cd "$target" && bd create "$title" --design "$design" --acceptance "$acceptance" -l "$labels" --silent 2>&1)" || {
+      echo "  ! couldn't file bead '$title': $id" >&2; return 1; }
+  else
+    id="$(cd "$target" && bd create "$title" --design "$design" --acceptance "$acceptance" --silent 2>&1)" || {
+      echo "  ! couldn't file bead '$title': $id" >&2; return 1; }
+  fi
+  echo "  filed $id: $title"
+}
+
+# The seat's Name field is still blank: the **Name:** line with nothing after
+# it, which is how the template ships it. A filled seat never matches.
+harness_seat_blank() {
+  local seat="$1/harness/seat.md"
+  [ -f "$seat" ] && grep -qE '^\*\*Name:\*\*[[:space:]]*$' "$seat"
+}
+
+# CLAUDE.md is still the stock text add.sh writes for a missing file. An
+# edited file has replaced that sentence, so this fires only on the placeholder.
+harness_claude_stock() {
+  local claude="$1/CLAUDE.md"
+  [ -f "$claude" ] && grep -qF 'Project-specific standards: architecture, naming, testing, the traps' "$claude"
+}
+
+# scripts/verify.steps.sh still carries the template's own pointer to replace
+# its steps. A project with real gate commands has rewritten that comment.
+harness_verify_steps_placeholder() {
+  local steps="$1/scripts/verify.steps.sh"
+  [ -f "$steps" ] && grep -qF "Replace these with your project's real commands." "$steps"
+}
+
+# Any reviewer file still carries its FILL THIS IN block. Missing files don't
+# count — a re-add that skipped them left nothing placeholder behind.
+harness_reviewers_unfilled() {
+  local target="$1" file
+  for file in "$target/.claude/agents/reviewer-taste.md" \
+              "$target/.claude/agents/reviewer-correctness.md" \
+              "$target/.claude/agents/reviewer-design.md"; do
+    [ -f "$file" ] || continue
+    if grep -q 'FILL THIS IN' "$file"; then return 0; fi
+  done
+  return 1
+}

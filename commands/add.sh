@@ -67,6 +67,16 @@ target="$(harness_resolve_target --init "${1:-$PWD}")"
 # Protect even the first prefix lookup from bd's memory-less auto-flush. The
 # project setting is persisted once its live ledger has been verified below.
 export BD_EXPORT_AUTO=false
+# Dependencies, installed or failed loud before anything else: the prefix
+# lookup, the ledger, the tidier and the reviewer generation all need both,
+# and the old warn-and-continue left the ledger, the brief and the hook dead.
+harness_ensure_bd || {
+  echo "✗ bd (beads) is not installed and automatic install failed." >&2
+  echo "  Install it yourself — 'brew install beads', or see" >&2
+  echo "  https://github.com/gastownhall/beads — then re-run." >&2
+  exit 1
+}
+harness_require_python3 || exit 1
 # Only a skill created by this install's bd init may be replaced automatically.
 had_codex_beads=0
 if [ -e "$target/.agents/skills/beads" ] || [ -L "$target/.agents/skills/beads" ]; then
@@ -274,8 +284,6 @@ append_ignore '.claude/launch.json' \
   'The live dashboard port, rewritten on every bind — machine-local.'
 append_ignore 'dashboard/state.json' \
   'The dashboard snapshot, rewritten on every poll — machine-local.'
-append_ignore 'harness/models.json' \
-  'Per-role models, naming what this machine happens to have — machine-local.'
 append_ignore '.tmp/' \
   'Agent scratch — created here, removed when done, never committed.'
 
@@ -326,6 +334,12 @@ if command -v bd >/dev/null 2>&1; then
       echo "  ledger already initialised ($prefix-)"
       ledger=1
     else
+      # Warn and continue, never wipe or re-init over it: re-add's promise is
+      # safe pickup of new pieces, and a broken ledger must not block that.
+      # The brief flags the broken ledger every session, and the gate's export
+      # check fails until it is fixed — so this stays loud past install.
+      echo "  ! ledger exists but is unusable — fix 'bd list' in $target, then re-run." >&2
+      echo "    Nothing was overwritten: this never wipes an existing ledger." >&2
       unset ledger
     fi
   elif (cd "$target" && bd init --prefix "$prefix" >/dev/null 2>&1); then
@@ -359,6 +373,7 @@ if command -v bd >/dev/null 2>&1; then
     fi
   else
     echo "  ! bd init failed — run 'bd init --prefix $prefix' yourself and check the error."
+    exit 1
   fi
   if [ -n "${ledger:-}" ]; then
     harness_set_manual_export_policy "$target" || exit 1
@@ -373,8 +388,10 @@ if command -v bd >/dev/null 2>&1; then
     echo "  bd telemetry off" ||
     echo "  ! could not turn bd telemetry off — run 'bd config set metrics.disabled true'."
 else
-  echo "  ! bd is not installed — the ledger, the brief, and the commit hook all need it."
-  echo "    See https://github.com/steveyegge/beads"
+  # Unreachable: harness_ensure_bd above either provides bd or exits. Kept as a
+  # loud net rather than silently continuing with a dead ledger, brief and hook.
+  echo "✗ bd is not installed and provisioning failed — install it and re-run (see above)." >&2
+  exit 1
 fi
 
 # The ledger's issues live in .beads/embeddeddolt/, which is gitignored, so a
@@ -400,6 +417,7 @@ if [ -n "${ledger:-}" ]; then
   if [ -z "$origin_url" ]; then
     echo "  ! no git origin — the ledger has nowhere to push and stays on this machine."
     echo "    Once the repo has one: bd dolt remote add origin git+<the origin URL>"
+    leftover_origin=1
   elif [ -z "$dolt_url" ]; then
     echo "  ! don't know how to reach '$origin_url' as a Dolt remote — the ledger"
     echo "    stays on this machine. bd takes git+https://, git+ssh:// and git+file:// URLs."
@@ -415,6 +433,7 @@ if [ -n "${ledger:-}" ]; then
     echo "  ! couldn't register the Dolt remote. Run this yourself and read the error:" >&2
     echo "      bd dolt remote add origin $dolt_url" >&2
     echo "    Until it succeeds the ledger stays on this machine." >&2
+    leftover_dolt="$dolt_url"
   fi
 fi
 
@@ -528,6 +547,16 @@ else
   echo "$agents_out" >&2
   echo "  ! couldn't generate .opencode/agent/ — fix the above and run" >&2
   echo "    scripts/opencode-agents.py. opencode has no reviewers until you do." >&2
+  leftover_agents=1
+fi
+
+# The per-role roster pins every opencode role to the one model and variant
+# this install runs on. Quiet on success; never failing the install.
+if models_out="$(cd "$target" && python3 scripts/models.py ensure 2>&1)"; then
+  :
+else
+  [ -n "$models_out" ] && printf '%s\n' "$models_out" >&2
+  echo "  ! couldn't write harness/models.json — run 'scripts/models.py ensure' yourself."
 fi
 
 # A .opencode/opencode.json shadows the root one — opencode reads only the
@@ -542,6 +571,85 @@ else
 fi
 
 (cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true
+
+# Leftover problems and post-install setup survive only as beads: install
+# stdout scrolls away, `bd ready` doesn't. Each files only when its condition
+# still holds and no open bead already carries the title, so re-add files no
+# duplicates — and filling the file (or fixing the cause) clears it from ready.
+if [ -n "${ledger:-}" ]; then
+  file_any=0
+  [ -n "${leftover_origin:-}" ] && file_any=1
+  [ -n "${leftover_dolt:-}" ] && file_any=1
+  [ -n "${unknown:-}" ] && file_any=1
+  [ -n "${leftover_agents:-}" ] && file_any=1
+  if harness_seat_blank "$target"; then seat_todo=1; file_any=1; else seat_todo=0; fi
+  if harness_claude_stock "$target"; then claude_todo=1; file_any=1; else claude_todo=0; fi
+  if harness_verify_steps_placeholder "$target"; then steps_todo=1; file_any=1; else steps_todo=0; fi
+  if harness_reviewers_unfilled "$target"; then reviewers_todo=1; file_any=1; else reviewers_todo=0; fi
+  if [ "$file_any" -eq 1 ]; then
+  if [ -n "${leftover_origin:-}" ]; then
+    harness_file_bead "$target" "connect the ledger to a git origin" \
+      "Give the repo an origin, then register it as the ledger's Dolt remote so beads travel: bd dolt remote add origin git+<the origin URL>. Until then every bead lives only on this machine." \
+      "bd dolt remote list shows origin pointing at the current remote URL." \
+      "needs-human" || true
+  fi
+  if [ -n "${leftover_dolt:-}" ]; then
+    harness_file_bead "$target" "register the ledger's Dolt remote" \
+      "bd dolt remote add origin $leftover_dolt fails in this project; run it, read the error, and fix the cause. Until it succeeds the ledger stays on this machine." \
+      "bd dolt remote list shows origin pointing at the current remote URL." \
+      "" || true
+  fi
+  if [ -n "${unknown:-}" ]; then
+    stacks_design="harness add found these names in harness/stacks.txt with no guidance in the starter: $(printf '%s' "$unknown" | tr '\n' ' '). Fix the names (the valid ones are the files in template/harness/stacks/), or remove them; the reviewers get no platform checks until then."
+    harness_file_bead "$target" "fix the unknown stack names in harness/stacks.txt" \
+      "$stacks_design" \
+      "harness/stacks.txt names only stacks the starter guides, and harness add prints no unknown-stack warning." \
+      "" || true
+  fi
+  if [ -n "${leftover_agents:-}" ]; then
+    harness_file_bead "$target" "fix opencode reviewer generation (scripts/opencode-agents.py)" \
+      "scripts/opencode-agents.py fails in this project; run it, read the error, and fix the cause so .opencode/agent/ reviewers exist. Until then opencode has no reviewers." \
+      "scripts/opencode-agents.py exits 0 and .opencode/agent/ holds the reviewers." \
+      "" || true
+  fi
+  if [ "$seat_todo" -eq 1 ]; then
+    harness_file_bead "$target" "name the seat in harness/seat.md" \
+      "Choose a name you would want to be called and write two or three paragraphs on what this seat is for, about this project specifically, replacing the FILL THIS IN block. Fill in the Name field or the brief greets you as 'unnamed'." \
+      "harness/seat.md carries a filled Name field and no FILL THIS IN block; the brief greets the seat by name." \
+      "" || true
+  fi
+  if [ "$claude_todo" -eq 1 ]; then
+    harness_file_bead "$target" "fill in CLAUDE.md with this project's standards" \
+      "Write this project's own architecture, naming, testing and traps in CLAUDE.md; it already imports AGENTS.md, so repeat none of the contract. Replace the stock placeholder text harness add wrote." \
+      "CLAUDE.md holds project-specific standards with no stock placeholder text remaining." \
+      "" || true
+  fi
+  if [ "$steps_todo" -eq 1 ]; then
+    harness_file_bead "$target" "write the project's gate steps in scripts/verify.steps.sh" \
+      "Replace the placeholder steps with the project's real build and test commands, each going through step (probe_step for slow or throwaway-repo checks), and point the test-count grep at the real runner output." \
+      "scripts/verify.sh runs the project's real commands; no placeholder step remains." \
+      "" || true
+  fi
+  if [ "$reviewers_todo" -eq 1 ]; then
+    harness_file_bead "$target" "add project-specific reviewer checks to the reviewer agents" \
+      "Each of .claude/agents/reviewer-{taste,correctness,design}.md carries a FILL THIS IN block: add this language and framework's actual recurring bugs, keeping the generic checks. Confirm harness/stacks.txt names the right stacks first." \
+      "No reviewer file still carries a FILL THIS IN block." \
+      "" || true
+  fi
+  # Filing wrote to the ledger without auto-export, so refresh the committed
+  # export with memories — the same helper that set the policy, kept loud.
+  harness_set_manual_export_policy "$target" || true
+  fi
+  # Filing and ensure leave generated files the gate checks are tracked, but
+  # neither stages them — a fresh install would land red on untracked files.
+  # Best-effort and never fatal; never stage or touch anything else.
+  if [ -e "$target/.beads/issues.jsonl" ] && ! git -C "$target" add .beads/issues.jsonl 2>/dev/null; then
+    echo "  ! couldn't stage .beads/issues.jsonl — the gate will say untracked until it is staged."
+  fi
+  if [ -e "$target/harness/models.json" ] && ! git -C "$target" add -f harness/models.json 2>/dev/null; then
+    echo "  ! couldn't stage harness/models.json — the gate will say untracked until it is staged."
+  fi
+fi
 
 cat <<'EOF'
 
@@ -590,4 +698,9 @@ fi
 if ! (cd "$target" && python3 scripts/codex-support.py write); then
   echo "  ! Codex setup needs reconciliation; shared sources were preserved." >&2
   exit 1
+fi
+
+# The single pointer: install stdout scrolls away, the ledger doesn't.
+if [ -n "${ledger:-}" ]; then
+  echo "  setup and leftover tasks are filed as beads — 'bd ready' in $target lists them."
 fi

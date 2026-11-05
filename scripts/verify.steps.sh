@@ -1348,6 +1348,11 @@ probe_step "add accepts a linked worktree" bash -c '
 # everything doesn't pass either.
 probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
   golden_probe || exit 1
+  # Normalize the install-staged fixture (ledger export, model roster) into a
+  # seed commit: the artifact-only commit below must stage only the handoff,
+  # and installs now stage their generated files.
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "seed install fixture" >/dev/null 2>&1) ||
+    { echo "error: cannot seed-commit the install fixture"; exit 1; }
   [ -x "$probe/scripts/hooks/commit-msg" ] || { echo "error: install produced no hook logic"; exit 1; }
   [ -f "$probe/.git/hooks/commit-msg" ] || { echo "error: add never wired the hook"; exit 1; }
   # Pinned like the identity flags below it: a global core.hooksPath would run
@@ -1747,6 +1752,12 @@ probe_step "an untracked ledger export fails the gate saying to track it" bash -
     { echo "error: cannot file a probe bead"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot write the probe export"; exit 1; }
+  # Fresh installs stage the export at install time, so force the untracked
+  # shape this probe exists for (har-l5a): matching content, no tracking.
+  # --cached -f: the filed probe bead changed the worktree export after the
+  # install staged it, and without -f git refuses a removal whose staged
+  # content matches neither the file nor HEAD. Index-only either way.
+  (cd "$probe" && git rm --cached -qf .beads/issues.jsonl >/dev/null 2>&1) || true
   out=$("$probe/scripts/ledger-export-check.sh" 2>&1)
   echo "$out" | grep -q "FAIL  ledger export" || {
     echo "error: the gate passed an untracked ledger export";
