@@ -21,8 +21,50 @@ cd "$ROOT"
 # session, for the file whose header promises exactly that.
 READY_SHOWN=4
 
+# Loud when the setup is broken. brief() below goes quiet when a prerequisite
+# is missing — no bd, no python3, no usable ledger — which reads as a healthy
+# session with nothing to do. These checks are shell only, so they still print
+# when bd and python3 are both gone, and they run first so the problem is the
+# first thing a session sees. One line per problem, each with the fix; silence
+# here means the setup is fine. Never fails: a diagnostic that errors out is
+# the silence it exists to replace.
+preflight() {
+  command -v bd >/dev/null 2>&1 || \
+    echo "bd: not found — the ledger, the brief, and the commit hook need it; see https://github.com/steveyegge/beads"
+  python3 -c 'pass' >/dev/null 2>&1 || \
+    echo "python3: not found — the brief needs it for the ledger summary; install Python 3"
+  # Keyed on `bd list` actually answering, not on `.beads` existing: the
+  # directory can be there with no database behind it, and bd can answer from
+  # a parent checkout — either way only a failing query proves it is broken.
+  if command -v bd >/dev/null 2>&1 && ! bd list --json --all >/dev/null 2>&1; then
+    if [ ! -d "$ROOT/.beads/embeddeddolt" ]; then
+      echo "ledger: no database (.beads/embeddeddolt missing) — run 'bd init' to create it"
+    else
+      echo "ledger: 'bd list' fails here — run it and check the error"
+    fi
+  fi
+  # The seat's name, read the same way the python below does (a **Name:** line).
+  # Owned here rather than there so an unnamed seat still prints when bd or
+  # python3 is missing and the summary never runs; seat() below stays silent
+  # on these so the line appears once.
+  if [ ! -f "$ROOT/harness/seat.md" ]; then
+    echo "seat: no harness/seat.md — re-run the installer to restore it"
+  elif ! grep -q '^[[:space:]]*\*\*Name:\*\*' "$ROOT/harness/seat.md" 2>/dev/null; then
+    echo "seat: harness/seat.md has no **Name:** line — the brief reads the seat from that line"
+  elif [ -z "$(sed -n 's/^[[:space:]]*\*\*Name:\*\*[[:space:]]*//p' "$ROOT/harness/seat.md" 2>/dev/null | head -1 | sed -e 's/^[*[:space:]]*//' -e 's/[*[:space:]]*$//')" ]; then
+    echo "seat: unnamed — set **Name:** in harness/seat.md"
+  fi
+  if [ -f "$ROOT/scripts/verify.steps.sh" ] && \
+     grep -q '^step "build" false' "$ROOT/scripts/verify.steps.sh" 2>/dev/null; then
+    echo "gate: scripts/verify.steps.sh is still the placeholder — replace 'step \"build\" false' with real commands"
+  fi
+  [ -f "$ROOT/harness/models.json" ] || \
+    echo "models: no harness/models.json — run scripts/models.py ensure to write it"
+}
+
 brief() {
   command -v bd >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
   # Neither of these is claimable, for the same reason: someone else's decision
   # is pending on it. Backlog is work deliberately not being done next, and a
   # needs-human bead is one a session already declined to guess at — leaving it
@@ -162,13 +204,15 @@ def seat():
     text = seat_text()
     if not text:
         return None
-    # Loud when the format moved rather than the name being blank: a blank Name
-    # is the file saying it isn't finished, but a missing Name line means this
-    # parser no longer reads the file and every brief would say "unnamed" with
-    # nothing failing.
+    # Blank, missing, or unparseable Name is preflight's line, not this one:
+    # the shell above reports it with the fix even when bd or python3 is
+    # missing and this summary never runs — so this stays silent on those to
+    # keep the diagnosis to one line.
     if not any(l.lstrip().startswith("**Name:**") for l in text.splitlines()):
-        return "seat: (unparseable harness/seat.md — expected a **Name:** line)"
-    name = field(text, "Name").split("—")[0].strip() or "unnamed"
+        return None
+    name = field(text, "Name").split("—")[0].strip()
+    if not name:
+        return None
     shipped = counts.get("closed_issues", 0)
     since = run("git", "-C", root, "log", "--reverse",
                 "--format=%ad", "--date=format:%Y-%m").split("\n", 1)[0].strip()
@@ -309,16 +353,24 @@ print("\n".join(out))
 PY
 }
 
-text="$(brief || true)"
+text="$( { preflight; brief; } || true)"
 [ -z "$text" ] && exit 0
 
 if [ "${1:-}" = "--hook" ]; then
-  python3 -c '
+  # python3 builds the wrapper; the shell fallback keeps the hook working (and
+  # valid JSON) where python3 is missing or broken. Brief text is lines of
+  # prose, so only backslash, quote, and newline need escaping.
+  if command -v python3 >/dev/null 2>&1 && python3 -c '
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "SessionStart",
     "additionalContext": sys.stdin.read().strip(),
-}}))' <<< "$text"
+}}))' <<< "$text"; then
+    :
+  else
+    esc="$(printf '%s' "$text" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g')"
+    printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "%s"}}\n' "$esc"
+  fi
 else
   echo "$text"
 fi
