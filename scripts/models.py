@@ -16,20 +16,27 @@ a hand-written roster of paid models nothing checked, which spawned ~15
 sessions and exhausted the provider's limit. scripts/opencode-pin.py is the
 gate step that holds every file to this.
 
-harness/models.json is machine-local and gitignored. It no longer chooses
-anything: it records the pin per role, plus an optional "context" (tokens)
-that overrides the packet budget. `ensure` writes it without prompting — the
-Claude Code desktop app and every hook run without a terminal, and a setup
-step that needs one is a setup step that gets skipped and hand-written. A
-roster carrying a foreign model or variant is rewritten by `ensure`, which
-names what it replaced; every other reader refuses it.
+harness/models.json is tracked and committed: the pinned baseline every
+fresh clone starts with, so no setup step has to write it. It no longer
+chooses anything: it records the pin per role, plus an optional "context"
+that overrides the packet budget. `ensure` writes it without prompting —
+the Claude Code desktop app and every hook run without a terminal, and a
+setup step that needs one is a setup step that gets skipped and
+hand-written. A roster carrying a foreign model or variant is rewritten by
+`ensure`, which names what it replaced; every other reader refuses it.
+Checkouts from before the roster was tracked have no file at all, and that
+stays passing: every reader treats a missing roster or entry as the pin
+applying anyway — `harness update --apply` backfills it.
 
 A role's packet budget is its explicit "context", else the limit opencode's
 cached models.dev catalog lists for the pinned model, else OPENCODE_CONTEXT —
 the pin's window as the catalog listed it when the pin was set, so a machine
 whose opencode never cached the catalog (or has no opencode at all) doesn't
-refuse every ordinary packet. `budget` never prompts, so review.sh can call
-it from hooks and gates.
+refuse every ordinary packet. "context" is a per-role token budget override
+in tokens: scripts/review.sh sizes each review packet against the smallest
+budget across the reviewing roles and refuses packets no reviewer can read
+whole. `budget` never prompts, so review.sh can call it from hooks and
+gates.
 """
 
 import json

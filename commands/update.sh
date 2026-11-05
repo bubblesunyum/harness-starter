@@ -328,6 +328,32 @@ while IFS= read -r want; do
   fi
 done <<< "$diverged_want"
 
+# The pinned per-role roster, harness/models.json. Checkouts from before the
+# roster was tracked have no file — it was gitignored, so no commit carries
+# it — and dropping the ignore line doesn't un-hide it there: their own
+# .gitignore still lists the path, and gitignore-does-not-untrack cuts both
+# ways. Report-only names it below; --apply writes it pinned and stages it
+# with -f, so the next commit carries it instead of silently dropping it.
+if [ ! -e "$target/harness/models.json" ]; then
+  if [ "$apply" -eq 1 ]; then
+    if [ -f "$target/scripts/models.py" ] && command -v python3 >/dev/null 2>&1; then
+      if (cd "$target" && python3 scripts/models.py ensure); then
+        if git -C "$target" add -f harness/models.json; then
+          applied="$applied  harness/models.json (pinned roster backfilled and staged)"$'\n'
+        else
+          stale="$stale  harness/models.json (written but not staged — run 'git add -f harness/models.json' by hand)"$'\n'
+        fi
+      else
+        stale="$stale  harness/models.json (scripts/models.py ensure failed — run it by hand)"$'\n'
+      fi
+    else
+      stale="$stale  harness/models.json (missing and no scripts/models.py or python3 to write it — re-run 'harness add $target')"$'\n'
+    fi
+  else
+    stale="$stale  harness/models.json (no pinned roster — run 'harness update --apply $target')"$'\n'
+  fi
+fi
+
 # A .opencode/opencode.json shadows the root opencode.json — opencode reads
 # only the deeper file — so one without instructions silently unloads AGENTS.md
 # and one duplicating either key hides drift the loop above never compares.
@@ -487,9 +513,10 @@ if [ "$agents_contract" -eq 1 ]; then
   echo "    python3 scripts/codex-support.py write"
   if [ -f "$target/scripts/models.py" ] &&
      [ "$(harness_roster_state "$target")" != "ok" ]; then
-    # The roster is machine-local and no commit carries it. It no longer
-    # chooses anything — ensure writes the pin without prompting — but a
-    # foreign one fails agent.py and the gate until it's rewritten.
+    # The roster is a tracked baseline, but checkouts from before it was
+    # committed have none — and it no longer chooses anything: ensure
+    # writes the pin without prompting, while a foreign one fails agent.py
+    # and the gate until it's rewritten.
     echo "    scripts/models.py ensure   (rewrites the roster pinned)"
   fi
   [ -f "$target/scripts/opencode-agents.py" ] && echo "    scripts/opencode-agents.py"

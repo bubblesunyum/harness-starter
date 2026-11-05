@@ -76,6 +76,9 @@ def read_jsonc(path):
 def roster_problems(root):
     roster = root / "harness/models.json"
     if not roster.exists():
+        # Absent stays passing: checkouts from before the roster was tracked
+        # have no file, and the pin applies without one. `harness update
+        # --apply` backfills it; the gate must not fail first.
         return []
     try:
         data = json.loads(roster.read_text())
