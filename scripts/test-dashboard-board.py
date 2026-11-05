@@ -226,6 +226,31 @@ m.main()
             claim.unlink(missing_ok=True)
 
 
+def check_board():
+    # A section named twice in one list is a typo that silently wins: the set
+    # lookup below can't tell, so the validator must. Each list is judged on
+    # its own — hiding and ordering the same section is a separate question.
+    for key, doc in (("hidden", {"board": {"hidden": ["gate", "gate"]}}),
+                     ("order", {"board": {"order": ["ready", "ready"]}})):
+        try:
+            dashboard._check_board(doc)
+            raise AssertionError(f'duplicate {key} entries accepted')
+        except ValueError as e:
+            assert 'twice' in str(e) and 'duplicate' in str(e), str(e)
+            assert key in str(e), str(e)
+    assert dashboard._check_board({"board": {"hidden": ["gate"], "order": ["gate"]}}) == {
+        "hidden": ["gate"], "order": ["gate"]}
+    assert dashboard._check_board({}) == {"hidden": [], "order": []}
+    assert dashboard._check_board({"board": {"hidden": ["gate"], "order": ["ready"]}}) == {
+        "hidden": ["gate"], "order": ["ready"]}
+    try:
+        dashboard._check_board({"board": {"hidden": ["nope"]}})
+        raise AssertionError('unknown section accepted')
+    except ValueError as e:
+        assert 'unknown section' in str(e), str(e)
+    print('board hide/reorder validation, duplicate rejection passed')
+
+
 def main():
     (ROOT / '.tmp').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='board-', dir=ROOT / '.tmp') as temporary:
@@ -236,6 +261,7 @@ def main():
             target.write_text(json.dumps(payload, indent=2))
             print(target)
         check_pixels(work)
+        check_board()
         check_ownership(work)
 
 

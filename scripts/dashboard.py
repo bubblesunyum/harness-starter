@@ -1665,6 +1665,9 @@ def _check_board(doc):
             if not isinstance(entry, str) or entry not in BOARD_SECTIONS:
                 raise ValueError(f"[board].{key} names an unknown section {entry!r} — "
                                  f"valid sections are: {', '.join(sorted(BOARD_SECTIONS))}")
+        if len(set(entries)) != len(entries):
+            duplicates = sorted({e for e in entries if entries.count(e) > 1})
+            raise ValueError(f"[board].{key} lists {duplicates[0]!r} twice — delete the duplicate")
         out[key] = list(entries)
     return out
 
@@ -2670,7 +2673,239 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 # UI (the commit composer, the file menu) is opened with a real click instead.
 # These names are the only ones the CLI accepts, and one png is written per
 # state, so the review packet carries them all.
-SHOT_STATES = ("gate", "pulse", "review", "staging", "commit", "filemenu", "peers")
+SHOT_STATES = ("gate", "pulse", "review", "staging", "commit", "filemenu", "peers",
+               "peers-far", "peers-busy", "peers-lone", "peers-midscroll", "peers-focus")
+
+# The peer-tab states need more than the page's own capture hook: a lone
+# board, an overflowing row, and a switch in flight are server conditions,
+# not hover content. `shot` stages each one on a throwaway fixture server —
+# real server code serving a scratch checkout tree under .tmp, so the tabs
+# photographed are the tabs the endpoints describe. The served page is the
+# template's plus a scratch-only driver (never shipped) that performs the
+# gesture headless Chrome cannot: opening the popover, scrolling the row,
+# focusing a tab. The busy capture cannot be a genuine switchPeer flight:
+# virtual time runs the fetch and the rebuild to completion before the
+# capture lands, so the png would be a settled row mislabeled busy. The
+# driver holds the identical in-flight DOM instead — the pressed tab keeps
+# its root and name under aria-busy while the whole row reads inert, exactly
+# what switchPeer and the starting branch of peerGroup render — re-applied
+# every pass so a later tick cannot repaint the settled row first.
+PEER_SHOT_STATES = ("peers-far", "peers-busy", "peers-lone", "peers-midscroll", "peers-focus")
+
+# Twelve quiet siblings beside the serving board: enough to overflow the tab
+# row at capture width, so the scroll states have somewhere to go. The
+# serving board sorts last, so its pressed tab sits at the far end.
+PEER_SHOT_SIBLINGS = ("alpha", "beacon", "cinder", "drift", "ember", "flint",
+                       "grove", "harbor", "inlet", "jetty", "kelp", "lima")
+PEER_SHOT_SERVING = "mothership"
+PEER_SHOT_LONE = "lone board"
+
+# Scratch-only capture driver, appended to the fixture page copy served for
+# the peer states above. Headless Chrome can load the page but cannot press,
+# scroll, or focus it, so this performs the one user gesture each state needs
+# once the first poll has painted. The product page is untouched: this rides
+# on the fixture copy alone, and dispatches on the same ?shot= name the
+# capture URL carries. The busy hold mirrors switchPeer plus the starting
+# branch of peerGroup attribute for attribute — the pressed tab keeps its
+# root and name under aria-busy while every tab reads inert — with no fetch
+# for virtual time to settle first. The guard below is built from
+# PEER_SHOT_STATES, not a second literal to drift.
+PEER_SHOT_DRIVER = """<script>
+(function () {
+  var want = new URLSearchParams(location.search).get('shot') || '';
+  if (PEER_SHOT_NAMES.indexOf(want) < 0) return;
+  var busyRoot = null;
+  function holdBusy() {
+    var seg = document.getElementById('peerSeg');
+    if (!seg) return;
+    var tabs = seg.querySelectorAll('button');
+    if (!busyRoot) {
+      for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].hasAttribute('data-peer-root') &&
+            tabs[i].getAttribute('aria-checked') !== 'true' &&
+            tabs[i].getAttribute('aria-disabled') !== 'true') {
+          busyRoot = tabs[i].getAttribute('data-peer-root');
+          break;
+        }
+      }
+      if (!busyRoot) return;
+    }
+    for (var j = 0; j < tabs.length; j++) {
+      tabs[j].setAttribute('aria-disabled', 'true');
+      tabs[j].tabIndex = -1;
+    }
+    for (var k = 0; k < tabs.length; k++) {
+      if (tabs[k].getAttribute('data-peer-root') === busyRoot) {
+        tabs[k].setAttribute('aria-busy', 'true');
+        tabs[k].setAttribute('aria-checked', 'false');
+        tabs[k].tabIndex = 0;
+      }
+    }
+  }
+  var done = false;
+  var wait = setInterval(function () {
+    if (done) return;
+    if (document.documentElement.getAttribute('data-board-ready') !== 'true') return;
+    var toggle = document.getElementById('metaToggle');
+    if (!toggle) return;
+    if (toggle.getAttribute('aria-expanded') !== 'true') { toggle.click(); return; }
+    var seg = document.getElementById('peerSeg');
+    if (!seg || !seg.querySelector('button')) return;
+    // Held, not finished: a later tick repaints the settled row before the
+    // capture lands, so the in-flight treatment is re-applied every pass.
+    if (want === 'peers-busy') { holdBusy(); return; }
+    done = true;
+    clearInterval(wait);
+    if (want === 'peers-far') seg.scrollLeft = seg.scrollWidth;
+    else if (want === 'peers-midscroll') seg.scrollLeft = (seg.scrollWidth - seg.clientWidth) / 2;
+    else if (want === 'peers-focus') {
+      var buttons = seg.querySelectorAll('button');
+      buttons[Math.min(5, buttons.length - 1)].focus();
+    }
+  }, 100);
+})();
+</script>""".replace(
+    "PEER_SHOT_NAMES",
+    "[" + ", ".join("'%s'" % s for s in PEER_SHOT_STATES) + "]",
+)
+
+
+def _peer_shot_source_page():
+    """The template page the fixture servers serve. The template copy when
+    this checkout has one (development), else the installed page beside this
+    file — installed projects have no `template/` dir, and the fixture must
+    stage alike from either copy."""
+    here = Path(__file__).resolve()
+    checkout = here.parent.parent
+    if checkout.name == "template":
+        return checkout / "dashboard" / "index.html"
+    template_page = checkout / "template" / "dashboard" / "index.html"
+    if template_page.is_file():
+        return template_page
+    return checkout / "dashboard" / "index.html"
+
+
+def _write_peer_shot_checkout(parent, name, page):
+    """One scratch checkout: a harness marker, a project name, and the served
+    page. Quiet (no server) unless shot starts one on it."""
+    root = parent / re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "dashboard.py").write_text("# peer-shot fixture checkout\n")
+    (root / "dashboard").mkdir(exist_ok=True)
+    (root / "dashboard" / "index.html").write_text(page)
+    (root / "dashboard.toml").write_text(f'[project]\nname = "{name}"\n')
+    return root
+
+
+def _start_peer_shot_server(root, port):
+    """Serve a fixture checkout on `port`. Patched the way the board probe's
+    fixtures are: hermetic peer discovery, so no ambient live board leaks
+    into the capture; a claim file outside the ambient glob, so the fixture
+    leaks nothing back (live_claims only ever globs `*-dashboard-*.json`);
+    no launch config or announcements; a short idle death if the capturer
+    never comes back for it."""
+    code = (
+        "import importlib.util, sys\n"
+        "from pathlib import Path\n"
+        f"spec = importlib.util.spec_from_file_location('peer_shot_fixture', {str(Path(__file__).resolve())!r})\n"
+        "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        f"m.ROOT = Path({str(root)!r})\n"
+        "m.prefix = lambda: 'peerfix'\n"
+        "m.live_claims = lambda: {}\n"
+        "m.claim_file = lambda port: Path(f'/tmp/peerfix-shot-{port}.json')\n"
+        "m.write_launch_config = lambda port: None\n"
+        "m.announce = lambda *args: None\n"
+        f"sys.argv = ['dashboard.py', 'serve', '--port', '{port}']\n"
+        "m.main()\n"
+    )
+    env = dict(os.environ, DASHBOARD_EXIT_AFTER="180")
+    return subprocess.Popen([sys.executable, "-c", code], cwd=str(root),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+
+
+def _stop_peer_shot_server(proc, port):
+    try:
+        proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    # The server unlinks its own claim on the way down; this is the backstop
+    # for a kill that skipped it. Named to miss the ambient glob, like the
+    # fixture's own claim.
+    Path(f"/tmp/peerfix-shot-{port}.json").unlink(missing_ok=True)
+
+
+def _capture_one(url, out, width, height, name):
+    """One headless capture under the dashboard's readiness contract: the
+    board painted, the shot hook ran, and the pixels are not blank."""
+    # A budget rather than a sleep: the page paints once its first poll lands,
+    # and virtual time runs it forward without waiting in real seconds.
+    # run-all-compositor-stages-before-draw so a popover opened by the
+    # ?shot hook is painted, not just in the DOM, when the capture lands.
+    Path(out).unlink(missing_ok=True)
+    result = subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars", "--dump-dom",
+                    f"--window-size={width},{height}", f"--screenshot={out}",
+                    "--virtual-time-budget=2500",
+                    # At final state for the capture: the sheet slides up
+                    # over 0.44s and virtual time can photograph it mid-way.
+                    "--force-prefers-reduced-motion",
+                    "--run-all-compositor-stages-before-draw", url],
+                   capture_output=True, text=True)
+    view = name or 'the default view'
+    if result.returncode != 0:
+        reject_screenshot(out, f"Chrome capture failed for {view} (exit {result.returncode})")
+    if not Path(out).exists():
+        reject_screenshot(out, f"Chrome wrote nothing for {view}")
+    if 'data-board-ready="true"' not in result.stdout or (
+            name and f'data-shot-ready="{name}"' not in result.stdout):
+        reject_screenshot(out, f"invalid screenshot for {view}: the board did not finish painting; retry after it loads")
+    problem = screenshot_problem(out)
+    if problem:
+        reject_screenshot(out, f"invalid screenshot for {view}: {problem}; retry after the board finishes loading")
+    return out
+
+
+def _shot_peer_state(state, out, width, height):
+    """Stage one PEER_SHOT_STATES capture on a throwaway fixture server and
+    photograph it. Lone is a single checkout; the rest share an overflowing
+    crowd, each with its own gesture from the scratch driver."""
+    scratch = ROOT / ".tmp" / "peer-shot-fixtures" / state
+    shutil.rmtree(scratch, ignore_errors=True)
+    page = _peer_shot_source_page().read_text()
+    head, sep, tail = page.rpartition("</body>")
+    page = head + PEER_SHOT_DRIVER + "\n" + sep + tail
+    parent = scratch / "parent"
+    if state == "peers-lone":
+        root = _write_peer_shot_checkout(parent, PEER_SHOT_LONE, page)
+    else:
+        root = _write_peer_shot_checkout(parent, PEER_SHOT_SERVING, page)
+        for name in PEER_SHOT_SIBLINGS:
+            _write_peer_shot_checkout(parent, name, page)
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    proc = _start_peer_shot_server(root, port)
+    try:
+        if not wait_until_serving(port, timeout=10):
+            raise ScreenshotError(f"the {state} fixture gave no server on {port} — "
+                    "retry the shot; the fixture stages under .tmp/peer-shot-fixtures "
+                    "on an ephemeral port")
+        try:
+            with urllib.request.urlopen(f"http://localhost:{port}/state.json",
+                                        timeout=FIRST_BUILD_TIMEOUT + 5) as r:
+                r.read()
+        except Exception as e:
+            raise ScreenshotError(f"the {state} fixture gave no state in "
+                    f"{FIRST_BUILD_TIMEOUT + 5:.0f}s, so there is nothing to photograph: {e} — "
+                    "retry the shot")
+        return _capture_one(f"http://localhost:{port}/?shot={state}", out, width, height, state)
+    finally:
+        _stop_peer_shot_server(proc, port)
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def screenshot_problem(path):
@@ -2759,61 +2994,45 @@ def shot(path, port, width=900, height=1400, states=()):
     With no states this photographs the page as it loads, exactly as before.
     With states — a subset of SHOT_STATES — it captures once per state, each
     with `?shot=<name>` in the URL, writing one png per state beside `path`
-    (`board.png` + `gate` becomes `board-gate.png`).
+    (`board.png` + `gate` becomes `board-gate.png`). The peers-* states are
+    staged first (see PEER_SHOT_STATES): each is photographed on its own
+    throwaway fixture server, so no live board is needed for them.
     """
     if not Path(CHROME).exists():
         raise ScreenshotError(f"no Chrome at {CHROME} — install it or capture by hand")
-    if not is_serving(port):
-        raise ScreenshotError(f"nothing serving on {port} — run `dashboard.py up` first")
     unknown = [s for s in states if s not in SHOT_STATES]
     if unknown:
         raise ScreenshotError(f"no such state: {', '.join(unknown)} "
                 f"(try: {', '.join(SHOT_STATES)})")
-    # Warmed on real time first. Chrome's virtual clock stops while a request is
-    # outstanding, so against a server that hasn't built its first snapshot the
-    # page's own poll spends the whole budget waiting — and the capture comes
-    # back with a header, no board, and nothing to say it was photographed too
-    # early. The design reviewer reads that as a blank page, which is worse than
-    # no capture at all.
-    try:
-        with urllib.request.urlopen(f"http://localhost:{port}/state.json",
-                                    timeout=FIRST_BUILD_TIMEOUT + 5) as r:
-            r.read()
-    except Exception as e:
-        raise ScreenshotError(f"the dashboard on {port} gave no state in "
-                f"{FIRST_BUILD_TIMEOUT + 5:.0f}s, so there is nothing to photograph: {e}")
+    live_states = [s for s in states if s not in PEER_SHOT_STATES]
+    if not states or live_states:
+        if not is_serving(port):
+            raise ScreenshotError(f"nothing serving on {port} — run `dashboard.py up` first")
+        # Warmed on real time first. Chrome's virtual clock stops while a request is
+        # outstanding, so against a server that hasn't built its first snapshot the
+        # page's own poll spends the whole budget waiting — and the capture comes
+        # back with a header, no board, and nothing to say it was photographed too
+        # early. The design reviewer reads that as a blank page, which is worse than
+        # no capture at all.
+        try:
+            with urllib.request.urlopen(f"http://localhost:{port}/state.json",
+                                        timeout=FIRST_BUILD_TIMEOUT + 5) as r:
+                r.read()
+        except Exception as e:
+            raise ScreenshotError(f"the dashboard on {port} gave no state in "
+                    f"{FIRST_BUILD_TIMEOUT + 5:.0f}s, so there is nothing to photograph: {e}")
     base = Path(path)
     targets = [("", path)] if not states else [
         (s, str(base.with_name(f"{base.stem}-{s}{base.suffix or '.png'}")))
-        for s in states]
+        for s in live_states]
     written = []
     for name, out in targets:
         url = f"http://localhost:{port}/" + (f"?shot={name}" if name else "")
-        # A budget rather than a sleep: the page paints once its first poll lands,
-        # and virtual time runs it forward without waiting in real seconds.
-        # run-all-compositor-stages-before-draw so a popover opened by the
-        # ?shot hook is painted, not just in the DOM, when the capture lands.
-        Path(out).unlink(missing_ok=True)
-        result = subprocess.run([CHROME, "--headless", "--disable-gpu", "--hide-scrollbars", "--dump-dom",
-                        f"--window-size={width},{height}", f"--screenshot={out}",
-                        "--virtual-time-budget=2500",
-                        # At final state for the capture: the sheet slides up
-                        # over 0.44s and virtual time can photograph it mid-way.
-                        "--force-prefers-reduced-motion",
-                        "--run-all-compositor-stages-before-draw", url],
-                       capture_output=True, text=True)
-        view = name or 'the default view'
-        if result.returncode != 0:
-            reject_screenshot(out, f"Chrome capture failed for {view} (exit {result.returncode})")
-        if not Path(out).exists():
-            reject_screenshot(out, f"Chrome wrote nothing for {view}")
-        if 'data-board-ready="true"' not in result.stdout or (
-                name and f'data-shot-ready="{name}"' not in result.stdout):
-            reject_screenshot(out, f"invalid screenshot for {view}: the board did not finish painting; retry after it loads")
-        problem = screenshot_problem(out)
-        if problem:
-            reject_screenshot(out, f"invalid screenshot for {view}: {problem}; retry after the board finishes loading")
-        written.append(out)
+        written.append(_capture_one(url, out, width, height, name))
+    for state in states:
+        if state in PEER_SHOT_STATES:
+            out = str(base.with_name(f"{base.stem}-{state}{base.suffix or '.png'}"))
+            written.append(_shot_peer_state(state, out, width, height))
     return written[0] if len(written) == 1 else "\n".join(written)
 
 
