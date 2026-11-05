@@ -9,6 +9,8 @@ nothing else. This holds every place a model could be chosen to that:
 
   harness/models.json    every entry names the pin (absent is fine: it applies anyway)
   .opencode/agent{,s}/   every `model:` line is the pin; generated ones must have one
+  ~/.config/opencode/agent{,s}/, ~/.opencode/agent{,s}/   same — a machine-wide
+                         agent can still name another, so user dirs fail too
   opencode.json          pins the session model; no agent or mode names another
   scripts/               no opencode -m built from anything but OPENCODE_MODEL_ARG
   skills and docs        no `opencode ... -m <id>` example naming another model
@@ -26,7 +28,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from models import OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT, pin_problem
+from models import (OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT,
+                    model_is_pinned, pin_problem)
 
 GENERATED_BY = "scripts/opencode-agents.py"
 CONFIGS = ("opencode.json", "opencode.jsonc",
@@ -70,19 +73,6 @@ def read_jsonc(path):
     return json.loads(strip_jsonc(path.read_text()))
 
 
-def pinned_model_value(value, variant=None):
-    """Whether a config `model` value (string or {providerID, model, variant})
-    plus a sibling `variant`, if any, lands on the pin."""
-    if isinstance(value, dict):
-        provider, name = value.get("providerID"), value.get("model")
-        model = f"{provider}/{name}" if provider and name else None
-        variant = value.get("variant", variant)
-    else:
-        model, _, suffix = str(value).partition("#")
-        variant = suffix or variant
-    return model == OPENCODE_MODEL and variant == OPENCODE_VARIANT
-
-
 def roster_problems(root):
     roster = root / "harness/models.json"
     if not roster.exists():
@@ -97,29 +87,100 @@ def roster_problems(root):
             if (problem := pin_problem(role, entry))]
 
 
+def short_label(path, home):
+    """~/... when the path is under home, else the full path."""
+    if home is not None:
+        try:
+            return f"~/{path.relative_to(home)}"
+        except ValueError:
+            pass
+    return str(path)
+
+
+def user_agent_files():
+    """(files, problems) for the user-level agent files opencode reads
+    outside the repo. Missing dirs are clean, not errors — a machine without
+    them has nothing extra to check. Unreadable dirs are problems, like
+    unreadable files: silently skipping them would pass a tree that was never
+    checked. HOME-based, never check-root-relative, so planted repo tests
+    still pass."""
+    try:
+        home = Path.home()
+    except Exception as exc:
+        return [], [f"~: cannot locate a home directory ({exc}) — "
+                    f"user agent dirs unchecked"]
+    candidates = (home / ".config/opencode/agent",
+                  home / ".config/opencode/agents",
+                  home / ".opencode/agent",
+                  home / ".opencode/agents")
+    files, problems = [], []
+    for directory in candidates:
+        try:
+            if not directory.is_dir():
+                continue
+        except OSError as exc:
+            problems.append(f"{short_label(directory, home)}: "
+                            f"unreadable ({exc})")
+            continue
+        try:
+            files.extend(directory.glob("*.md"))
+        except OSError as exc:
+            problems.append(f"{short_label(directory, home)}: "
+                            f"unreadable ({exc})")
+    return sorted(set(files)), problems
+
+
+def agent_text_problems(label, text):
+    """Problems for one agent file's content. Shared by repo and user-level
+    files, so both hold the same pin."""
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    header = match.group(1) if match else ""
+    models = re.findall(r"^model:[ \t]*(.*?)[ \t]*$", header, re.M)
+    variants = re.findall(r"^variant:[ \t]*(.*?)[ \t]*$", header, re.M)
+    variant = variants[0] if variants else None
+    problems = []
+    if not models:
+        if GENERATED_BY in text:
+            problems.append(f"{label}: no model line — it would inherit the "
+                            f"session model; run {GENERATED_BY}")
+        elif variants:
+            problems.append(f"{label}: sets a variant without the pinned model")
+        return problems
+    for model in models:
+        if not model_is_pinned(model, variant):
+            problems.append(f"{label}: model {model!r} — must be {OPENCODE_MODEL_ARG}")
+    return problems
+
+
 def agent_file_problems(root):
     problems = []
     # opencode reads agent definitions from both spellings of the directory.
     paths = sorted({*(root / ".opencode/agent").glob("*.md"),
                     *(root / ".opencode/agents").glob("*.md")})
+    seen = set(paths)
     for path in paths:
-        rel = path.relative_to(root)
-        text = path.read_text()
-        match = re.match(r"^---\n(.*?)\n---\n", text, re.S)
-        header = match.group(1) if match else ""
-        models = re.findall(r"^model:[ \t]*(.*?)[ \t]*$", header, re.M)
-        variants = re.findall(r"^variant:[ \t]*(.*?)[ \t]*$", header, re.M)
-        variant = variants[0] if variants else None
-        if not models:
-            if GENERATED_BY in text:
-                problems.append(f"{rel}: no model line — it would inherit the "
-                                f"session model; run {GENERATED_BY}")
-            elif variants:
-                problems.append(f"{rel}: sets a variant without the pinned model")
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError) as exc:
+            problems.append(f"{path.relative_to(root)}: unreadable ({exc})")
             continue
-        for model in models:
-            if not pinned_model_value(model, variant):
-                problems.append(f"{rel}: model {model!r} — must be {OPENCODE_MODEL_ARG}")
+        problems += agent_text_problems(path.relative_to(root), text)
+    try:
+        home = Path.home()
+    except Exception:
+        home = None
+    user_files, user_problems = user_agent_files()
+    problems += user_problems
+    for path in user_files:
+        if path in seen:
+            continue
+        label = short_label(path, home)
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError) as exc:
+            problems.append(f"{label}: unreadable ({exc})")
+            continue
+        problems += agent_text_problems(label, text)
     return problems
 
 
@@ -133,7 +194,7 @@ def config_agent_problems(rel, tree):
             if not isinstance(settings, dict):
                 continue
             if "model" in settings:
-                if not pinned_model_value(settings["model"], settings.get("variant")):
+                if not model_is_pinned(settings["model"], settings.get("variant")):
                     problems.append(f"{rel}: {group}.{name} runs on "
                                     f"{settings['model']!r} variant "
                                     f"{settings.get('variant')!r} — must be "
@@ -162,7 +223,7 @@ def config_problems(root):
             continue
         if name == "opencode.json" and "model" not in tree:
             problems.append(f"{name}: no top-level model — must be {OPENCODE_MODEL_ARG}")
-        if "model" in tree and not pinned_model_value(tree["model"]):
+        if "model" in tree and not model_is_pinned(tree["model"]):
             problems.append(f"{name}: model {tree['model']!r} — must be {OPENCODE_MODEL_ARG}")
         small = tree.get("small_model")
         if small is not None and str(small).partition("#")[0] != OPENCODE_MODEL:

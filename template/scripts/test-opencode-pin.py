@@ -10,6 +10,7 @@ name it — then proves the unplanted copy passes, so a failure is the plant's.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,11 @@ class PinCheckTests(unittest.TestCase):
         (self.root / ".opencode/agent").mkdir(parents=True)
         self.agent_file = self.root / ".opencode/agent/reviewer-taste.md"
         self.agent_file.write_text(AGENT)
+        # The check also reads user-level agent dirs from HOME. Point HOME at
+        # an empty scratch dir so a foreign model in the developer's real
+        # ~/.config/opencode can't fail a clean tree.
+        self.home = Path(self.temp.name) / "home"
+        self.home.mkdir()
 
     def roster(self, data):
         (self.root / "harness/models.json").write_text(json.dumps(data))
@@ -51,9 +57,10 @@ class PinCheckTests(unittest.TestCase):
         path.write_text(json.dumps(tree))
 
     def check(self):
+        env = {**os.environ, "HOME": str(self.home)}
         return subprocess.run([sys.executable, str(SCRIPTS / "opencode-pin.py"),
                                "check", str(self.root)],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=env)
 
     def assert_fails_naming(self, *needles):
         out = self.check()
@@ -123,6 +130,12 @@ class PinCheckTests(unittest.TestCase):
         self.config(lambda t: t["agent"]["build"].update(variant="low"))
         self.assert_fails_naming("agent.build")
 
+    def test_an_explicit_null_agent_variant_in_opencode_json_fails(self):
+        # An explicit null is a present variant that isn't the pin — the
+        # merge-writer pins it up, so the gate must flag it until then.
+        self.config(lambda t: t["agent"]["build"].update(variant=None))
+        self.assert_fails_naming("agent.build")
+
     def test_a_foreign_shadow_config_fails(self):
         (self.root / ".opencode/opencode.json").write_text(
             json.dumps({"model": "opencode-go/cheap-bulk"}))
@@ -148,6 +161,20 @@ class PinCheckTests(unittest.TestCase):
         planted = self.root / "scripts/spawn.sh"
         planted.write_text("#!/bin/bash\nopencode run -m opencode-go/cheap-bulk go\n")
         self.assert_fails_naming("scripts/spawn.sh:2")
+
+    def test_a_foreign_user_level_agent_fails(self):
+        foreign = self.home / ".config/opencode/agents"
+        foreign.mkdir(parents=True)
+        (foreign / "bulk.md").write_text(
+            "---\nmodel: ollama/qwen3:4b\nmode: subagent\n---\n")
+        self.assert_fails_naming("bulk.md", "ollama/qwen3:4b")
+
+    def test_a_pinned_user_level_agent_passes(self):
+        agent = self.home / ".opencode/agents"
+        agent.mkdir(parents=True)
+        (agent / "ok.md").write_text(AGENT)
+        out = self.check()
+        self.assertEqual(out.returncode, 0, out.stdout)
 
     def test_a_doc_example_naming_another_model_fails(self):
         (self.root / "AGENTS.local.md").write_text(

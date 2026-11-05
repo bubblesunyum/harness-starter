@@ -170,6 +170,21 @@ def pin_problem(role, entry):
             f"{OPENCODE_VARIANT}")
 
 
+def model_is_pinned(value, variant=None):
+    """Whether a config `model` value (string or {providerID, model, variant})
+    plus a sibling `variant`, if any, lands on the pin. Shared by the
+    opencode-pin.py gate and the opencode-agents.py merge-writer, so the two
+    agree on what counts as pinned."""
+    if isinstance(value, dict):
+        provider, name = value.get("providerID"), value.get("model")
+        model = f"{provider}/{name}" if provider and name else None
+        variant = value.get("variant", variant)
+    else:
+        model, _, suffix = str(value).partition("#")
+        variant = suffix or variant
+    return model == OPENCODE_MODEL and variant == OPENCODE_VARIANT
+
+
 def foreign_entries():
     """{role: problem} for every roster entry that breaks the pin."""
     problems = {}
