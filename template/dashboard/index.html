@@ -1091,7 +1091,9 @@
       }
       /* The tab row scrolls behind visible arrow controls: a bare scrollbar
       stays hidden on some platforms, so an overflowing row gets padded
-      buttons plus a trailing fade that disappears at the end. */
+      buttons plus a fade at whichever edge still has content. The fade is a
+      mask on the scroller itself — an overlay positioned off the controls
+      would need their exact size, and drift the moment they change. */
       .peer-scroll {
         display: flex;
         align-items: center;
@@ -1099,32 +1101,73 @@
         position: relative;
       }
       .peer-scroll[hidden] { display: none; }
-      .peer-scroll.has-more::after {
-        content: '';
-        position: absolute;
-        z-index: 1;
-        top: 0;
-        right: 35px;
-        bottom: 8px;
-        width: 18px;
-        pointer-events: none;
-        background: linear-gradient(90deg, transparent, var(--panel));
+      /* The controls below set their own display, which beats the UA's
+      [hidden] rule — without this they would paint on lone boards and
+      first paint even while updatePeerScroll keeps them hidden. */
+      .peer-scroll-control[hidden] { display: none; }
+      .peer-seg {
+        --peer-fade: 16px;
       }
+      .peer-scroll.has-prev .peer-seg {
+        -webkit-mask-image: linear-gradient(270deg, #000 calc(100% - var(--peer-fade)), transparent);
+        mask-image: linear-gradient(270deg, #000 calc(100% - var(--peer-fade)), transparent);
+      }
+      .peer-scroll.has-more .peer-seg {
+        -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - var(--peer-fade)), transparent);
+        mask-image: linear-gradient(90deg, #000 calc(100% - var(--peer-fade)), transparent);
+      }
+      .peer-scroll.has-prev.has-more .peer-seg {
+        -webkit-mask-image: linear-gradient(
+          90deg,
+          transparent,
+          #000 var(--peer-fade),
+          #000 calc(100% - var(--peer-fade)),
+          transparent
+        );
+        mask-image: linear-gradient(
+          90deg,
+          transparent,
+          #000 var(--peer-fade),
+          #000 calc(100% - var(--peer-fade)),
+          transparent
+        );
+      }
+      /* 36px targets like every other pointer control here, squared to the
+      segment's own 8px radius. The glyph is a drawn chevron, not a text
+      character — text never centres the same way twice across platforms. */
       .peer-scroll-control {
-        flex: 0 0 30px;
-        width: 30px;
-        height: 30px;
-        padding: 3px 7px;
+        flex: 0 0 36px;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         border: 1px solid var(--line);
-        border-radius: 5px;
+        border-radius: 8px;
         color: var(--ink);
         background: var(--panel);
         cursor: pointer;
-        font: inherit;
       }
       .peer-scroll-control:hover {
         color: var(--accent);
         background: color-mix(in srgb, var(--accent) 11%, var(--panel));
+      }
+      .peer-scroll-control svg {
+        display: block;
+        width: 14px;
+        height: 14px;
+      }
+      /* At the scrolled limit the arrow damps instead of going dark: the row
+      doesn't overflow that way, but the control is still there, so it reads
+      inert rather than vanishing and re-laying the row out. */
+      .peer-scroll-control[aria-disabled='true'] {
+        opacity: 0.35;
+        cursor: default;
+      }
+      .peer-scroll-control[aria-disabled='true']:hover {
+        color: var(--ink);
+        background: var(--panel);
       }
       .peer-seg::-webkit-scrollbar {
         height: 8px;
@@ -1141,8 +1184,10 @@
         flex: 1 0 auto;
         white-space: nowrap;
       }
+      /* Inert tabs share the arrows' damped value: one idea (present but
+      unpressable), one opacity. */
       .peer-seg button[aria-disabled='true'] {
-        opacity: 0.45;
+        opacity: 0.35;
         cursor: default;
       }
       /* Dimmed means busy, nothing else — the label, not the segment. The
@@ -1179,6 +1224,14 @@
       .mini:focus-visible {
         outline: 2px solid var(--accent);
         outline-offset: 2px;
+      }
+      /* The tab row scrolls inside two clipping ancestors — the scroller and
+      the popover — so the page's outset ring would paint half-cut wherever a
+      tab meets the row's edge. Inset instead: the ring never leaves the
+      segment, so it reads whole at any scroll position. */
+      .peer-seg button:focus-visible,
+      .peer-scroll-control:focus-visible {
+        outline-offset: -2px;
       }
       /* The label field owns its suggestions: the dropdown hangs off the field
       rather than the row, so a narrow lane doesn't squeeze it. */
@@ -3721,6 +3774,8 @@
       document.addEventListener('click', (e) => {
         const scroll = e.target.closest('[data-peer-scroll]')
         if (scroll) {
+          // A damped arrow is at its limit: pressing it must not nudge.
+          if (scroll.hidden || scroll.getAttribute('aria-disabled') === 'true') return
           const seg = $('peerSeg')
           seg?.scrollBy({left: Number(scroll.dataset.peerScroll) * Math.max(100, seg.clientWidth * 0.75), behavior: 'smooth'})
           return
@@ -4047,6 +4102,29 @@
         }
       })
 
+      /* Peer tabs answer the same keys as the priority radiogroups — but
+      arrows move only the tab stop and the focus, never the board: a switch
+      POSTs and rebuilds, so it stays on Enter/Space/click like any button. */
+      document.addEventListener('keydown', (e) => {
+        const tab = e.target.closest?.('#peerSeg [role="radio"]')
+        if (
+          !tab ||
+          !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)
+        )
+          return
+        e.preventDefault()
+        const order = [...document.querySelectorAll('#peerSeg [role="radio"]')]
+        if (!order.length) return
+        let ix = order.indexOf(tab)
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ix = (ix + 1) % order.length
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+          ix = (ix - 1 + order.length) % order.length
+        else if (e.key === 'Home') ix = 0
+        else ix = order.length - 1
+        setRoving(order, ix)
+        order[ix].focus()
+      })
+
       /* ---- work tree interactions --------------------------------------------- */
       /* A checkbox's own change fires after click already ran and let it through
          (the click handler above returns early on `.wt-checkbox` rather than
@@ -4338,6 +4416,12 @@
       // repaint restoring the old label mid-flight.
       let startingPeerRoot = ''
 
+      /* One entry counts: a root that names a checkout and a name to show.
+         Both the tab bar and the discovery poll trust only this shape — a
+         foreign entry blanks the whole list rather than growing dead tabs. */
+      const isPeerEntry = (p) =>
+        p && typeof p.root === 'string' && p.root !== '' && typeof p.name === 'string'
+
       function drawVerify(d) {
         const tip = $('verifyTip')
         if (!tip || !gateVisible(d)) return
@@ -4397,23 +4481,44 @@
              finished on this machine, nowhere else.</div>`
       }
 
+      /* One comparison owns the peer row's single tab stop. The render
+      path writes it into HTML (no nodes exist yet); the arrow-key and
+      refocus paths write it onto nodes. */
+      function peerTabStop(ix, rovingIx) {
+        return ix === rovingIx ? 0 : -1
+      }
+      function setRoving(order, ix) {
+        order.forEach((el, i) => {
+          el.tabIndex = peerTabStop(i, ix)
+        })
+      }
+
       /* One segment per detected harness, the current board pressed and inert:
          a press switches this same page to the peer (see switchPeer). With no peer list yet — a lone board, or
          a server from before the dashboards endpoint — the bar is just this
          board. `p.self` is only ever set on that local fallback; listed peers
-         compare roots against the endpoint's `self`. */
+         compare roots against the endpoint's `self`. A radiogroup like the
+         priority segments: the tab that says where you are is the one tab
+         stop, arrows move focus without switching (a switch rebuilds, so it
+         stays on Enter/Space/click). */
       function peerGroup(d) {
         // A section the project hid never renders, even while switching —
         // the in-flight label lives on the tab being hidden.
         if (boardConfig(d).hidden.has('peers')) return ''
         // Foreign entries make the whole list absent, not dead tabs — and a
         // lone board simply arrives as a list of one.
-        const shaped = (p) =>
-          p && typeof p.root === 'string' && p.root !== '' && typeof p.name === 'string'
-        const known = peers.filter(shaped)
+        const known = peers.filter(isPeerEntry)
         const list = known.length ? known : [{name: d.project, root: '', self: true}]
+        // The tab that says where you are — or where you're headed mid-switch —
+        // owns the tab stop; a list with no current board falls back to first.
+        const startingIx = list.findIndex((p) => startingPeerRoot && p.root === startingPeerRoot)
+        const selfIx = list.findIndex((p) => (p.self && !p.root) || (selfRoot && p.root === selfRoot))
+        let rovingIx = 0
+        if (startingIx >= 0) rovingIx = startingIx
+        else if (selfIx >= 0) rovingIx = selfIx
         const buttons = list
-          .map((p) => {
+          .map((p, ix) => {
+            const tabStop = peerTabStop(ix, rovingIx)
             // The in-flight tab first, so no current check below can steal
             // its busy state: it keeps its root and its name — the row doesn't
             // reflow mid-flight — and carries the busy treatment until the
@@ -4421,7 +4526,7 @@
             const starting = startingPeerRoot && p.root === startingPeerRoot
             if (starting)
               return (
-                `<button aria-checked="false" aria-disabled="true" aria-busy="true"` +
+                `<button type="button" role="radio" tabindex="${tabStop}" aria-checked="false" aria-disabled="true" aria-busy="true"` +
                 ` data-peer-root="${esc(p.root)}" title="${esc(p.root)}">${esc(p.name)}</button>`
               )
             // Current is the board on screen. The `self` flag is only ever set
@@ -4430,7 +4535,7 @@
             const self = (p.self && !p.root) || (selfRoot && p.root === selfRoot)
             if (self)
               return (
-                `<button aria-checked="true" aria-disabled="true"` +
+                `<button type="button" role="radio" tabindex="${tabStop}" aria-checked="true" aria-disabled="true"` +
                 `${p.root ? ` title="${esc(p.root)}"` : ''}>${esc(p.name)}</button>`
               )
             // A board from before the switch speaks only `start`: landing there
@@ -4447,7 +4552,7 @@
             // row must not advertise pressable. Only the switching tab is
             // dimmed — the dim is its busy message.
             return (
-              `<button aria-checked="false"${disabled ? ' aria-disabled="true"' : ''}` +
+              `<button type="button" role="radio" tabindex="${tabStop}" aria-checked="false"${disabled ? ' aria-disabled="true"' : ''}` +
               `${incapable ? ' data-peer-incapable="true"' : ` data-peer-root="${esc(p.root)}"`}` +
               ` title="${esc(title)}">${esc(p.name)}</button>`
             )
@@ -4456,9 +4561,9 @@
         return (
           `<div class="group peer-group">` +
           `<div class="peer-scroll" id="peerScroll">` +
-          `<button class="peer-scroll-control" type="button" data-peer-scroll="-1" aria-label="Scroll boards left" hidden>‹</button>` +
-          `<div class="seg peer-seg" id="peerSeg" role="listbox" aria-label="dashboards">${buttons}</div>` +
-          `<button class="peer-scroll-control" type="button" data-peer-scroll="1" aria-label="Scroll boards right" hidden>›</button>` +
+          `<button class="peer-scroll-control" type="button" data-peer-scroll="-1" aria-label="Scroll boards left" aria-disabled="false" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 3.5 5.5 8l5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` +
+          `<div class="seg peer-seg" id="peerSeg" role="radiogroup" aria-label="dashboards">${buttons}</div>` +
+          `<button class="peer-scroll-control" type="button" data-peer-scroll="1" aria-label="Scroll boards right" aria-disabled="false" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5l5 4.5-5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` +
           `</div></div>`
         )
       }
@@ -4469,9 +4574,19 @@
         if (!seg || !wrap) return
         const controls = [...wrap.querySelectorAll('[data-peer-scroll]')]
         const overflowing = seg.scrollWidth > seg.clientWidth + 1
-        for (const control of controls) control.hidden = !overflowing
-        wrap.classList.toggle('has-more', overflowing && seg.scrollLeft + seg.clientWidth < seg.scrollWidth - 1)
-        if (!seg.onscroll) seg.onscroll = updatePeerScroll
+        const atStart = seg.scrollLeft <= 1
+        const atEnd = seg.scrollLeft + seg.clientWidth >= seg.scrollWidth - 1
+        for (const control of controls) {
+          control.hidden = !overflowing
+          // The exhausted end damps instead of hiding: same footprint, so the
+          // row never re-lays under the pointer at the moment it arrives.
+          control.setAttribute('aria-disabled', String(!overflowing || (Number(control.dataset.peerScroll) < 0 ? atStart : atEnd)))
+        }
+        wrap.classList.toggle('has-prev', overflowing && !atStart)
+        wrap.classList.toggle('has-more', overflowing && !atEnd)
+        // The tab row is rebuilt on every repaint, so this node is always
+        // fresh — one listener per node, and nothing to guard or clobber.
+        seg.addEventListener('scroll', updatePeerScroll, {passive: true})
       }
       window.addEventListener('resize', updatePeerScroll)
 
@@ -4493,6 +4608,13 @@
 
         // A section the project hid never renders, even with numbers on it.
         const showBudget = !boardConfig(d).hidden.has('budget')
+        // The popover rebuilds wholesale, which would drop the focus of anyone
+        // arrowing through the peer tabs — so a focused tab is handed back to
+        // the rebuilt row, the same way cards are refocused after a repaint.
+        const focusedTab = document.activeElement?.closest?.('#peerSeg [role="radio"]')
+        const focusedIx = focusedTab
+          ? [...document.querySelectorAll('#peerSeg [role="radio"]')].indexOf(focusedTab)
+          : -1
         $('metaTip').innerHTML =
           peerGroup(d) + (showBudget ? `
            <div class="group">
@@ -4526,6 +4648,14 @@
               cheap models, off the diff.</div>
           </div>`
         updatePeerScroll()
+        if (focusedIx >= 0) {
+          const tabs = [...document.querySelectorAll('#peerSeg [role="radio"]')]
+          const back = tabs[Math.min(focusedIx, tabs.length - 1)]
+          if (back) {
+            setRoving(tabs, tabs.indexOf(back))
+            back.focus({preventScroll: true})
+          }
+        }
       }
 
       /* ---- polling ---------------------------------------------------------- */
@@ -4562,16 +4692,35 @@
       let statePoll = null
       let peerPoll = null
 
+      /* One fetch with a bounded wait, shared by the state poll and peer
+         discovery (they differ only in deadline): the guard aborts the flight
+         when the deadline passes, so a hung endpoint rejects and releases the
+         single-flight slot instead of holding it forever. */
+      function fetchWithTimeout(flight, request, ms, message) {
+        let timeout = 0
+        const guard = new Promise((_, reject) => {
+          timeout = setTimeout(() => {
+            flight.controller.abort()
+            reject(new Error(message))
+          }, ms)
+        })
+        return Promise.race([request, guard]).finally(() => clearTimeout(timeout))
+      }
+
+      /* Both polls cancel the same way — abort the flight, release the slot —
+         so the two named cancellations are one function with two callers. */
+      function cancelFlight(flight) {
+        if (!flight) return null
+        flight.controller.abort()
+        return null
+      }
+
       function cancelStatePoll() {
-        if (!statePoll) return
-        statePoll.controller.abort()
-        statePoll = null
+        statePoll = cancelFlight(statePoll)
       }
 
       function cancelPeerPoll() {
-        if (!peerPoll) return
-        peerPoll.controller.abort()
-        peerPoll = null
+        peerPoll = cancelFlight(peerPoll)
       }
 
       // Peer discovery decorates a state that already painted. One bounded
@@ -4580,30 +4729,24 @@
         if (peerPoll || startingPeerRoot) return
         const flight = {controller: new AbortController()}
         peerPoll = flight
-        let timeout
         let next = []
         let nextSelf = null
         try {
-          const res = await Promise.race([
-            fetch('dashboards?t=' + Date.now(), {cache: 'no-store', signal: flight.controller.signal})
-              .then((r) => r.json()),
-            new Promise((_, reject) => {
-              timeout = setTimeout(() => {
-                flight.controller.abort()
-                reject(new Error('peer discovery timed out'))
-              }, 2000)
-            }),
-          ])
+          const res = await fetchWithTimeout(
+            flight,
+            fetch('dashboards?t=' + Date.now(), {cache: 'no-store', signal: flight.controller.signal}).then(
+              (r) => r.json(),
+            ),
+            2000,
+            'peer discovery timed out',
+          )
           // Only the endpoint's own shape is accepted — anything else is a
           // regression to hear about, not a shape to guess at.
-          const shaped = (p) =>
-            p && typeof p.root === 'string' && p.root !== '' && typeof p.name === 'string'
-          next = res && Array.isArray(res.peers) && res.peers.every(shaped) ? res.peers : []
+          next = res && Array.isArray(res.peers) && res.peers.every(isPeerEntry) ? res.peers : []
           nextSelf = res && typeof res.self === 'string' ? res.self : null
         } catch {
           // An absent or slow optional endpoint leaves the current board's tab.
         } finally {
-          clearTimeout(timeout)
           if (peerPoll === flight) peerPoll = null
         }
         // Ordinary state polls do not make peer discovery stale. Only a root
@@ -4632,17 +4775,13 @@
         const flight = {controller: new AbortController()}
         statePoll = flight
         let d
-        let timeout
         try {
-          const response = await Promise.race([
+          const response = await fetchWithTimeout(
+            flight,
             fetch('state.json?t=' + Date.now(), {cache: 'no-store', signal: flight.controller.signal}),
-            new Promise((_, reject) => {
-              timeout = setTimeout(() => {
-                flight.controller.abort()
-                reject(new Error('state poll timed out'))
-              }, 10000)
-            }),
-          ])
+            10000,
+            'state poll timed out',
+          )
           d = await response.json()
         } catch (e) {
           if (statePoll !== flight || gen !== drawGen) return
@@ -4658,8 +4797,6 @@
             } If this stays, start the server with
             <code>scripts/dashboard.py</code>.</div>`
           return
-        } finally {
-          clearTimeout(timeout)
         }
 
         if (statePoll !== flight || gen !== drawGen) return
