@@ -329,19 +329,29 @@ def ledger_state():
     # The board's backlog strip reads the same inheritance the ready
     # derivation does (see _grow_down): a child of shelved work renders
     # under backlog, not as a card of its own.
-    # Needs-human seeds stay open-only: a closed one is finished work, not
-    # shelved work, and the strip is no place for history. Backlog seeds
-    # keep every status, as before — a closed backlog bead was always shelved.
-    backlog_ids = _grow_down(
-        {i["id"]: _parent_ids(i) for i in all_issues},
+    # Seeds stay open-only: a closed bead is finished work, not shelved work,
+    # and the strip is no place for history — and closed beads never render
+    # as backlog, seed or inherited child alike.
+    parents = {i["id"]: _parent_ids(i) for i in all_issues}
+    by_status = {i["id"]: i.get("status", "open") for i in all_issues}
+    backlog_ids = {bid for bid in _grow_down(
+        parents,
         {i["id"] for i in all_issues
-         if "backlog" in (i.get("labels") or []) or
-         ("needs-human" in (i.get("labels") or []) and
-          i.get("status") == "open")})
+         if i.get("status") == "open" and
+         ("backlog" in (i.get("labels") or []) or
+          "needs-human" in (i.get("labels") or []))})
+        if by_status.get(bid) != "closed"}
     # The bd-ready fallback above answers own labels only; without this one
     # id could be both ready and backlog and the count would drift from the
     # board. Harmless on the derived path, where shelved never made ready.
-    ready_ids -= backlog_ids
+    # Kept on the full inheritance brief.sh uses (seeds of every status, as
+    # `bd ready` itself only ever checked own labels), not the open-only
+    # strip above — an open child of a closed shelf is still not next work.
+    ready_ids -= _grow_down(
+        parents,
+        {i["id"] for i in all_issues
+         if "backlog" in (i.get("labels") or []) or
+         "needs-human" in (i.get("labels") or [])})
     issues = []
     counts = {"open": 0, "ready": len(ready_ids), "in_progress": 0, "closed": 0, "blocked": 0}
 
