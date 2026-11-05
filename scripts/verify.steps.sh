@@ -1409,7 +1409,9 @@ step "contract scripts match the template byte for byte" bash -c '
   cmp -s template/scripts/ledger-export-check.sh scripts/ledger-export-check.sh ||
     { echo "error: ledger-export-check.sh differs from its template — change the template, not the copy"; exit 1; }
   cmp -s template/scripts/review.sh scripts/review.sh ||
-    { echo "error: scripts/review.sh differs from its template — change the template, not the copy"; exit 1; }'
+    { echo "error: scripts/review.sh differs from its template — change the template, not the copy"; exit 1; }
+  cmp -s template/scripts/wrap-up.sh scripts/wrap-up.sh ||
+    { echo "error: scripts/wrap-up.sh differs from its template — change the template, not the copy"; exit 1; }'
 
 # Overlay files are the project's to edit, so an edited one must read as
 # current, not stale — a warning nobody can clear is the one that stops being
