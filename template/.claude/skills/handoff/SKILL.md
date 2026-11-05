@@ -15,6 +15,21 @@ and finish the piece first.
 
 ## The close
 
+Prefer `scripts/wrap-up.sh` over hand-ordering the steps below — it runs them
+in the one order that stays clean (ledger writes, push, export, verify,
+commit); every `bd` write after the export re-dirties it and forces a second
+full gate run:
+
+```bash
+scripts/wrap-up.sh -m "lowercase terse message" --bead <id> \
+  [--close <id> --reason "..."] [--note <id> "..."] [--remember "..."] \
+  [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
+```
+
+Write the note first and pass it as `--note-file` to fold its capture commit
+into the same run. The numbered steps are the manual fallback when the script
+doesn't fit.
+
 1. **Settle the ledger.** Claimed beads are closed with a reason, or returned to
    open with `bd update <id> --status open`, followed by
    `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
@@ -100,4 +115,4 @@ with `claude agents`. Include a "suggested skills" line in the summary. Don't
 duplicate what's already in beads, commits, or a plan file — reference those by
 id or path.
 
-<!-- tracks: scripts/brief.sh -->
+<!-- tracks: scripts/brief.sh scripts/wrap-up.sh -->
