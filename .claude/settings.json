@@ -2,31 +2,31 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "",
         "hooks": [
           {
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/brief.sh --hook",
-            "timeout": 60,
-            "type": "command"
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h session --hook",
+            "timeout": 60
           },
           {
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/dashboard.py up",
-            "statusMessage": "bringing up the harness dashboard",
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard up",
             "timeout": 30,
-            "type": "command"
+            "statusMessage": "bringing up the harness dashboard"
           }
-        ],
-        "matcher": ""
+        ]
       }
     ],
     "Stop": [
       {
         "hooks": [
           {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard up",
             "async": true,
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/dashboard.py up",
-            "statusMessage": "bringing up the harness dashboard",
             "timeout": 120,
-            "type": "command"
+            "statusMessage": "bringing up the harness dashboard"
           }
         ]
       }
@@ -35,14 +35,17 @@
       {
         "hooks": [
           {
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/dashboard.py down",
-            "statusMessage": "stopping the harness dashboard",
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard down",
             "timeout": 15,
-            "type": "command"
+            "statusMessage": "stopping the harness dashboard"
           }
         ],
         "matcher": ""
       }
     ]
+  },
+  "permissions": {
+    "allow": ["Bash(scripts/h:*)"]
   }
 }

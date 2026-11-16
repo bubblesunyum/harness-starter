@@ -12,3 +12,22 @@ __pycache__/
 
 # Agent scratch — created here, removed when done, never committed.
 .tmp/
+
+# Codex agents generated from the shared prompts — scripts/h link regenerates them.
+.codex/agents/
+.claude/skills/agentic-review
+.claude/skills/beads
+.claude/skills/delegate
+.claude/skills/handoff
+.claude/skills/orchestrate
+.claude/skills/output-style
+.claude/skills/workflow
+.claude/agents/librarian.md
+.claude/agents/reviewer-correctness.md
+.claude/agents/reviewer-design.md
+.claude/agents/reviewer-taste.md
+.opencode/agent/librarian.md
+.opencode/agent/reviewer-correctness.md
+.opencode/agent/reviewer-design.md
+.opencode/agent/reviewer-taste.md
+.harness-contract.md

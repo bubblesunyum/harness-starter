@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/brief.sh\" --hook",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/h\" session --hook",
             "timeout": 60,
             "statusMessage": "Loading the harness brief"
           }
