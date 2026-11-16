@@ -11,6 +11,7 @@ template page. Chrome-free and offline — the page is read as text.
 """
 
 import importlib.util
+import os
 import re
 import shutil
 import tempfile
@@ -101,7 +102,7 @@ class SwitchRootTests(unittest.TestCase):
         for name, value in (
             ("ROOT", self.root),
             ("MEMORY_DIR", self.old_mem),
-            ("HARNESS", harness),
+            ("SYSTEM", harness),
         ):
             patcher = mock.patch.object(dashboard, name, value)
             patcher.start()
@@ -117,9 +118,18 @@ class SwitchRootTests(unittest.TestCase):
         self.assertNotEqual(dashboard.MEMORY_DIR, self.old_mem)
         # The memory rows rebase onto the new MEMORY_DIR; anything outside the
         # old one is left alone.
-        rows = dashboard.HARNESS[0][2]
+        rows = dashboard.SYSTEM[0][2]
         self.assertEqual(rows[0][0], str(dashboard.MEMORY_DIR / "x.md"))
         self.assertEqual(rows[1][0], str(Path.home() / "elsewhere.md"))
+
+    def test_dispatched_switch_hands_children_the_new_project(self):
+        # A board started through scripts/h carries HARNESS_PROJECT, which its
+        # children (brief, verify, task buttons) read instead of the globals.
+        with mock.patch.dict(os.environ, {"HARNESS_PROJECT": str(self.root)}):
+            self.assertEqual(dashboard.switch_root({"root": str(self.peer)}), {"ok": True})
+            self.assertEqual(os.environ["HARNESS_PROJECT"], str(self.peer))
+            self.assertEqual(dashboard.harness_script("x.sh").parent.parent,
+                             dashboard.HARNESS)
 
     def test_peer_payload_marks_markerless_sibling_incapable(self):
         with mock.patch.object(dashboard, "live_claims", return_value={}), \

@@ -44,10 +44,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 def _project_root():
-    """The checkout this server describes, asked of git rather than of this
-    file's own path — the script's location only equals the checkout when it
-    is installed where it was developed. Falls back to the working directory,
-    which is where the hooks and the background child start from."""
+    """The checkout this server describes: $HARNESS_PROJECT when dispatched
+    through the shared checkout, else the enclosing git toplevel, else the
+    working directory, which is where the hooks and the background child
+    start from. The git probe runs from this file's own directory, which only
+    equals the checkout when installed where it was developed."""
+    project = os.environ.get("HARNESS_PROJECT")
+    if project:
+        return Path(project)
     try:
         r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                            capture_output=True, text=True, timeout=10,
@@ -61,6 +65,15 @@ def _project_root():
 
 
 ROOT = _project_root()
+# The shared checkout and sibling resolution live in harness_paths.py, loaded
+# off this file's own dir so this module also imports by path. Fallbacks are
+# this script's own: the git-probed project root above, and its own dir for
+# the harness side.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Module-qualified: this file defines its own resolve(pattern) further down.
+import harness_paths
+ROOT, HARNESS, harness_script = harness_paths.resolve(
+    ROOT, Path(__file__).resolve().parent.parent)
 
 
 def _bd_prefix():
@@ -847,7 +860,7 @@ MEMORY_DIR = Path.home() / ".claude/projects" / str(ROOT).replace("/", "-") / "m
 # Paths are globbed against disk, so a piece that's deleted stops being drawn
 # rather than lingering in a diagram that lies, and a skill added tomorrow
 # appears without anyone editing this table.
-HARNESS = [
+SYSTEM = [
     ("wake", "what an agent knows before its first tool call", [
         (".claude/settings.json", "claude", "SessionStart and Stop hooks"),
         ("scripts/brief.sh", "harness", "the session brief, in place of bd prime"),
@@ -897,7 +910,7 @@ HARNESS = [
 
 
 def resolve(pattern, newest=0):
-    """The files one HARNESS pattern stands for, oldest first. `newest` keeps
+    """The files one system-table pattern stands for, oldest first. `newest` keeps
     only the last few — a lane of every handoff note ever written would bury
     the pieces that actually run."""
     parts = Path(pattern).parts
@@ -917,7 +930,7 @@ def harness():
     behind it run to tens of thousands of characters. The page asks for one
     body when a node is opened, which is the only time anyone reads it."""
     stages, index = [], {}
-    for name, blurb, members in HARNESS:
+    for name, blurb, members in SYSTEM:
         nodes = []
         for pattern, origin, role, *cap in members:
             for path in resolve(pattern, cap[0] if cap else 0):
@@ -1117,7 +1130,7 @@ def vercel_state(fast=False):
 
 def budget(skills, agents):
     claude_md = (ROOT / "CLAUDE.md")
-    brief = run("bash", str(ROOT / "scripts/brief.sh"))
+    brief = run("bash", str(harness_script("brief.sh")))
     always = [
         {"name": "CLAUDE.md", "tokens": tokens(claude_md.read_text(errors="ignore")) if claude_md.exists() else 0},
         {"name": "session brief", "tokens": tokens(brief)},
@@ -1893,6 +1906,16 @@ _runs = {}
 _run_gen = {"n": 0}
 
 
+def task_command(task):
+    """The argv to run for a dashboard task. A leading scripts/<file> resolves
+    project-first, so the board's run button works when the scripts live in
+    the harness checkout rather than the project."""
+    command = task["command"]
+    if command and command[0].startswith("scripts/"):
+        return [str(harness_script(command[0][len("scripts/"):]))] + command[1:]
+    return command
+
+
 def start_task(name):
     """Run one of the dashboard.toml tasks in the background and keep its last result. A second
     press while it's still going is ignored rather than queued — these install
@@ -1907,7 +1930,7 @@ def start_task(name):
 
     def work():
         try:
-            r = subprocess.run(tasks()[name]["command"], capture_output=True, text=True,
+            r = subprocess.run(task_command(tasks()[name]), capture_output=True, text=True,
                                cwd=ROOT, timeout=900)
             tail = (r.stdout + r.stderr).strip().splitlines()
             result = {
@@ -2383,7 +2406,7 @@ SWITCH_MARKER = "dashboards/switch"
 
 
 def _repoint_memory(member, old_mem):
-    """One HARNESS row with its memory path moved to the current checkout.
+    """One system-diagram row with its memory path moved to the current checkout.
     Prefix-scoped rather than row-specific, so a memory row added tomorrow
     moves without anyone touching this."""
     pattern, origin, role, *cap = member
@@ -2406,7 +2429,7 @@ def switch_root(payload):
     The claim stays as bound: the server still belongs to the checkout that
     started it, so `down` there reaches it however it is showing. Anything
     off the allowlist leaves all state untouched."""
-    global ROOT, _prefix, MEMORY_DIR, HARNESS
+    global ROOT, HARNESS, harness_script, _prefix, MEMORY_DIR, SYSTEM
     if not isinstance(payload, dict):
         return {"ok": False, "error": "bad request"}
     root = payload.get("root")
@@ -2421,11 +2444,17 @@ def switch_root(payload):
         return {"ok": False, "error": "checkout does not support switching"}
     with _state_lock:
         old_mem = str(MEMORY_DIR)
-        ROOT = Path(root)
+        # Re-resolved, not just re-pointed: harness_script closes over the old
+        # root, so the run button would keep running the old checkout's scripts.
+        ROOT, HARNESS, harness_script = harness_paths.resolve(Path(root), HARNESS, env=False)
+        # Children (brief, verify, task buttons) read the project from the
+        # environment, so a dispatched board must hand them the new one too.
+        if os.environ.get("HARNESS_PROJECT"):
+            os.environ["HARNESS_PROJECT"] = str(ROOT)
         _prefix = None
         MEMORY_DIR = Path.home() / ".claude/projects" / str(ROOT).replace("/", "-") / "memory"
-        HARNESS = [(name, blurb, [_repoint_memory(m, old_mem) for m in members])
-                   for name, blurb, members in HARNESS]
+        SYSTEM = [(name, blurb, [_repoint_memory(m, old_mem) for m in members])
+                  for name, blurb, members in SYSTEM]
         # Per-root caches, dropped so nothing leaks across projects: the bead
         # prefix, the peer list, the verify key, the budget and the stale count
         # all describe the old checkout. _catalog stays — keyed by path

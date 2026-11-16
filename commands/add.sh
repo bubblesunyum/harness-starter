@@ -539,8 +539,7 @@ else
 fi
 
 # The generated opencode agents are built from the installed agent files, so this
-# runs after the copy loop — with the project's own FILL THIS IN answers in
-# place when it has them.
+# runs after the copy loop — with the project's own agent files in place.
 if agents_out="$(cd "$target" && ./scripts/opencode-agents.py 2>&1)"; then
   echo "$agents_out"
 else
@@ -585,7 +584,7 @@ if [ -n "${ledger:-}" ]; then
   if harness_seat_blank "$target"; then seat_todo=1; file_any=1; else seat_todo=0; fi
   if harness_claude_stock "$target"; then claude_todo=1; file_any=1; else claude_todo=0; fi
   if harness_verify_steps_placeholder "$target"; then steps_todo=1; file_any=1; else steps_todo=0; fi
-  if harness_reviewers_unfilled "$target"; then reviewers_todo=1; file_any=1; else reviewers_todo=0; fi
+  if harness_reviewers_missing "$target"; then reviewers_todo=1; file_any=1; else reviewers_todo=0; fi
   if [ "$file_any" -eq 1 ]; then
   if [ -n "${leftover_origin:-}" ]; then
     harness_file_bead "$target" "connect the ledger to a git origin" \
@@ -631,9 +630,9 @@ if [ -n "${ledger:-}" ]; then
       "" || true
   fi
   if [ "$reviewers_todo" -eq 1 ]; then
-    harness_file_bead "$target" "add project-specific reviewer checks to the reviewer agents" \
-      "Each of .claude/agents/reviewer-{taste,correctness,design}.md carries a FILL THIS IN block: add this language and framework's actual recurring bugs, keeping the generic checks. Confirm harness/stacks.txt names the right stacks first." \
-      "No reviewer file still carries a FILL THIS IN block." \
+    harness_file_bead "$target" "add project-specific reviewer checks in harness/reviewers/" \
+      "Write this language and framework's actual recurring bugs in harness/reviewers/taste.md, correctness.md and design.md; the reviewer agents read them as overlays over their generic checks. Confirm harness/stacks.txt names the right stacks first." \
+      "harness/reviewers/taste.md, correctness.md and design.md exist with this project's checks." \
       "" || true
   fi
   # Filing wrote to the ledger without auto-export, so refresh the committed
@@ -674,12 +673,13 @@ Do these now, in this order. They are the parts no script can infer.
 3. scripts/verify.steps.sh — this project's real build and test commands, going
    through `step`. scripts/verify.sh around it works as-is.
 
-4. .claude/agents/reviewer-{taste,correctness,design}.md — each has a
-   FILL THIS IN block for this project's language, framework, and actual
-   recurring bugs. Generic ones are already there; the specific ones are worth
-   ten of those, so add them as you find them. Checks for the project's
-   language and platform come from harness/stacks/ — check that
-   harness/stacks.txt named the right stacks above.
+4. harness/reviewers/{taste,correctness,design}.md — this project's own
+   reviewer checks: the language, framework, and actual recurring bugs.
+   The generic checks already live in .claude/agents/reviewer-*.md, which
+   read these files as overlays — so put the specific ones here, they are
+   worth ten of the generic ones. Checks for the project's language and
+   platform come from harness/stacks/ — check that harness/stacks.txt
+   named the right stacks above.
 
 Then run scripts/verify.sh, and open the dashboard it points you at — in
 Claude Code's browser pane (preview_start harness-dashboard), not a system

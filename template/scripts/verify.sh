@@ -26,8 +26,13 @@
 # the gate.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Where this script was loaded from: the shared checkout, whose scripts/ holds
+# the copy a project file shadows. Same as ROOT when run as an installed copy.
+HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
+
+. "$HARNESS/scripts/lib/paths.sh"
 
 # The ledger's bead prefix, asked of the ledger itself at runtime — baked into
 # this file once per install, which made every copy differ and un-updatable.
@@ -111,25 +116,31 @@ echo "verify: $ROOT"
 # beads (har-67c); anything that ran first would heal the drift this check
 # exists to catch. The only bd call before this point is the prefix lookup up
 # top, which reads `bd list` — a command that never imports.
-if export_out="$("$ROOT/scripts/ledger-export-check.sh" 2>&1)"; then
+if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
   echo "$export_out"
 else
   failed=1
   echo "$export_out"
 fi
 
-step "codex support" python3 scripts/codex-support.py check
-step "codex regression" python3 scripts/test-codex-support.py
-step "agent runner" python3 scripts/test-agent.py
-step "model probes" python3 scripts/test-models-probe.py
-step "opencode permissions" python3 scripts/test-opencode-permissions.py
-step "opencode pin probes" python3 scripts/test-opencode-pin.py
+step "codex support" python3 "$(harness_script codex-support.py)" check
+# Self-tests: hermetic by construction — each builds its own throwaway root —
+# so the dispatch environment is unset for them. Inheriting HARNESS_PROJECT
+# would point the copied scripts at this checkout instead of their fixture.
+# Resolved harness-first, never project-first: a project file named
+# test-agent.py must not stand in for the gate's own probe. Real steps stay
+# project-first.
+step "codex regression" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-codex-support.py)"
+step "agent runner" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-agent.py)"
+step "model probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-models-probe.py)"
+step "opencode permissions" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-permissions.py)"
+step "opencode pin probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-pin.py)"
 
 # The knowledge layer gets the same treatment as the code. A doc that quietly
 # stopped being true is worse than a missing one, and it can't be caught by
 # reviewing a diff — the stale file isn't in the diff, the thing it describes is.
 # Runs early because it takes a second and needs no build.
-if context_out="$(scripts/context.py check 2>&1)"; then
+if context_out="$(python3 "$(harness_script context.py)" check 2>&1)"; then
   echo "$context_out"
 else
   failed=1
@@ -141,7 +152,7 @@ fi
 # about editing the source makes opencode complain. Checked rather than
 # regenerated: a gate that quietly fixed this would pass every time and never
 # say the two had parted company.
-if agents_out="$(scripts/opencode-agents.py check 2>&1)"; then
+if agents_out="$(python3 "$(harness_script opencode-agents.py)" check 2>&1)"; then
   echo "$agents_out"
 else
   failed=1
@@ -152,7 +163,7 @@ fi
 # file that could pick another — the roster, the generated agents,
 # opencode.json, the scripts, the docs — is held to it here. The prose rule
 # came first and a session with no terminal walked straight past it.
-if pin_out="$(scripts/opencode-pin.py check 2>&1)"; then
+if pin_out="$(python3 "$(harness_script opencode-pin.py)" check 2>&1)"; then
   echo "$pin_out"
 else
   failed=1
@@ -163,6 +174,8 @@ fi
 # Your project's build, test, and smoke steps live in scripts/verify.steps.sh,
 # sourced just below. That file is yours — installed once, never compared or
 # overwritten — so scaffolding fixes here still arrive with `harness update`.
+# Project-only, never the harness copy: the template's placeholder standing in
+# for a missing file would hide the loud failure below.
 if [ -f "$ROOT/scripts/verify.steps.sh" ]; then
   . "$ROOT/scripts/verify.steps.sh"
 else

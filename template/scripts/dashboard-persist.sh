@@ -15,6 +15,13 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# The project this script serves: the caller's checkout, not wherever the
+# script file lives. HARNESS is the shared checkout this script was loaded
+# from. Both match when run as an installed copy.
+ROOT="${HARNESS_PROJECT:-$(cd "$here/.." && pwd)}"
+HARNESS="${HARNESS_ROOT:-$(cd "$here/.." && pwd)}"
+
+. "$HARNESS/scripts/lib/paths.sh"
 port=""
 if [ $# -eq 2 ] && [ "${1:-}" = "--port" ]; then
   port="$2"
@@ -25,11 +32,11 @@ fi
 
 # Take over a hook-started board, if there is one. A persistent board
 # survives this and is reported as such below.
-python3 "$here/dashboard.py" down
+python3 "$(harness_script dashboard.py)" down
 if [ -n "$port" ]; then
-  out=$(DASHBOARD_PERSIST=1 python3 "$here/dashboard.py" up --port "$port" 2>&1)
+  out=$(DASHBOARD_PERSIST=1 python3 "$(harness_script dashboard.py)" up --port "$port" 2>&1)
 else
-  out=$(DASHBOARD_PERSIST=1 python3 "$here/dashboard.py" up 2>&1)
+  out=$(DASHBOARD_PERSIST=1 python3 "$(harness_script dashboard.py)" up 2>&1)
 fi
 echo "$out"
 case "$out" in

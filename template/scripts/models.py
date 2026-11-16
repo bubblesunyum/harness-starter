@@ -46,7 +46,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# The project this script describes: the caller's checkout, not wherever the
+# script file lives. Same path when run as an installed copy.
+ROOT = Path(os.environ.get("HARNESS_PROJECT")
+            or Path(__file__).resolve().parent.parent)
 ROSTER = ROOT / "harness/models.json"
 
 # The policy. The only definition of the model and variant in the harness —

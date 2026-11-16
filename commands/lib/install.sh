@@ -15,28 +15,42 @@
 #   harness/laurels.jsonl  a log the project appends to; the template ships it empty
 #   harness/diverged.txt   the acknowledged-fork list; the project edits it,
 #                          the template ships it empty
+#   .claude/context.lock   doc hashes; the template's covers the shared docs,
+#                          and a project's own bless adds its docs to it
 harness_is_data() {
   case "$1" in
-    dashboard/vendor/*|dashboard.toml|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt) return 0 ;;
+    dashboard/vendor/*|dashboard.toml|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt|.claude/context.lock) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-# A template file carrying a FILL THIS IN block is one the install instructions
-# tell the project to edit — verify.sh's build steps, the reviewers' recurring
-# bugs, the seat's name. Those files differing from the template is the harness
-# working, not failing.
+# Seeds: the files `harness add` writes once and the project then owns. Only
+# seeds may carry a fill-in block — the gate's contract-split probe fails on
+# one in any other template file. One list here, not read off content: a list
+# goes stale toward false quiet, never toward false alarms.
+harness_is_seed() {
+  case "$1" in
+    harness/seat.md|AGENTS.local.md|scripts/verify.steps.sh|scripts/review.scope.sh|dashboard.toml) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A template file the project is meant to edit rather than converge: the seeds
+# above, and the reviewer prompts whose answers five installs already carry.
+# Those differing from the template is the harness working, not failing.
 #
-# Read off the template's own content rather than kept as a list here, so adding
-# a fill-in block to a file is all it takes: a list would go stale in exactly the
-# direction that produces false alarms, and false alarms are how a warning stops
-# being read.
+# Seeds are the one list (harness_is_seed) — never the grep below. Reviewer
+# prompts match by path suffix instead: until har-b5n8.5 migrates their answers
+# into overlays, `harness update --apply` must never overwrite them, fill-in
+# block or not.
 #
-# Matched with the block's box rule rather than on the bare words, which caught
-# .claude/HARNESS.md the moment it started *describing* this rule — prose about
-# the marker is not the marker, and the file quietly dropped out of the contract
-# set as a result.
+# Anything else carrying the block is caught by the grep, matched on the box
+# rule rather than the bare words — prose about the marker, here or in
+# .claude/HARNESS.md describing this rule, never reads as the block itself.
 harness_is_customised() {
+  case "$1" in
+    */.claude/agents/reviewer-taste.md|*/.claude/agents/reviewer-correctness.md|*/.claude/agents/reviewer-design.md) return 0 ;;
+  esac
   grep -q "── FILL THIS IN" "$1" 2>/dev/null
 }
 
@@ -892,15 +906,15 @@ harness_verify_steps_placeholder() {
   [ -f "$steps" ] && grep -qF "Replace these with your project's real commands." "$steps"
 }
 
-# Any reviewer file still carries its FILL THIS IN block. Missing files don't
-# count — a re-add that skipped them left nothing placeholder behind.
-harness_reviewers_unfilled() {
+# No overlay yet for a reviewer role: the reviewer prompts read
+# harness/reviewers/<role>.md when it exists, so a missing one is a project
+# whose specific checks were never written down.
+harness_reviewers_missing() {
   local target="$1" file
-  for file in "$target/.claude/agents/reviewer-taste.md" \
-              "$target/.claude/agents/reviewer-correctness.md" \
-              "$target/.claude/agents/reviewer-design.md"; do
-    [ -f "$file" ] || continue
-    if grep -q 'FILL THIS IN' "$file"; then return 0; fi
+  for file in "$target/harness/reviewers/taste.md" \
+              "$target/harness/reviewers/correctness.md" \
+              "$target/harness/reviewers/design.md"; do
+    [ -f "$file" ] || return 0
   done
   return 1
 }

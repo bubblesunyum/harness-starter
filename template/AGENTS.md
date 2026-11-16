@@ -16,7 +16,11 @@ standards and taste. Read it too. Neither file repeats the other.
 
 If `AGENTS.local.md` exists, read it too. Put additive project guidance there;
 the harness installs it once and preserves it on re-add and `update --apply`,
-so the shared contract can keep receiving updates.
+so the shared contract can keep receiving updates. Project answers live in
+seeds (`harness/seat.md`, `AGENTS.local.md`, `scripts/verify.steps.sh`,
+`scripts/review.scope.sh`, `dashboard.toml`) and overlays (`harness/reviewers/taste.md`, `correctness.md`,
+`design.md`); shared files are never edited. A same-name entry in
+`.claude/skills/` shadows the shared skill.
 
 ## Start every session with the brief
 

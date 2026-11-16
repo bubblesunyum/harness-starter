@@ -2,7 +2,7 @@
 # Check that the committed beads export matches the live ledger. This is
 # callable on its own so ledger probes do not need to run the rest of the gate.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 ledger_export_check() {

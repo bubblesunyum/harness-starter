@@ -81,13 +81,9 @@ Work through the captures one at a time, and for each one ask:
 - **Does it fit the app?** The app has an established look. A new surface
   that invents its own padding scale, corner radius, type ramp, or accent colour
   is drift, even when it looks fine alone. Compare against the other captures
-  and against what the app already does.
-
-  <!-- ── FILL THIS IN ────────────────────────────────────────────────────
-  Name the app's actual look in a sentence — its accent colour, its material,
-  its spacing habit — so this reviewer can spot drift from something specific
-  rather than from memory. Delete this comment once you have.
-  ───────────────────────────────────────────────────────────────────────── -->
+  and against what the app already does. If `harness/reviewers/design.md`
+  exists, read it — the app's actual look: accent colour, material, spacing
+  habit — and treat it as the baseline for drift, outranking memory.
 - **Alignment and rhythm.** Labels and values on a consistent grid, equal
   spacing between sibling rows, things that should be left-aligned actually
   left-aligned, no lone element hanging off a different margin.

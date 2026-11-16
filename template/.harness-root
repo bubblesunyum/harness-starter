@@ -1,0 +1,2 @@
+# This file marks a harness-starter checkout: scripts/h only trusts a
+# resolved root that holds template/.harness-root.

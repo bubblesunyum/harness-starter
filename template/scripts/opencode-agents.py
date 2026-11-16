@@ -37,13 +37,20 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_paths import HARNESS, ROOT
+
+# The project this script translates for: the caller's checkout, not wherever
+# the script file lives. Same path when run as an installed copy.
 CLAUDE_AGENTS = ROOT / ".claude/agents"
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 OPENCODE_JSON = ROOT / "opencode.json"
 TEMPLATE_JSON = ROOT / "template/opencode.json"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The project's scripts first, so a same-path shadow wins; the harness copy
+# behind it, so a shadow still finds the siblings it did not replace.
+sys.path.insert(0, str(HARNESS / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts"))
 from models import OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT, model_is_pinned
 
 # Claude's `tools:` is an allowlist; opencode has no allowlist, only per-tool

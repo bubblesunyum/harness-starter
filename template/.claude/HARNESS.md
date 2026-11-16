@@ -69,25 +69,35 @@ also how a fix stops travelling: a project that already has `AGENTS.md` gets
 broken copy stays. The failure is silent, and silence on a broken install is the
 worst outcome this starter has.
 
-So the skip is split in two. Files the project is meant to edit — anything whose
-template carries a `FILL THIS IN` block, plus the data files it accumulates —
-skip quietly, because them differing is the harness working. Everything else is
+So the skip is split three ways. **Seeds** — the files `harness add` writes
+once and the project then owns (`harness/seat.md`, `AGENTS.local.md`,
+`scripts/verify.steps.sh`, `scripts/review.scope.sh`, `dashboard.toml`) —
+skip quietly, because them differing is the harness working. Only seeds may
+carry a fill-in block. **Overlays** (`harness/reviewers/<role>.md`, one per
+reviewer) are never compared at all: the project's own answers live there
+while the shared reviewer prompts stay byte-identical. Everything else is
 a **contract file**: `AGENTS.md`, `opencode.json`, the skills, the scripts behind
-them. Those the project has no reason to touch, so a difference means a starter
+them. Shared files are never edited in a project, so a difference means a starter
 fix never arrived, and `add` says so by name instead of skipping. `harness
 update` is the same check standing alone, with `--diff` for what actually
 changed, `--apply` for the asked-for overwrite, and follow-ups when reviewer
 sources are among the flagged files.
 
-Which set a file is in is read off the template's own content rather than kept as
-a list. A list goes stale in the direction that produces false alarms, and a
-warning nobody believes is worth less than no warning.
+Shared skills and agents are linked per entry, so a project's own skills sit
+beside them as real directories: `.claude/skills/` holds a link per shared
+skill, and a project entry with a shared name shadows the shared one (same
+for `.claude/agents/` and `.agents/skills/`).
+
+Seeds are one list (`harness_is_seed` in `commands/lib/install.sh`): the files
+above, and the only ones that may carry a fill-in block. Reviewer prompts are
+protected the same way until their answers migrate into overlays.
 
 Nothing is overwritten unless asked. Half these files have local edits in
 them by design, so merging is a judgment call — and an overwrite-by-default
 would be a command nobody could afford to run. `harness update --apply` is the
-asked-for exception: it writes the rendered template over stale contract files,
-never customised ones, and names every file it changed. A file carrying a beads
+asked-for exception: it writes the rendered template over stale contract files
+— never seeds, and never reviewer prompts until their answers migrate — and
+names every file it changed. A file carrying a beads
 block is left for a hand merge, and reviewer sources come with follow-ups — the
 generated agent copies, the hashes, the gate — because the merge is half the
 job.
@@ -125,8 +135,17 @@ else, and writes the list. From then on the list belongs to the project. A
 wrong guess is fixed by editing it, and `add` never detects over it again,
 so a correction stays put. The stack files are contract files: they come from
 the starter, `update` keeps them current, and a project's own recurring bugs
-go in the reviewers' FILL THIS IN blocks instead. A new stack is one file in
+go in `harness/reviewers/<role>.md` instead. A new stack is one file in
 `template/harness/stacks/` plus a marker in `harness_detect_stacks`.
+
+## Where a project's answers go
+
+| Today's customisation | Destination |
+|---|---|
+| Customised reviewer prompt | Project-specific lines move to `harness/reviewers/<role>.md` (`taste`, `correctness`, or `design`) |
+| Own skill | Stays a real directory in `.claude/skills/` beside the per-entry shared links; a same-name entry shadows the shared one |
+| `harness/seat.md` | Stays; it is a seed the project owns |
+| A `diverged.txt` fork | A shadow file at the same path |
 
 ## Codex context
 

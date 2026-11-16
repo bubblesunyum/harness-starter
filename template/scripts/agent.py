@@ -42,10 +42,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_paths import HARNESS, ROOT
+
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The project's scripts first, so a same-path shadow wins; the harness copy
+# behind it, so a shadow still finds the siblings it did not replace.
+sys.path.insert(0, str(HARNESS / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts"))
 from models import (OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT,
                     ForeignModel, catalog_entry, model_for, opencode_bin,
                     variant_for)

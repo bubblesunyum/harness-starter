@@ -27,11 +27,53 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-LOCK = ROOT / ".claude/context.lock"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_paths import HARNESS, ROOT, harness_script
 
-DOCS = [ROOT / "CLAUDE.md", ROOT / "AGENTS.md", ROOT / ".claude/HARNESS.md",
-        *sorted((ROOT / ".claude/skills").glob("*/SKILL.md"))]
+PROJECT_LOCK = ROOT / ".claude/context.lock"
+SHARED_LOCK = HARNESS / ".claude/context.lock"
+
+
+def project_docs():
+    """The project's own docs, tracked ROOT-relative against the project's
+    lock. AGENTS.local.md only when the project has one — it is a seed the
+    project owns."""
+    docs = [ROOT / "CLAUDE.md", ROOT / "AGENTS.md"]
+    if (ROOT / "AGENTS.local.md").exists():
+        docs.append(ROOT / "AGENTS.local.md")
+    return docs
+
+
+def _carries_tracks(doc):
+    """Whether a doc declares tracked sources. Agent prompts join the shared
+    set only when one does — listing a trackless file would move the doc count
+    without checking anything."""
+    try:
+        text = doc.read_text()
+    except OSError:
+        return False
+    return re.search(r"<!--\s*tracks:", text) is not None
+
+
+# The shared docs, read from the harness checkout and tracked HARNESS-relative
+# against the harness lock. Agent prompts only when one actually declares
+# tracked sources — none do today, so the installed-copy lock is unchanged.
+SHARED_DOCS = [HARNESS / ".claude/HARNESS.md",
+               *sorted((HARNESS / ".claude/skills").glob("*/SKILL.md")),
+               *(a for a in sorted((HARNESS / ".claude/agents").glob("*.md"))
+                 if _carries_tracks(a))]
+
+
+def shared_included():
+    """Whether the shared docs are checked. Only when the harness checkout is
+    this project or sits inside it (the starter) — a project running by
+    reference must not fail on a checkout it doesn't own."""
+    try:
+        HARNESS.resolve().relative_to(ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
 
 # The memory index loads every session too, but it lives outside the repo, under
 # a directory named for this checkout's path. Absent on another machine, which
@@ -117,34 +159,40 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else ""
 
 
-def tracked_by(doc):
+def tracked_by(doc, base):
     """The sources a doc claims to describe, declared inside the doc itself so
-    the mapping can't drift away from the thing it maps."""
-    m = re.search(r"<!--\s*tracks:(.*?)-->", doc.read_text(), re.S)
-    return [ROOT / p for p in m.group(1).split()] if m else []
-
-
-def load_lock():
+    the mapping can't drift away from the thing it maps. Resolved against base:
+    ROOT for project docs, HARNESS for shared ones. A missing or unreadable doc
+    claims nothing — the template itself ships no CLAUDE.md."""
     try:
-        return json.loads(LOCK.read_text())
+        text = doc.read_text()
+    except OSError:
+        return []
+    m = re.search(r"<!--\s*tracks:(.*?)-->", text, re.S)
+    return [base / p for p in m.group(1).split()] if m else []
+
+
+def load_lock(lock):
+    try:
+        return json.loads(lock.read_text())
     except Exception:
         return {}
 
 
-def staleness():
+def staleness(docs, base, lock):
     """Docs whose sources moved without them. A doc is only checked once it has
     been blessed — a new doc isn't stale, it's just new."""
-    lock, stale, unblessed = load_lock(), [], []
-    for doc in DOCS:
-        sources = tracked_by(doc)
+    stale, unblessed = [], []
+    for doc in docs:
+        sources = tracked_by(doc, base)
         if not sources:
             continue
-        recorded = lock.get(str(doc.relative_to(ROOT)))
+        recorded = lock.get(str(doc.relative_to(base)))
         if recorded is None:
             unblessed.append(doc)
             continue
         moved = [s for s in sources
-                 if recorded.get(str(s.relative_to(ROOT))) not in (sha(s), None)]
+                 if recorded.get(str(s.relative_to(base))) not in (sha(s), None)]
         if moved and recorded.get("doc") == sha(doc):
             stale.append((doc, moved))
     return stale, unblessed
@@ -188,7 +236,7 @@ def floor():
 
 
 def budget():
-    brief = subprocess.run(["bash", str(ROOT / "scripts/brief.sh")],
+    brief = subprocess.run(["bash", str(harness_script("brief.sh"))],
                            capture_output=True, text=True).stdout
     # Both instruction files, because both are always-loaded — CLAUDE.md by
     # Claude Code and AGENTS.md by opencode, and CLAUDE.md imports AGENTS.md so
@@ -207,19 +255,46 @@ def budget():
     return parts, sum(n for _, n in parts)
 
 
-def bless():
-    lock = load_lock()
-    for doc in DOCS:
-        sources = tracked_by(doc)
+def bless_docs(docs, base, lock):
+    """Re-record hashes for the docs carrying tracked sources, into an already
+    loaded lock. Missing and trackless docs are skipped, and unknown keys are
+    kept — so blessing one side never drops the other's entries."""
+    for doc in docs:
+        sources = tracked_by(doc, base)
         if not sources:
             continue
-        lock[str(doc.relative_to(ROOT))] = {
+        lock[str(doc.relative_to(base))] = {
             "doc": sha(doc),
-            **{str(s.relative_to(ROOT)): sha(s) for s in sources},
+            **{str(s.relative_to(base)): sha(s) for s in sources},
         }
-    LOCK.parent.mkdir(parents=True, exist_ok=True)
-    LOCK.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
-    print(f"blessed {len(lock)} docs → {LOCK.relative_to(ROOT)}")
+    return lock
+
+
+def show_lock(path):
+    """A lock path as the report prints it: project-relative when inside."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def write_lock(lock, path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    print(f"blessed {len(lock)} docs → {show_lock(path)}")
+
+
+def bless():
+    project_lock = bless_docs(project_docs(), ROOT, load_lock(PROJECT_LOCK))
+    if SHARED_LOCK.resolve() == PROJECT_LOCK.resolve():
+        # Installed copy: one lock, one line, exactly as today.
+        write_lock(bless_docs(SHARED_DOCS, HARNESS, project_lock), PROJECT_LOCK)
+        return
+    write_lock(project_lock, PROJECT_LOCK)
+    if not shared_included():
+        return
+    write_lock(bless_docs(SHARED_DOCS, HARNESS, load_lock(SHARED_LOCK)),
+               SHARED_LOCK)
 
 
 def _bd_prefix():
@@ -291,7 +366,21 @@ def spend():
 
 
 def report(strict):
-    stale, unblessed = staleness()
+    stale, unblessed = staleness(project_docs(), ROOT, load_lock(PROJECT_LOCK))
+    checked = project_docs()
+    if shared_included():
+        if SHARED_LOCK.resolve() == PROJECT_LOCK.resolve():
+            shared_stale, shared_unblessed = staleness(SHARED_DOCS, HARNESS,
+                                                       load_lock(PROJECT_LOCK))
+        else:
+            shared_stale, shared_unblessed = staleness(SHARED_DOCS, HARNESS,
+                                                       load_lock(SHARED_LOCK))
+        stale += shared_stale
+        unblessed += shared_unblessed
+        checked += SHARED_DOCS
+    else:
+        print("  shared docs skipped (HARNESS outside ROOT) — project docs only;"
+              " see .claude/HARNESS.md")
     parts, total = budget()
     failed = False
 
@@ -315,7 +404,7 @@ def report(strict):
     # by design (verify, commit, then push), so an ahead ledger here is the
     # normal state rather than a broken one. What it must not be is silent.
     try:
-        push = subprocess.run(["bash", str(ROOT / "scripts/ledger-push.sh"),
+        push = subprocess.run(["bash", str(harness_script("ledger-push.sh")),
                                "--check"],
                               capture_output=True, text=True,
                               timeout=30).stdout.strip()
@@ -339,7 +428,8 @@ def report(strict):
         print(f"        (median of {seen} recent sessions; re-sent every turn,"
               " so it sets the slope of the whole session)")
     if not stale:
-        print(f"  ok    {len(DOCS)} docs match the sources they describe")
+        checked_docs = len(checked)
+        print(f"  ok    {checked_docs} docs match the sources they describe")
 
     return 1 if (failed and strict) else 0
 

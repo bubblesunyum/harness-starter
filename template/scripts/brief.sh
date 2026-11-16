@@ -12,8 +12,13 @@
 #   scripts/brief.sh --hook   # wrapped as Claude Code SessionStart JSON
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Where this script was loaded from: the shared checkout, whose scripts/ holds
+# the copy a project file shadows. Same as ROOT when run as an installed copy.
+HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
+
+. "$HARNESS/scripts/lib/paths.sh"
 
 # Budget: the brief is capped so it can't quietly grow into another `bd prime`.
 # A long ready list is a planning problem, not a reason to print more. The one
@@ -77,11 +82,18 @@ brief() {
   bd ready --exclude-label backlog --exclude-label needs-human --json \
     2>/dev/null > "$ready_json" || return 0
 
-  python3 - "$READY_SHOWN" "$ROOT" "$ready_json" <<'PY'
+  python3 - "$READY_SHOWN" "$ROOT" "$ready_json" "$HARNESS" <<'PY'
 import json, os, re, subprocess, sys, glob, datetime
 
 shown = int(sys.argv[1])
 root = sys.argv[2]
+# The shared checkout, for sibling scripts the project does not shadow.
+harness = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else root
+
+sys.path.insert(0, os.path.join(harness, "scripts"))
+sys.path.insert(0, os.path.join(root, "scripts"))
+from harness_paths import resolve
+_, _, harness_script = resolve(root, harness)
 try:
     ready = json.load(open(sys.argv[3]))
 except (OSError, ValueError):
@@ -315,7 +327,7 @@ def escalation():
 # fetch and no push: the brief may not take outward-facing actions, and a
 # SessionStart hook that pushed would do it every session.
 def ledger_push():
-    out = run("bash", os.path.join(root, "scripts", "ledger-push.sh"),
+    out = run("bash", harness_script("ledger-push.sh"),
               "--check")
     return out.strip() or None
 

@@ -67,7 +67,7 @@ class AgentTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
         (root / "scripts").mkdir()
-        for name in ("agent.py", "models.py"):
+        for name in ("agent.py", "harness_paths.py", "models.py"):
             shutil.copy(SCRIPTS / name, root / "scripts" / name)
         (root / "harness").mkdir()
         self.roster = root / "harness/models.json"

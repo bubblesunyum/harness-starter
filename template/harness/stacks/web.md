@@ -2,7 +2,7 @@
 
 Reviewer checks for this stack, read by projects that list it in
 `harness/stacks.txt`. Each reviewer reads the section named for it. Checks for
-this project's own recurring bugs belong in the reviewer's FILL THIS IN block,
+this project's own recurring bugs belong in `harness/reviewers/<role>.md`,
 not here — this file comes from the starter and `harness update` keeps it
 current.
 

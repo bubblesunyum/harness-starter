@@ -21,8 +21,13 @@
 # reopen if needed, and rerun. Rerunning on a settled tree is a no-op success.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Where this script was loaded from: the shared checkout, whose scripts/ holds
+# the copy a project file shadows. Same as ROOT when run as an installed copy.
+HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
+
+. "$HARNESS/scripts/lib/paths.sh"
 
 SEP=$'\x1f' # unit separator: joins action + args into one array element, so a
             # single loop applies every ledger write (split fields never nest)
@@ -117,7 +122,7 @@ fi
 # ── 2. Push. Best-effort by design (AGENTS.local.md): needs the network and
 # the Dolt remote, and a failed push must never block the commit.
 if [ "$PUSH" = 1 ]; then
-  if ! scripts/ledger-push.sh; then
+  if ! "$(harness_script ledger-push.sh)"; then
     echo "wrap-up: warning: ledger push failed — committing anyway; --check will keep nagging" >&2
   fi
 fi
@@ -127,9 +132,9 @@ bd export --include-memories -o .beads/issues.jsonl
 
 # ── 4. Verify. Aborts before any commit on failure.
 if [ -z "$LANE" ]; then
-  scripts/verify.sh
+  "$(harness_script verify.sh)"
 else
-  scripts/verify.sh "$LANE"
+  "$(harness_script verify.sh)" "$LANE"
 fi
 
 # ── 5. Commit the work with the fresh export inside it. A pending note file
@@ -164,5 +169,5 @@ if [ -n "$(git status --porcelain)" ]; then
   git status --porcelain >&2
   exit 1
 fi
-scripts/ledger-push.sh --check
+"$(harness_script ledger-push.sh)" --check
 echo "wrap-up: clean"

@@ -17,11 +17,14 @@
 
 probe_step "codex install context" python3 scripts/test-codex-install.py
 probe_step "project contract and export policy" python3 scripts/test-contract-overrides.py
+probe_step "finder resolution" bash scripts/test-finder.sh
+probe_step "contract split" bash scripts/test-contract-split.sh
 
 step "shell parses" bash -c '
   set -e
   for f in bin/harness commands/*.sh commands/lib/*.sh scripts/*.sh scripts/hooks/* \
-           template/scripts/*.sh template/scripts/hooks/*; do
+           scripts/lib/*.sh scripts/h template/scripts/*.sh template/scripts/hooks/* \
+           template/scripts/lib/*.sh template/scripts/h; do
     [ -f "$f" ] || continue
     bash -n "$f" || { echo "error: $f"; exit 1; }
   done'

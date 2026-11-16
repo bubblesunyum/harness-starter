@@ -28,7 +28,9 @@ ledger_datadir() {
 }
 
 ledger_check() {
-  cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || return 0
+  # The dispatched project first, so --check reports on the ledger a push would
+  # act on rather than whatever checkout the caller's cwd happens to be in.
+  cd "${HARNESS_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}" 2>/dev/null || return 0
   command -v bd >/dev/null 2>&1 || return 0
   [ -d .beads/embeddeddolt ] || return 0
   if ! bd dolt remote list 2>/dev/null | grep -q '^origin'; then
@@ -68,7 +70,11 @@ if [ "${1:-}" = "--check" ]; then
   exit 0
 fi
 
-cd "$(git rev-parse --show-toplevel)"
+# The project this script pushes for: the caller's checkout, not wherever the
+# script file lives. Falls back to the enclosing git toplevel, as before.
+ROOT="${HARNESS_PROJECT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
+[ -n "$ROOT" ] || { echo "ledger-push.sh: cannot find the project root — set HARNESS_PROJECT or run from inside the checkout" >&2; exit 1; }
+cd "$ROOT"
 
 command -v bd >/dev/null 2>&1 || {
   echo "✗ bd is not installed — there is no ledger to push." >&2

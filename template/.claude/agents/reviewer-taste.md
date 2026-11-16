@@ -39,11 +39,8 @@ Check for, in rough order of how often it actually goes wrong:
   explaining a *why* — a workaround, a constraint, a platform gotcha.
 - **Accessibility.** Icon-only controls need a label.
 
-<!-- ── FILL THIS IN ────────────────────────────────────────────────────────
-Add the checks specific to this project's language and framework: the
-concurrency model's rules, the animation conventions, the selector or test hook
-a new control has to carry. Delete this comment once you have.
-──────────────────────────────────────────────────────────────────────────── -->
+If `harness/reviewers/taste.md` exists, read it — this project's own checks —
+and treat its entries as outranking the list above.
 
 If `harness/stacks.txt` names any stacks, read the `reviewer-taste`
 section of each `harness/stacks/<name>.md` — the checks for this project's

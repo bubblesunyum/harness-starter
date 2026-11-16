@@ -11,8 +11,13 @@
 # smallest reviewer budget instead — see below.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Where this script was loaded from: the shared checkout, whose scripts/ holds
+# the copy a project file shadows. Same as ROOT when run as an installed copy.
+HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
+
+. "$HARNESS/scripts/lib/paths.sh"
 
 # The per-role roster lives machine-locally in harness/models.json, and a
 # fresh clone has none. First review writes it, pinned and without prompting;
@@ -20,7 +25,7 @@ cd "$ROOT"
 # stays visible: what ensure replaced and any traceback are the signal here,
 # not noise. `|| true` only keeps a failing ensure from taking
 # the packet down with it.
-scripts/models.py ensure || true
+python3 "$(harness_script models.py)" ensure || true
 
 # BSD and GNU disagree on both of these, and a starter shouldn't only run on the
 # machine it was written on.
@@ -78,6 +83,7 @@ fi
 # just below. That file is yours — installed once, never compared or
 # overwritten — so scope edits there are safe and packet fixes here still
 # arrive with `harness update`.
+# Project-only, like verify.steps.sh: a scope is the project's answer.
 if [ -f "$ROOT/scripts/review.scope.sh" ]; then
   . "$ROOT/scripts/review.scope.sh"
 else
@@ -198,7 +204,7 @@ lines=$(wc -l < "$packet" | tr -d ' ')
 tokens=$(($(wc -c < "$packet" | tr -d ' ') / 3))
 binding_role=""; binding_budget=0
 for role in reviewer-taste reviewer-correctness reviewer-design; do
-  budget=$(scripts/models.py budget "$role" 2>/dev/null || true)
+  budget=$(python3 "$(harness_script models.py)" budget "$role" 2>/dev/null || true)
   case "$budget" in ''|*[!0-9]*) continue ;; esac
   if [ -z "$binding_role" ] || [ "$budget" -lt "$binding_budget" ]; then
     binding_role="$role"; binding_budget="$budget"

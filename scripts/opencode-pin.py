@@ -28,6 +28,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_paths import HARNESS, ROOT
+
+# The project under check by default: the caller's checkout, not wherever the
+# script file lives (an explicit path argument still wins). HARNESS is the
+# shared checkout this script was loaded from. All three match when run as an
+# installed copy.
+
+# The project's scripts first, so a same-path shadow wins; the harness copy
+# behind it, so a shadow still finds the siblings it did not replace.
+sys.path.insert(0, str(HARNESS / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts"))
 from models import (OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT,
                     model_is_pinned, pin_problem)
 
@@ -301,7 +312,7 @@ if __name__ == "__main__":
     if args[:1] != ["check"] or len(args) > 2:
         print("usage: scripts/opencode-pin.py check [root]", file=sys.stderr)
         sys.exit(2)
-    root = Path(args[1]).resolve() if len(args) == 2 else Path(__file__).resolve().parent.parent
+    root = Path(args[1]).resolve() if len(args) == 2 else ROOT
     if not root.is_dir():
         print(f"opencode-pin.py: {root} is not a directory", file=sys.stderr)
         sys.exit(2)

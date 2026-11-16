@@ -35,12 +35,8 @@ Where code like this generally goes wrong:
 - **Tests.** Logic that changed behavior without a test, and tests asserting
   implementation detail rather than what a user would observe.
 
-<!-- ── FILL THIS IN ────────────────────────────────────────────────────────
-Replace the list above, or extend it, with the traps this project has actually
-hit — the specific ones are worth ten generic ones. Record them here as you
-find them; a reviewer that knows your recurring bug is the one that catches it
-again. Delete this comment once you have.
-──────────────────────────────────────────────────────────────────────────── -->
+If `harness/reviewers/correctness.md` exists, read it — this project's
+recurring traps — and treat its entries as outranking the generic list above.
 
 If `harness/stacks.txt` names any stacks, read the `reviewer-correctness`
 section of each `harness/stacks/<name>.md` — the checks for this project's
