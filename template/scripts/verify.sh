@@ -294,6 +294,108 @@ else
   echo "$export_out"
 fi
 
+# Ledger hygiene every install enforces, not just the starter: parked in a
+# project's steps file these run only there, while leaf installs carry a
+# skeleton that never mentions them. Read-only `bd list` only — the same
+# command the prefix lookup above trusts never to import — never export,
+# config or info, which auto-import a stale export and would heal the drift
+# the export check exists to catch. No live ledger skips out loud. Serial
+# steps, so the ledger lane still judges the live ledger a beads-only diff
+# moved while every probe skips.
+# A bead queued for a local model carries its own spec — --design and
+# --acceptance filled in, plus a `local-ok` label — because a small model
+# executes well only when the bead says what done looks like. Closed beads
+# are history, not queue, so only open work is judged.
+step "local-ok beads carry design and acceptance" bash -c '
+  python3 - <<PYEOF || exit 1
+import json
+import os
+import subprocess
+import sys
+try:
+    out = subprocess.run(
+        ["bd", "list", "--json", "--all", "--limit", "0"],
+        capture_output=True, text=True)
+except FileNotFoundError:
+    print("no bd here, skipping")
+    sys.exit(0)
+if out.returncode != 0:
+    if not os.path.isdir(".beads/embeddeddolt"):
+        print("no live ledger, skipping")
+        sys.exit(0)
+    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
+    print("error: cannot list the beads: " + err)
+    sys.exit(1)
+try:
+    issues = json.loads(out.stdout or "[]")
+except ValueError:
+    print("error: cannot read the bead list")
+    sys.exit(1)
+bad = []
+for issue in issues:
+    if "local-ok" not in (issue.get("labels") or []):
+        continue
+    if (issue.get("status") or "open") == "closed":
+        continue
+    missing = []
+    if not (issue.get("design") or "").strip():
+        missing.append("design")
+    acceptance = issue.get("acceptance_criteria", issue.get("acceptance"))
+    if not (acceptance or "").strip():
+        missing.append("acceptance")
+    if missing:
+        bad.append("%s lacks %s" % (issue.get("id", "?"), " and ".join(missing)))
+if bad:
+    print("error: local-ok beads without their own spec, no local model can execute these:")
+    for line in bad:
+        print("  - " + line)
+    print("fill --design and --acceptance, or drop the local-ok label")
+    sys.exit(1)
+PYEOF'
+
+# Closed and backlog are mutually exclusive: a closed bead is finished work,
+# not shelved work, so it never renders in the backlog strip and never counts
+# as ready. bd itself keeps the label on close, and no hook may strip it
+# (hooks are not harness-owned), so the gate fails the bead instead. Own
+# labels only: an open child of a shelved parent stays shelved by inheritance
+# without carrying the label itself.
+step "no closed bead carries backlog" bash -c '
+  python3 - <<PYEOF || exit 1
+import json
+import os
+import subprocess
+import sys
+try:
+    out = subprocess.run(
+        ["bd", "list", "--json", "--all", "--limit", "0"],
+        capture_output=True, text=True)
+except FileNotFoundError:
+    print("no bd here, skipping")
+    sys.exit(0)
+if out.returncode != 0:
+    if not os.path.isdir(".beads/embeddeddolt"):
+        print("no live ledger, skipping")
+        sys.exit(0)
+    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
+    print("error: cannot list the beads: " + err)
+    sys.exit(1)
+try:
+    issues = json.loads(out.stdout or "[]")
+except ValueError:
+    print("error: cannot read the bead list")
+    sys.exit(1)
+bad = sorted(
+    (issue.get("id", "?") for issue in issues
+     if (issue.get("status") or "open") == "closed"
+     and "backlog" in (issue.get("labels") or [])))
+if bad:
+    print("error: closed beads still carry the backlog label — closed and backlog are mutually exclusive:")
+    for line in bad:
+        print("  - " + line)
+    print("clear it on close (bd label remove <id> backlog), or drop the label by hand")
+    sys.exit(1)
+PYEOF'
+
 step "codex support" python3 "$(harness_script codex-support.py)" check
 # Self-tests: hermetic by construction — each builds its own throwaway root —
 # so the dispatch environment is unset for them. Inheriting HARNESS_PROJECT
