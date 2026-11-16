@@ -56,6 +56,15 @@ cd "$ROOT"
 # session, for the file whose header promises exactly that.
 READY_SHOWN=4
 
+# The seat's name off the **Name:** line, on stdout: leading whitespace and
+# wrapping asterisks stripped, cut at the first em-dash (a descriptor after
+# it is not the name). The python seat() below parses the same way, so a seat
+# never reads named in one place and unnamed in the other.
+seat_name() {
+  sed -n 's/^[[:space:]]*\*\*Name:\*\*[[:space:]]*//p' "$ROOT/harness/seat.md" 2>/dev/null \
+    | head -1 | sed -e 's/^[*[:space:]]*//' -e 's/—.*//' -e 's/[*[:space:]]*$//'
+}
+
 # Loud when the setup is broken. brief() below goes quiet when a prerequisite
 # is missing — no bd, no python3, no usable ledger — which reads as a healthy
 # session with nothing to do. These checks are shell only, so they still print
@@ -86,7 +95,7 @@ preflight() {
     echo "seat: no harness/seat.md — re-run the installer to restore it"
   elif ! grep -q '^[[:space:]]*\*\*Name:\*\*' "$ROOT/harness/seat.md" 2>/dev/null; then
     echo "seat: harness/seat.md has no **Name:** line — the brief reads the seat from that line"
-  elif [ -z "$(sed -n 's/^[[:space:]]*\*\*Name:\*\*[[:space:]]*//p' "$ROOT/harness/seat.md" 2>/dev/null | head -1 | sed -e 's/^[*[:space:]]*//' -e 's/[*[:space:]]*$//')" ]; then
+  elif [ -z "$(seat_name)" ]; then
     echo "seat: unnamed — set **Name:** in harness/seat.md"
   fi
   if [ -f "$ROOT/scripts/verify.steps.sh" ] && \
@@ -236,10 +245,13 @@ def seat_text():
         return ""
 
 def field(text, key):
+    # The same rule the shell seat_name() above parses by: wrapping
+    # asterisks and whitespace stripped together, so a tab-indented or
+    # star-wrapped value reads the same in both.
     for l in text.splitlines():
         s = l.lstrip()
         if s.startswith("**%s:**" % key):
-            return s.split(":", 1)[1].strip("* ").strip()
+            return s.split(":", 1)[1].strip(" \t\r\n\f\v*")
     return ""
 
 def seat():
@@ -486,9 +498,11 @@ if [ -n "$append" ]; then graft after "$append"; fi
 [ -z "$text" ] && exit 0
 
 if [ "$hook" -eq 1 ]; then
-  # python3 builds the wrapper; the shell fallback keeps the hook working (and
-  # valid JSON) where python3 is missing or broken. Brief text is lines of
-  # prose, so only backslash, quote, and newline need escaping.
+  # python3 builds the wrapper; without it the hook fails loud rather than
+  # emitting half-escaped JSON. The sed fallback this replaced covered only
+  # backslash, quote and newline, so a tab or carriage return in the brief —
+  # a seat paragraph, a CRLF-edited file — printed invalid JSON, which reads
+  # as a hook that never ran. Silence is what this script exists to replace.
   if command -v python3 >/dev/null 2>&1 && python3 -c '
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
@@ -497,8 +511,8 @@ print(json.dumps({"hookSpecificOutput": {
 }}))' <<< "$text"; then
     :
   else
-    esc="$(printf '%s' "$text" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g')"
-    printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "%s"}}\n' "$esc"
+    echo "brief.sh: python3 is needed for --hook JSON output" >&2
+    exit 1
   fi
 else
   echo "$text"

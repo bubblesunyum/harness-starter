@@ -138,10 +138,10 @@ else
   stacks_from="detected — correct harness/stacks.txt if that's wrong"
 fi
 echo "  stacks:  $(printf '%s' "${stacks:-none}" | tr '\n' ' ') ($stacks_from)"
-unknown="$(harness_unknown_stacks "$HERE" "$stacks")"
-if [ -n "$unknown" ]; then
+unknown_stacks="$(harness_unknown_stacks "$HERE" "$stacks")"
+if [ -n "$unknown_stacks" ]; then
   echo "  ! harness/stacks.txt names stacks the starter has no guidance for:"
-  printf '%s\n' "$unknown" | sed 's/^/      /'
+  printf '%s\n' "$unknown_stacks" | sed 's/^/      /'
   echo "    Their reviewers get no platform checks. Fix the names, or remove them."
 fi
 echo
@@ -498,16 +498,19 @@ fi
 # stdout scrolls away, `bd ready` doesn't. Each files only when its condition
 # still holds and no open bead already carries the title, so re-add files no
 # duplicates — and filling the file (or fixing the cause) clears it from ready.
-if [ -n "${ledger:-}" ]; then
-  file_any=0
-  [ -n "${leftover_origin:-}" ] && file_any=1
-  [ -n "${leftover_dolt:-}" ] && file_any=1
-  [ -n "${unknown:-}" ] && file_any=1
-  if harness_seat_blank "$target"; then seat_todo=1; file_any=1; else seat_todo=0; fi
-  if harness_claude_stock "$target"; then claude_todo=1; file_any=1; else claude_todo=0; fi
-  if harness_verify_steps_placeholder "$target"; then steps_todo=1; file_any=1; else steps_todo=0; fi
-  if harness_reviewers_missing "$target"; then reviewers_todo=1; file_any=1; else reviewers_todo=0; fi
-  if [ "$file_any" -eq 1 ]; then
+harness_file_setup_beads() {
+  local target="$1"
+  local needs_filing=0
+  local seat_todo=0 claude_todo=0 steps_todo=0 reviewers_todo=0
+  local stacks_design=""
+  [ -n "${leftover_origin:-}" ] && needs_filing=1
+  [ -n "${leftover_dolt:-}" ] && needs_filing=1
+  [ -n "${unknown_stacks:-}" ] && needs_filing=1
+  if harness_seat_blank "$target"; then seat_todo=1; needs_filing=1; fi
+  if harness_claude_stock "$target"; then claude_todo=1; needs_filing=1; fi
+  if harness_verify_steps_placeholder "$target"; then steps_todo=1; needs_filing=1; fi
+  if harness_reviewers_missing "$target"; then reviewers_todo=1; needs_filing=1; fi
+  if [ "$needs_filing" -eq 0 ]; then return 0; fi
   if [ -n "${leftover_origin:-}" ]; then
     harness_file_bead "$target" "connect the ledger to a git origin" \
       "Give the repo an origin, then register it as the ledger's Dolt remote so beads travel: bd dolt remote add origin git+<the origin URL>. Until then every bead lives only on this machine." \
@@ -520,8 +523,8 @@ if [ -n "${ledger:-}" ]; then
       "bd dolt remote list shows origin pointing at the current remote URL." \
       "" || true
   fi
-  if [ -n "${unknown:-}" ]; then
-    stacks_design="harness add found these names in harness/stacks.txt with no guidance in the starter: $(printf '%s' "$unknown" | tr '\n' ' '). Fix the names (the valid ones are the files in template/harness/stacks/), or remove them; the reviewers get no platform checks until then."
+  if [ -n "${unknown_stacks:-}" ]; then
+    stacks_design="harness add found these names in harness/stacks.txt with no guidance in the starter: $(printf '%s' "$unknown_stacks" | tr '\n' ' '). Fix the names (the valid ones are the files in template/harness/stacks/), or remove them; the reviewers get no platform checks until then."
     harness_file_bead "$target" "fix the unknown stack names in harness/stacks.txt" \
       "$stacks_design" \
       "harness/stacks.txt names only stacks the starter guides, and harness add prints no unknown-stack warning." \
@@ -554,7 +557,9 @@ if [ -n "${ledger:-}" ]; then
   # Filing wrote to the ledger without auto-export, so refresh the committed
   # export with memories — the same helper that set the policy, kept loud.
   harness_set_manual_export_policy "$target" || true
-  fi
+}
+if [ -n "${ledger:-}" ]; then
+  harness_file_setup_beads "$target"
   # Filing and ensure leave generated files the gate checks are tracked, but
   # neither stages them — a fresh install would land red on untracked files.
   # Best-effort and never fatal; never stage or touch anything else.
