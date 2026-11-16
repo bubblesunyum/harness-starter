@@ -10,7 +10,37 @@
 #
 #   scripts/brief.sh          # the brief, as text
 #   scripts/brief.sh --hook   # wrapped as Claude Code SessionStart JSON
+#   scripts/brief.sh --hook --prepend <file> [--append <file>]
+#                           # contract first, brief, skill note last — one JSON
 set -euo pipefail
+
+# --prepend/--append exist for `scripts/h session`, which prints the shared
+# contract before the brief (and a fresh-link skill note after) as one
+# SessionStart object. The JSON wrapper stays here so its python-missing
+# fallback has a single home; without these flags the script behaves exactly
+# as before.
+hook=0
+prepend=""
+append=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --hook) hook=1; shift ;;
+    --prepend)
+      if [ -z "${2:-}" ]; then
+        echo "brief.sh: --prepend needs a file" >&2
+        exit 2
+      fi
+      prepend="$2"; shift 2 ;;
+    --append)
+      if [ -z "${2:-}" ]; then
+        echo "brief.sh: --append needs a file" >&2
+        exit 2
+      fi
+      append="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
 
 ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Where this script was loaded from: the shared checkout, whose scripts/ holds
@@ -366,9 +396,41 @@ PY
 }
 
 text="$( { preflight; brief; } || true)"
+# One --prepend/--append file grafted onto the brief text: before it for the
+# contract, after it for the skill note. A named file that is missing warns on
+# stderr and is skipped — `h session` builds these paths from another
+# checkout's layout, and silence there would read as a step that never ran.
+graft() {
+  local side="$1"
+  local file="$2"
+  local part
+  if [ ! -f "$file" ]; then
+    printf 'brief.sh: %s not found — skipped\n' "$file" >&2
+    return 0
+  fi
+  if ! part="$(cat "$file" 2>/dev/null)"; then
+    # Unreadable (or vanished in the TOCTOU window) like missing, but loud:
+    # a failing cat under set -e would kill the hook with no JSON at all.
+    printf 'brief.sh: %s unreadable — skipped\n' "$file" >&2
+    return 0
+  fi
+  if [ -z "$text" ]; then
+    text="$part"
+  elif [ "$side" = "before" ]; then
+    text="$part
+$text"
+  else
+    text="$text
+$part"
+  fi
+}
+# The contract goes first, the skill note last; either file missing means
+# that half is skipped rather than the whole brief failing.
+if [ -n "$prepend" ]; then graft before "$prepend"; fi
+if [ -n "$append" ]; then graft after "$append"; fi
 [ -z "$text" ] && exit 0
 
-if [ "${1:-}" = "--hook" ]; then
+if [ "$hook" -eq 1 ]; then
   # python3 builds the wrapper; the shell fallback keeps the hook working (and
   # valid JSON) where python3 is missing or broken. Brief text is lines of
   # prose, so only backslash, quote, and newline need escaping.

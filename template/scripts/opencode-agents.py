@@ -16,6 +16,13 @@ only the pin fields are set. A hand edit that names another model is
 restored by re-running this script. scripts/opencode-pin.py stays the gate
 that holds every file to the pin.
 
+In the starter the shared side is generated too: template/.claude/agents/
+→ template/.opencode/agent/, so a project running by reference can link its
+.opencode/agent/ entries at `h link` time instead of generating them. A link
+that resolves passes check as-is; a dangling one fails it — the shared agent
+it pointed at is gone, and `scripts/h link` prunes it. Entries are never
+written through — writing through a link would edit the shared checkout.
+
 **Not a symlink, and that is the whole point.** opencode reads a symlinked
 .claude/agents/ file happily and then mis-parses every field in it: Claude's
 `model: haiku` becomes provider "haiku" with an empty model id, the comma-string
@@ -53,6 +60,45 @@ sys.path.insert(0, str(HARNESS / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts"))
 from models import OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT, model_is_pinned
 
+
+def is_same_dir(a, b):
+    """Whether two paths name the same dir, tolerating a missing one."""
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return a == b
+
+
+def pairs():
+    """(claude_dir, opencode_dir, base) for the project plus the shared side.
+
+    The shared side is the starter's template/ — via HARNESS when dispatched
+    there, or via the template/ subdir when running undispatched from the
+    starter root. Installed copies have no template/ dir, so they keep the
+    single project pair, exactly as today."""
+    out = [(CLAUDE_AGENTS, OPENCODE_AGENTS, ROOT)]
+    cands = []
+    try:
+        resolved_root = ROOT.resolve()
+        resolved_harness = HARNESS.resolve()
+    except OSError:
+        resolved_root = ROOT
+        resolved_harness = HARNESS
+    if resolved_harness != resolved_root and resolved_harness.is_relative_to(resolved_root):
+        cands.append(HARNESS)
+    tmpl = ROOT / "template"
+    if (tmpl / ".claude/agents").is_dir():
+        cands.append(tmpl)
+    for base in cands:
+        claude = base / ".claude/agents"
+        dest = base / ".opencode/agent"
+        if not claude.is_dir():
+            continue
+        if any(is_same_dir(claude, c) for c, _, _ in out):
+            continue
+        out.append((claude, dest, base))
+    return out
+
 # Claude's `tools:` is an allowlist; opencode has no allowlist, only per-tool
 # permissions. Only the tools that write or reach outside the repo are
 # translated: those are the ones an omission actually costs something. The read
@@ -80,7 +126,7 @@ def frontmatter(text):
     return fields, match.group(2)
 
 
-def translate(source):
+def translate(source, base=ROOT):
     """The opencode agent file for one .claude/agents/*.md, as text."""
     fields, body = frontmatter(source.read_text())
     granted = {t.strip() for t in fields.get("tools", "").split(",") if t.strip()}
@@ -100,26 +146,67 @@ def translate(source):
         header += [f"  {key}: deny" for key in denied]
     header.append("---")
 
+    try:
+        rel = source.relative_to(base)
+    except ValueError:
+        rel = source
     return ("\n".join(header) + "\n\n"
-            + f"<!-- Generated from {source.relative_to(ROOT)} by {GENERATED_BY}.\n"
+            + f"<!-- Generated from {rel} by {GENERATED_BY}.\n"
             + "     Edit that file, not this one, and re-run the script. -->\n\n"
             + body.lstrip("\n"))
 
 
-def generated():
-    """(destination, wanted text) for every agent."""
-    return [(OPENCODE_AGENTS / source.name, translate(source))
-            for source in sorted(CLAUDE_AGENTS.glob("*.md"))]
+def generated_for(claude_dir, opencode_dir, base):
+    """(destination, wanted text or None) for one pair of dirs. A dangling
+    source link is wanted None: there is nothing to translate, and check
+    fails it loudly below instead of passing over the gap."""
+    wanted = []
+    for source in sorted(claude_dir.glob("*.md")):
+        if source.is_symlink() and not source.exists():
+            wanted.append((opencode_dir / source.name, None))
+            continue
+        try:
+            wanted.append((opencode_dir / source.name, translate(source, base)))
+        except OSError as exc:
+            # Unreadable like a dangling link: fail loud below, not traceback.
+            print(f"  AGENT {display_path(source)} unreadable ({exc})",
+                  file=sys.stderr)
+            wanted.append((opencode_dir / source.name, None))
+    return wanted
 
 
-def orphans(wanted):
-    """Files under .opencode/agent/ this script wrote and no longer would —
-    left behind, a renamed agent haunts opencode under both names."""
-    if not OPENCODE_AGENTS.is_dir():
+def display_path(path):
+    """A path for messages: project-relative when inside, else absolute."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def orphans_for(opencode_dir, wanted):
+    """Files under one .opencode/agent/ this script wrote and no longer would —
+    left behind, a renamed agent haunts opencode under both names. A link that
+    resolves is the linker's, not this script's, so it is never an orphan; a
+    dangling one is — the shared agent it pointed at is gone."""
+    if not opencode_dir.is_dir():
         return []
     keep = {path for path, _ in wanted}
-    return [path for path in sorted(OPENCODE_AGENTS.glob("*.md"))
-            if path not in keep and GENERATED_BY in path.read_text()]
+    found = []
+    for path in sorted(opencode_dir.glob("*.md")):
+        if path in keep:
+            continue
+        if path.is_symlink():
+            if path.exists():
+                continue
+            found.append(path)
+            continue
+        try:
+            if GENERATED_BY in path.read_text():
+                found.append(path)
+        except OSError:
+            # Unreadable like a leftover: fail loud below, never skip silent.
+            found.append(path)
+    return found
 
 
 # Config subtrees that hold agent definitions — the same three the pin check
@@ -230,36 +317,80 @@ def pin_opencode_jsons():
 
 
 def write():
-    wanted = generated()
-    OPENCODE_AGENTS.mkdir(parents=True, exist_ok=True)
-    for path, text in wanted:
-        path.write_text(text)
-    for path in orphans(wanted):
-        path.unlink()
-        # Named, not counted: a reviewer that vanished because its source was
-        # renamed is exactly the deletion someone needs to see happen.
-        print(f"  removed {path.relative_to(ROOT)} — its source is gone")
-    print(f"  wrote {len(wanted)} opencode agents → "
-          f"{OPENCODE_AGENTS.relative_to(ROOT)}/, pinned to {OPENCODE_MODEL_ARG}")
+    for claude_dir, opencode_dir, base in pairs():
+        wanted = generated_for(claude_dir, opencode_dir, base)
+        opencode_dir.mkdir(parents=True, exist_ok=True)
+        for path, text in wanted:
+            if text is None:
+                # A dangling or unreadable source: nothing to translate, loudly.
+                print(f"  AGENT {display_path(claude_dir / path.name)} does not resolve — "
+                      f"restore the link target or fix permissions",
+                      file=sys.stderr)
+                continue
+            if path.is_symlink():
+                # By reference the entry is a link into the harness; writing
+                # through it would edit the shared checkout, so leave it.
+                continue
+            path.write_text(text)
+        for path in orphans_for(opencode_dir, wanted):
+            path.unlink()
+            # Named, not counted: a reviewer that vanished because its source was
+            # renamed is exactly the deletion someone needs to see happen.
+            print(f"  removed {display_path(path)} — its source is gone")
+        print(f"  wrote {len(wanted)} opencode agents → "
+              f"{display_path(opencode_dir)}/, pinned to {OPENCODE_MODEL_ARG}")
     return pin_opencode_jsons()
 
 
 def check():
     """Reports rather than fixes: a gate that silently regenerated would pass
-    every time and never tell anyone the two had drifted."""
-    wanted = generated()
-    stale = [path for path, text in wanted
-             if not path.exists() or path.read_text() != text]
-    for path in stale:
-        print(f"  AGENT {path.relative_to(ROOT)} does not match "
-              f"{CLAUDE_AGENTS.relative_to(ROOT)}/{path.name}")
-    for path in orphans(wanted):
-        stale.append(path)
-        print(f"  AGENT {path.relative_to(ROOT)} has no source any more")
+    every time and never tell anyone the two had drifted. A link that resolves
+    passes without regenerating — by reference it is the shared agent — but a
+    dangling one fails: the shared agent it pointed at is gone, and
+    `scripts/h link` prunes it."""
+    stale = []
+    total = 0
+    for claude_dir, opencode_dir, base in pairs():
+        wanted = generated_for(claude_dir, opencode_dir, base)
+        total += len(wanted)
+        for path, text in wanted:
+            if text is None:
+                stale.append(path)
+                print(f"  AGENT {display_path(claude_dir / path.name)} does not resolve — "
+                      f"restore the link target or fix permissions")
+                continue
+            if path.is_symlink():
+                if path.exists():
+                    continue
+                stale.append(path)
+                print(f"  AGENT {display_path(path)} is a dangling link — "
+                      f"run 'scripts/h link' to prune it")
+                continue
+            try:
+                ok = path.is_file() and path.read_text() == text
+            except OSError:
+                ok = False
+            if not ok:
+                stale.append(path)
+                print(f"  AGENT {display_path(path)} does not match "
+                      f"{display_path(claude_dir)}/{path.name}")
+        for path in orphans_for(opencode_dir, wanted):
+            stale.append(path)
+            if path.is_symlink():
+                print(f"  AGENT {display_path(path)} is a dangling link — "
+                      f"run 'scripts/h link' to prune it")
+                continue
+            try:
+                path.read_text()
+            except OSError as exc:
+                print(f"  AGENT {display_path(path)} unreadable ({exc}) — "
+                      f"fix permissions or remove it")
+                continue
+            print(f"  AGENT {display_path(path)} has no source any more")
     if stale:
         print(f"        run {GENERATED_BY}")
         return 1
-    print(f"  ok    {len(wanted)} opencode agents match their sources")
+    print(f"  ok    {total} opencode agents match their sources")
     return 0
 
 

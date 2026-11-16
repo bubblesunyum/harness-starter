@@ -1,6 +1,6 @@
 #!/bin/bash
 # Probe for the scripts/h finder: resolution order, fetching, dispatch,
-# shadowing, linking, and every loud failure.
+# shadowing, linking, session, hooks, and every loud failure.
 #
 # Self-contained: a fake starter checkout (this tree's template/, so it
 # carries the marker), a file:// repo of it, and fake projects all live
@@ -42,12 +42,66 @@ BARE="$TMP/starter.git"
 mkdir -p "$CHECKOUT" || { echo "FAIL setup: mkdir checkout"; exit 1; }
 cp -R "$REPO/template" "$CHECKOUT/template" || { echo "FAIL setup: copy template"; exit 1; }
 # A stub ROOT brief.sh, so the ROOT half of dispatch never depends on the
-# real shared scripts (another worker owns those right now).
-printf '#!/bin/bash\necho "ROOT-BRIEF ${HARNESS_PROJECT}"\n' > "$CHECKOUT/template/scripts/brief.sh" || { echo "FAIL setup: stub brief"; exit 1; }
+# real shared scripts (another worker owns those right now). It understands
+# the flags `h session` passes — --prepend (the contract), --append (the
+# fresh-link skill note), --hook (one SessionStart JSON object) — and stays
+# silent on stderr like a dispatched copy must.
+cat > "$CHECKOUT/template/scripts/brief.sh" <<'STUB' || { echo "FAIL setup: stub brief"; exit 1; }
+#!/bin/bash
+# Mini-brief for finder probes: no bd, no ledger, just the contract in, the
+# note on the end, and the same JSON shape with --hook.
+hook=0
+prepend=""
+append=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --hook) hook=1; shift ;;
+    --prepend)
+      if [ -z "${2:-}" ]; then
+        echo "brief.sh: --prepend needs a file" >&2
+        exit 2
+      fi
+      prepend="$2"; shift 2 ;;
+    --append)
+      if [ -z "${2:-}" ]; then
+        echo "brief.sh: --append needs a file" >&2
+        exit 2
+      fi
+      append="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
+text=""
+if [ -n "$prepend" ] && [ -f "$prepend" ]; then
+  text="$(cat "$prepend")"
+fi
+if [ -n "$text" ]; then
+  text="$text
+ROOT-BRIEF ${HARNESS_PROJECT}"
+else
+  text="ROOT-BRIEF ${HARNESS_PROJECT}"
+fi
+if [ -n "$append" ] && [ -f "$append" ]; then
+  text="$text
+$(cat "$append")"
+fi
+if [ "$hook" -eq 1 ]; then
+  python3 -c 'import json, sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": sys.stdin.read().strip()}}))' <<< "$text"
+else
+  echo "$text"
+fi
+STUB
 chmod +x "$CHECKOUT/template/scripts/brief.sh" || { echo "FAIL setup: chmod stub"; exit 1; }
 # A probe entry under .agents/skills, so the link's third path is exercised.
 mkdir -p "$CHECKOUT/template/.agents/skills/probe" || { echo "FAIL setup: agents fixture"; exit 1; }
 printf 'probe\n' > "$CHECKOUT/template/.agents/skills/probe/SKILL.md" || { echo "FAIL setup: agents file"; exit 1; }
+# A probe hook and a generated-agent entry, so `h hook` and the
+# .opencode/agent half of `h link` have something to run against.
+mkdir -p "$CHECKOUT/template/scripts/hooks" || { echo "FAIL setup: hooks fixture"; exit 1; }
+printf '#!/bin/bash\necho "PROBE-HOOK $*"\n' > "$CHECKOUT/template/scripts/hooks/probe-hook" || { echo "FAIL setup: hook file"; exit 1; }
+chmod +x "$CHECKOUT/template/scripts/hooks/probe-hook" || { echo "FAIL setup: chmod hook"; exit 1; }
+mkdir -p "$CHECKOUT/template/.opencode/agent" || { echo "FAIL setup: opencode fixture"; exit 1; }
+printf 'probe agent\n' > "$CHECKOUT/template/.opencode/agent/probe-agent.md" || { echo "FAIL setup: opencode file"; exit 1; }
 (cd "$CHECKOUT" && git init -q .) >/dev/null || { echo "FAIL setup: git init"; exit 1; }
 (cd "$CHECKOUT" && git add -A) >/dev/null || { echo "FAIL setup: git add"; exit 1; }
 (cd "$CHECKOUT" && git -c user.email=probe@t -c user.name=probe -c commit.gpgsign=false commit -qm probe) >/dev/null || { echo "FAIL setup: git commit"; exit 1; }
@@ -342,6 +396,210 @@ else
   failcase "relative HARNESS_HOME resolves and dispatches" "root exited non-zero"
 fi
 cd "$REPO" || { echo "FAIL setup: cd back"; exit 1; }
+
+# --- 12: session prints the contract, then the brief ---
+newproj p12 || { echo "FAIL setup: p12"; exit 1; }
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" session >"$TMP/got" 2>"$TMP/err"; then
+  if grep -q "Working on this project" "$TMP/got" && grep -q "ROOT-BRIEF" "$TMP/got" && grep -qF "$PROJ" "$TMP/got"; then
+    if awk '/Working on this project/{c=NR} /ROOT-BRIEF/{if(!b)b=NR} END{exit !(c && b && c<b)}' "$TMP/got"; then
+      pass "session prints contract then brief"
+    else
+      failcase "session prints contract then brief" "contract does not come before the brief"
+    fi
+  else
+    failcase "session prints contract then brief" "contract or brief text missing"
+  fi
+else
+  failcase "session prints contract then brief" "non-zero exit"
+fi
+
+# --- 13: session --hook emits one JSON object holding contract and brief ---
+newproj p13 || { echo "FAIL setup: p13"; exit 1; }
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" session --hook >"$TMP/got" 2>"$TMP/err"; then
+  if python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$TMP/got"; then
+    if grep -q "Working on this project" "$TMP/got" && grep -q "ROOT-BRIEF" "$TMP/got"; then
+      pass "session --hook emits one JSON holding both"
+    else
+      failcase "session --hook emits one JSON holding both" "JSON lacks contract or brief text"
+    fi
+  else
+    failcase "session --hook emits one JSON holding both" "stdout is not valid JSON"
+  fi
+else
+  failcase "session --hook emits one JSON holding both" "non-zero exit"
+fi
+
+# --- 14: first session names fresh skill links, second stays quiet ---
+newproj p14 || { echo "FAIL setup: p14"; exit 1; }
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" session >"$TMP/got" 2>"$TMP/err"; then
+  if grep -q "directly this session" "$TMP/got" && grep "SKILL.md" "$TMP/got" | grep -qF "$CHECKOUT"; then
+    if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" session >"$TMP/got2" 2>"$TMP/err"; then
+      if grep -q "directly this session" "$TMP/got2"; then
+        failcase "fresh skill links named once" "second run repeated the skill note"
+      else
+        pass "fresh skill links named once"
+      fi
+    else
+      failcase "fresh skill links named once" "second run exited non-zero"
+    fi
+  else
+    failcase "fresh skill links named once" "first run never named the skill paths"
+  fi
+else
+  failcase "fresh skill links named once" "first run exited non-zero"
+fi
+
+# --- 15: session without a harness exits 0 with one loud line twice ---
+newproj p15 || { echo "FAIL setup: p15"; exit 1; }
+if env -u HARNESS_HOME HARNESS_URL="$DEAD" "$PROJ/scripts/h" session >"$TMP/got" 2>"$TMP/err"; then
+  if grep -q "cannot fetch" "$TMP/got" && grep -q "cannot fetch" "$TMP/err"; then
+    pass "session without harness stays loud and zero"
+  else
+    failcase "session without harness stays loud and zero" "loud line missing from stdout or stderr"
+  fi
+else
+  failcase "session without harness stays loud and zero" "non-zero exit"
+fi
+
+# --- 16: session --hook without a harness is still one JSON plus stderr ---
+newproj p16 || { echo "FAIL setup: p16"; exit 1; }
+if env -u HARNESS_HOME HARNESS_URL="$DEAD" "$PROJ/scripts/h" session --hook >"$TMP/got" 2>"$TMP/err"; then
+  if python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$TMP/got"; then
+    if grep -q "cannot fetch" "$TMP/got" && grep -q "cannot fetch" "$TMP/err"; then
+      pass "hooked session without harness stays JSON and zero"
+    else
+      failcase "hooked session without harness stays JSON and zero" "loud line missing from JSON or stderr"
+    fi
+  else
+    failcase "hooked session without harness stays JSON and zero" "stdout is not valid JSON"
+  fi
+else
+  failcase "hooked session without harness stays JSON and zero" "non-zero exit"
+fi
+
+# --- 17: hook runs the shared hook with its args ---
+newproj p17 || { echo "FAIL setup: p17"; exit 1; }
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" hook probe-hook alpha beta >"$TMP/got" 2>"$TMP/err"; then
+  printf 'PROBE-HOOK alpha beta\n' > "$TMP/want"
+  if cmp -s "$TMP/want" "$TMP/got"; then
+    pass "hook runs with args"
+  else
+    failcase "hook runs with args" "hook output wrong"
+  fi
+else
+  failcase "hook runs with args" "non-zero exit"
+fi
+
+# --- 18: hook without a harness fails closed ---
+newproj p18 || { echo "FAIL setup: p18"; exit 1; }
+if env -u HARNESS_HOME HARNESS_URL="$DEAD" "$PROJ/scripts/h" hook probe-hook >"$TMP/got" 2>"$TMP/err"; then
+  failcase "hook without harness fails closed" "exit 0 despite a dead URL"
+else
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
+    pass "hook without harness fails closed"
+  else
+    failcase "hook without harness fails closed" "wrong exit code"
+  fi
+fi
+
+# --- 19: link makes the contract link and per-entry opencode agent links ---
+newproj p19 || { echo "FAIL setup: p19"; exit 1; }
+before19=$FAILS
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" link >"$TMP/got" 2>"$TMP/err"; then
+  if [ -L "$PROJ/.harness-contract.md" ]; then
+    readlink "$PROJ/.harness-contract.md" > "$TMP/gotlink" || { echo "FAIL setup: readlink"; exit 1; }
+    printf '%s\n' "$CHECKOUT/template/AGENTS.md" > "$TMP/want"
+    if ! cmp -s "$TMP/want" "$TMP/gotlink"; then
+      failcase "link makes contract and opencode links" ".harness-contract.md points elsewhere"
+    fi
+  else
+    failcase "link makes contract and opencode links" ".harness-contract.md is not a symlink"
+  fi
+  if ! grep -qxF ".harness-contract.md" "$PROJ/.gitignore" 2>/dev/null; then
+    failcase "link makes contract and opencode links" ".harness-contract.md missing from .gitignore"
+  fi
+  if [ -L "$PROJ/.opencode/agent/probe-agent.md" ]; then
+    readlink "$PROJ/.opencode/agent/probe-agent.md" > "$TMP/gotlink" || { echo "FAIL setup: readlink"; exit 1; }
+    printf '%s\n' "$CHECKOUT/template/.opencode/agent/probe-agent.md" > "$TMP/want"
+    if ! cmp -s "$TMP/want" "$TMP/gotlink"; then
+      failcase "link makes contract and opencode links" "opencode agent points elsewhere"
+    fi
+  else
+    failcase "link makes contract and opencode links" "opencode agent is not a symlink"
+  fi
+  if ! grep -qxF ".opencode/agent/probe-agent.md" "$PROJ/.gitignore" 2>/dev/null; then
+    failcase "link makes contract and opencode links" "opencode agent missing from .gitignore"
+  fi
+else
+  failcase "link makes contract and opencode links" "non-zero exit"
+fi
+if [ "$FAILS" -eq "$before19" ]; then
+  pass "link makes contract and opencode links"
+fi
+
+# --- 20: link skips a missing .opencode/agent without a sound ---
+mkdir -p "$TMP/noagents" || { echo "FAIL setup: noagents"; exit 1; }
+cp -R "$CHECKOUT/template" "$TMP/noagents/template" || { echo "FAIL setup: copy noagents"; exit 1; }
+rm -rf "$TMP/noagents/template/.opencode" || { echo "FAIL setup: strip opencode"; exit 1; }
+newproj p20 || { echo "FAIL setup: p20"; exit 1; }
+if HARNESS_HOME="$TMP/noagents" HARNESS_URL="$URL" "$PROJ/scripts/h" link >"$TMP/got" 2>"$TMP/err"; then
+  if [ -e "$PROJ/.opencode" ] || [ -L "$PROJ/.opencode" ]; then
+    failcase "link skips missing opencode agents" ".opencode appeared with no shared source"
+  elif [ -L "$PROJ/.harness-contract.md" ]; then
+    pass "link skips missing opencode agents"
+  else
+    failcase "link skips missing opencode agents" "contract link missing alongside the skip"
+  fi
+else
+  failcase "link skips missing opencode agents" "non-zero exit"
+fi
+
+# --- 21: no AGENTS.md is a loud line in the context, not a missing flag ---
+# A harness with brief.sh but no contract, fresh skill links: session --hook
+# exits 0 and still emits one JSON object, naming the missing contract (the
+# old code passed --prepend "" here, which the real brief.sh exits 2 on —
+# a SessionStart hook with no JSON).
+mkdir -p "$TMP/nocontract" || { echo "FAIL setup: nocontract"; exit 1; }
+cp -R "$CHECKOUT/template" "$TMP/nocontract/template" || { echo "FAIL setup: copy nocontract"; exit 1; }
+rm -f "$TMP/nocontract/template/AGENTS.md" || { echo "FAIL setup: strip contract"; exit 1; }
+newproj p21 || { echo "FAIL setup: p21"; exit 1; }
+if HARNESS_HOME="$TMP/nocontract" HARNESS_URL="$URL" "$PROJ/scripts/h" session --hook >"$TMP/got" 2>"$TMP/err"; then
+  if python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$TMP/got"; then
+    if grep -q "no AGENTS.md" "$TMP/got" && grep -q "directly this session" "$TMP/got"; then
+      pass "missing contract stays loud JSON and zero"
+    else
+      failcase "missing contract stays loud JSON and zero" "JSON names neither the problem nor the fresh skill note"
+    fi
+  else
+    failcase "missing contract stays loud JSON and zero" "stdout is not valid JSON"
+  fi
+else
+  failcase "missing contract stays loud JSON and zero" "non-zero exit"
+fi
+
+# --- 22: unreadable AGENTS.md is loud JSON, not silence ---
+# A harness whose contract exists but won't read: session --hook exits 0 and
+# still emits one JSON object naming the unreadable contract — never an empty
+# silent prepend.
+mkdir -p "$TMP/badcontract" || { echo "FAIL setup: badcontract"; exit 1; }
+cp -R "$CHECKOUT/template" "$TMP/badcontract/template" || { echo "FAIL setup: copy badcontract"; exit 1; }
+chmod 000 "$TMP/badcontract/template/AGENTS.md" || { echo "FAIL setup: chmod badcontract"; exit 1; }
+newproj p22 || { echo "FAIL setup: p22"; exit 1; }
+if HARNESS_HOME="$TMP/badcontract" HARNESS_URL="$URL" "$PROJ/scripts/h" session --hook >"$TMP/got" 2>"$TMP/err"; then
+  if python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$TMP/got"; then
+    if grep -q "AGENTS.md" "$TMP/got" && grep -qi "unreadable\|damaged" "$TMP/got"; then
+      pass "unreadable contract stays loud JSON and zero"
+    else
+      failcase "unreadable contract stays loud JSON and zero" "JSON never names the unreadable contract"
+    fi
+  else
+    failcase "unreadable contract stays loud JSON and zero" "stdout is not valid JSON"
+  fi
+else
+  failcase "unreadable contract stays loud JSON and zero" "non-zero exit"
+fi
+chmod 644 "$TMP/badcontract/template/AGENTS.md" || { echo "FAIL setup: restore badcontract"; exit 1; }
 
 if [ "$FAILS" -eq 0 ]; then
   exit 0

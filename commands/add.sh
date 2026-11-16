@@ -38,10 +38,19 @@ Installs the agentic development harness into a project.
 
   harness add              into the current directory
   harness add <path>       into that project instead
+  harness add --reference [path]
+                           link the shared harness instead of copying it
 
 The project's name and its bead prefix are inferred from the directory, and a
 project that already has a ledger keeps the prefix it already has. Needs beads
 (bd) on PATH; a missing git repository is created.
+
+A reference install keeps the contract in the shared checkout: with
+--reference, add writes the stubs in template/stubs/, the seeds, CLAUDE.md
+and scripts/h — and no other contract file — then runs
+'<target>/scripts/h link' so the shared skills exist before the first
+session. Needs HARNESS_HOME or ~/.harness pointing at a harness-starter
+checkout; without one it fails before writing anything.
 
 Never overwrites a file that already exists, so re-running is a safe way to
 pick up pieces added to the starter since. Files carrying the harness contract
@@ -52,9 +61,23 @@ instead. See 'harness update' for the same check without installing anything.
 EOF
 }
 
-case "${1:-}" in
-  -h|--help) usage; exit 0 ;;
-esac
+# --reference may lead or trail the path; anything else positional is the
+# target, as today — an unknown flag reads as a path and fails as one.
+reference=""
+pos=""
+for arg in ${1+"$@"}; do
+  case "$arg" in
+    --reference) reference=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) [ -n "$pos" ] || pos="$arg" ;;
+  esac
+done
+
+if [ -n "$reference" ]; then
+  # Before the target is even resolved: resolving inits a git repository,
+  # and a harness that cannot be found must leave the target untouched.
+  ref_root="$(harness_reference_root)" || exit 1
+fi
 
 # Whether the target already is a repository, read off the raw path before
 # resolving it: --init creates one when it isn't, and the install says so below
@@ -62,8 +85,8 @@ esac
 # come from inside it. -e rather than -d: a linked worktree's .git is a file,
 # and it is still a repository — no init happens there, so no notice either.
 had_git=0
-[ -e "${1:-$PWD}/.git" ] && had_git=1
-target="$(harness_resolve_target --init "${1:-$PWD}")"
+[ -e "${pos:-$PWD}/.git" ] && had_git=1
+target="$(harness_resolve_target --init "${pos:-$PWD}")"
 # Protect even the first prefix lookup from bd's memory-less auto-flush. The
 # project setting is persisted once its live ledger has been verified below.
 export BD_EXPORT_AUTO=false
@@ -96,6 +119,9 @@ echo "installing the harness into $target"
 [ "$had_git" -eq 0 ] && echo "  initialised a git repository"
 echo "  project: $name"
 echo "  prefix:  $prefix-"
+if [ -n "$reference" ]; then
+  echo "  harness: $ref_root (reference — shared files stay there)"
+fi
 
 # Written once, before the file list is read, because the list depends on it.
 # An existing stacks.txt is the project's call and is never re-detected over.
@@ -117,7 +143,28 @@ if [ -n "$unknown" ]; then
 fi
 echo
 
-files="$(harness_files_for "$HERE" "$target")"
+if [ -n "$reference" ]; then
+  files="$(harness_reference_files)"
+  # Every source present before a single write: a missing stub would otherwise
+  # leave a 0-byte file behind, and the never-overwrite guard would then read
+  # that as already installed on every re-run.
+  missing=""
+  while IFS= read -r rel; do
+    # Readable, not just present: an unreadable stub would otherwise truncate
+    # the destination to 0 bytes below, and the never-overwrite guard would
+    # then read that as already installed on every re-run.
+    src_check="$TEMPLATE/$(harness_reference_src "$rel")"
+    [ -f "$src_check" ] && [ -r "$src_check" ] || missing="$missing  $rel"$'\n'
+  done <<< "$files"
+  if [ -n "$missing" ]; then
+    echo "✗ the starter is missing reference sources for:" >&2
+    printf '%s' "$missing" >&2
+    echo "  restore them (git checkout -- template/stubs) and re-run." >&2
+    exit 1
+  fi
+else
+  files="$(harness_files_for "$HERE" "$target")"
+fi
 
 # Acknowledged local forks. A contract file listed in the project's
 # harness/diverged.txt differs on purpose, so a re-add shows it for the record
@@ -140,6 +187,8 @@ fi
 # overwrites, so without this the overlay would arrive with placeholder content
 # beside the project's real answers — and the next `update --apply` would
 # converge the base and strand them.
+# A reference install writes no base script, so there is no split to recover.
+if [ -z "$reference" ]; then
 moved_all=""
 for rel in scripts/verify.sh scripts/review.sh; do
   overlay="$(harness_overlay_of "$rel")" || continue
@@ -153,10 +202,15 @@ for rel in scripts/verify.sh scripts/review.sh; do
   fi
 done
 [ -n "$moved_all" ] && { printf '%s' "$moved_all"; echo; }
+fi
 
 copied=0; skipped=0; stale=0; diverged=0
 while IFS= read -r rel; do
-  src="$TEMPLATE/$rel"
+  if [ -n "$reference" ]; then
+    src="$TEMPLATE/$(harness_reference_src "$rel")"
+  else
+    src="$TEMPLATE/$rel"
+  fi
   dst="$target/$rel"
   if [ -e "$dst" ]; then
     # Never overwritten — that is what makes a re-run safe. But for the files
@@ -165,7 +219,9 @@ while IFS= read -r rel; do
     # others, and nothing ever says the fix didn't arrive. Acknowledged forks
     # are the exception: those differ on purpose, so they are shown for the
     # record instead of counted as stale.
-    if harness_is_contract "$rel" "$src" && ! harness_current "$rel" "$src" "$dst"; then
+    # A reference install owns no contract file to compare against: the stubs
+    # are the source, an existing file is the project's, and it stays.
+    if [ -z "$reference" ] && harness_is_contract "$rel" "$src" && ! harness_current "$rel" "$src" "$dst"; then
       if harness_in_diverged_list "$diverged_want" "$rel"; then
         echo "  diverged  $rel (acknowledged in harness/diverged.txt)"
         diverged=$((diverged + 1))
@@ -180,7 +236,20 @@ while IFS= read -r rel; do
     continue
   fi
   mkdir -p "$(dirname "$dst")"
-  harness_render "$src" > "$dst"
+  # Through a temp file, never directly: a failing render (unreadable source
+  # in the TOCTOU window) must not leave a 0-byte destination that the
+  # never-overwrite guard above then reads as already installed.
+  tmp_dst="$(mktemp "$target/.harness-add-XXXXXX")" || exit 1
+  if harness_render "$src" > "$tmp_dst"; then
+    # mktemp makes 0600; installed files are 0644 (0755 below when the source
+    # is executable), which dashboard-update.sh's mode restore assumes.
+    chmod 644 "$tmp_dst"
+    mv "$tmp_dst" "$dst"
+  else
+    rm -f "$tmp_dst"
+    echo "✗ cannot read $src — fix permissions and re-run." >&2
+    exit 1
+  fi
   [ -x "$src" ] && chmod +x "$dst"
   echo "  add   $rel"
   copied=$((copied + 1))
@@ -286,6 +355,12 @@ append_ignore 'dashboard/state.json' \
   'The dashboard snapshot, rewritten on every poll — machine-local.'
 append_ignore '.tmp/' \
   'Agent scratch — created here, removed when done, never committed.'
+if [ -n "$reference" ]; then
+  # Derived, not committed: the shared prompts are the source of truth, and
+  # `scripts/h link` regenerates these from them on every session.
+  append_ignore '.codex/agents/' \
+    'Codex agents generated from the shared prompts — scripts/h link regenerates them.'
+fi
 
 # Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
 # AGENTS.md. The import is what makes the contract always-loaded in both, rather
@@ -449,7 +524,7 @@ fi
 # already says, in worse words, and every re-run would re-append it over a
 # deliberate removal. The template supplies the project brief hook for Codex.
 if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-  if python3 - "$target" <<'PYEOF'
+  if python3 - "$target" "${reference:-0}" <<'PYEOF'
 import json
 import re
 import sys
@@ -459,6 +534,9 @@ from pathlib import Path
 # is left alone rather than truncated from that line to the end.
 BLOCK = re.compile(r"<!-- BEGIN BEADS.*?<!-- END BEADS[^>]*-->\n*", re.S)
 target = Path(sys.argv[1])
+# A reference install points its hooks at the finder, not at installed
+# scripts: the Codex brief entry below must name scripts/h, never brief.sh.
+ref = len(sys.argv) > 2 and sys.argv[2] == "1"
 did = []
 
 
@@ -497,12 +575,18 @@ if codex.exists():
         else:
             hooks.pop(event)
     starts = hooks.setdefault("SessionStart", [])
-    added = not any("scripts/brief.sh" in h.get("command", "")
+    if ref:
+        want_pat = r"scripts/h(?![\w/-])"
+        want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/h" session --hook'
+    else:
+        want_pat = r"scripts/brief\.sh(?![\w/-])"
+        want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/brief.sh" --hook'
+    added = not any(re.search(want_pat, h.get("command", ""))
                     for g in starts for h in g.get("hooks", []))
     if added:
         starts.append({"matcher": "^(startup|resume|clear|compact)$", "hooks": [{
             "type": "command",
-            "command": 'bash "$(git rev-parse --show-toplevel)/scripts/brief.sh" --hook',
+            "command": want_cmd,
             "timeout": 60, "statusMessage": "Loading the harness brief"}]})
     if removed or added:
         rewrite(codex, json.dumps(config, indent=2) + "\n")
@@ -539,7 +623,10 @@ else
 fi
 
 # The generated opencode agents are built from the installed agent files, so this
-# runs after the copy loop — with the project's own agent files in place.
+# runs after the copy loop — with the project's own agent files in place. A
+# reference install has no agent files of its own: the reviewers arrive
+# through `scripts/h link` from the shared checkout, already generated there.
+if [ -z "$reference" ]; then
 if agents_out="$(cd "$target" && ./scripts/opencode-agents.py 2>&1)"; then
   echo "$agents_out"
 else
@@ -548,14 +635,19 @@ else
   echo "    scripts/opencode-agents.py. opencode has no reviewers until you do." >&2
   leftover_agents=1
 fi
+fi
 
 # The per-role roster pins every opencode role to the one model and variant
-# this install runs on. Quiet on success; never failing the install.
+# this install runs on. Quiet on success; never failing the install. A
+# reference install keeps no local roster: the stub opencode.json already pins
+# the session model, and an absent roster passes the pin check.
+if [ -z "$reference" ]; then
 if models_out="$(cd "$target" && python3 scripts/models.py ensure 2>&1)"; then
   :
 else
   [ -n "$models_out" ] && printf '%s\n' "$models_out" >&2
   echo "  ! couldn't write harness/models.json — run 'scripts/models.py ensure' yourself."
+fi
 fi
 
 # A .opencode/opencode.json shadows the root one — opencode reads only the
@@ -569,7 +661,11 @@ else
   echo "    Copy the instructions list from opencode.json by hand." >&2
 fi
 
+# A reference install keeps no local doc hashes: the shared docs are checked
+# from the harness checkout, not from the project.
+if [ -z "$reference" ]; then
 (cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true
+fi
 
 # Leftover problems and post-install setup survive only as beads: install
 # stdout scrolls away, `bd ready` doesn't. Each files only when its condition
@@ -694,8 +790,27 @@ if [ "$had_codex_beads" -eq 0 ] && [ -d "$target/.agents/skills/beads" ] &&
   rm -rf "$target/.agents/skills/beads"
 fi
 
-# Shared sources are installed before Codex discovery links are generated.
-if ! (cd "$target" && python3 scripts/codex-support.py write); then
+# Linked at install time, not on first run: Claude Code only discovers skills
+# present at launch. And linked only now, after bd init and the cleanup above:
+# bd init writes .agents/skills/beads/SKILL.md, and with the links already in
+# place that write lands through them in the SHARED checkout's beads skill.
+if [ -n "$reference" ]; then
+  echo "  linking the shared skills"
+  "$target/scripts/h" link || {
+    echo "✗ scripts/h link failed in $target — run it yourself and read the error." >&2
+    exit 1
+  }
+fi
+
+# Shared sources are installed (or linked) before Codex discovery links are
+# generated. A reference install runs the shared generator through the finder:
+# its .codex/agents and .agents/skills are per-project output either way.
+if [ -n "$reference" ]; then
+  codex_write=(scripts/h codex-support write)
+else
+  codex_write=(python3 scripts/codex-support.py write)
+fi
+if ! (cd "$target" && "${codex_write[@]}"); then
   echo "  ! Codex setup needs reconciliation; shared sources were preserved." >&2
   exit 1
 fi

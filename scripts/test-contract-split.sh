@@ -131,8 +131,12 @@ cp -R "$here/template/." "$plain_d/" || { echo "FAIL setup: cannot copy template
 # Installed copies always carry CLAUDE.md (harness add writes the stock text);
 # the template ships none because the starter's own lives at the root.
 printf '# probe project\n' > "$plain_d/CLAUDE.md" || { echo "FAIL setup: cannot plant CLAUDE.md"; exit 1; }
-git -C "$here" show HEAD:template/scripts/context.py > "$plain_d/scripts/context-old.py" || {
-  echo "FAIL setup: cannot read today's context.py"; exit 1; }
+# The baseline is the last context.py before the project/shared split
+# (har-b5n8.3), pinned by commit: HEAD stopped being "before" the moment the
+# split was committed. A shallow clone lacks it, so say that rather than guess.
+PRE_SPLIT=34e0a13
+git -C "$here" show "$PRE_SPLIT:template/scripts/context.py" > "$plain_d/scripts/context-old.py" 2>/dev/null || {
+  echo "FAIL setup: cannot read context.py at $PRE_SPLIT — this probe needs full history (git fetch --unshallow)"; exit 1; }
 old_bless="$(HOME="$home_d" python3 "$plain_d/scripts/context-old.py" bless 2>&1)" || {
   echo "FAIL setup: today's bless failed"; exit 1; }
 old_out="$(HOME="$home_d" python3 "$plain_d/scripts/context-old.py" check 2>&1)"

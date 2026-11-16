@@ -19,12 +19,13 @@ probe_step "codex install context" python3 scripts/test-codex-install.py
 probe_step "project contract and export policy" python3 scripts/test-contract-overrides.py
 probe_step "finder resolution" bash scripts/test-finder.sh
 probe_step "contract split" bash scripts/test-contract-split.sh
+probe_step "reference install" bash scripts/test-reference-add.sh
 
 step "shell parses" bash -c '
   set -e
   for f in bin/harness commands/*.sh commands/lib/*.sh scripts/*.sh scripts/hooks/* \
            scripts/lib/*.sh scripts/h template/scripts/*.sh template/scripts/hooks/* \
-           template/scripts/lib/*.sh template/scripts/h; do
+           template/scripts/lib/*.sh template/scripts/h template/stubs/scripts/hooks/*; do
     [ -f "$f" ] || continue
     bash -n "$f" || { echo "error: $f"; exit 1; }
   done'
@@ -37,6 +38,8 @@ step "python parses" bash -c '
       || { echo "error: $f"; exit 1; }
   done'
 
+step "shared opencode agents" python3 scripts/test-shared-agents.py
+step "context budget" python3 scripts/test-context-budget.py
 step "dashboard board regression" python3 scripts/test-dashboard-board.py
 step "dashboard switch regression" python3 scripts/test-dashboard-switch.py
 step "dashboard polling regression" node scripts/test-dashboard-polling.mjs

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Reference-install commit hook: the real check lives in the shared harness,
+# reached through this project's scripts/h finder.
+set -uo pipefail
+
+exec "$(git rev-parse --show-toplevel)/scripts/h" hook commit-msg "$@"

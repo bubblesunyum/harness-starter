@@ -60,25 +60,23 @@ def orphan_links(root, links):
             if p not in links and p.is_symlink() and p.resolve().parent == shared]
 
 
-def check(root=ROOT):
-    files, links = artifacts(root)
-    problems = [f"{p.relative_to(root)} differs from the shared harness"
-                for p, text in files.items() if not p.is_file() or p.read_text() != text]
-    problems += [f"{p.relative_to(root)} must link to {target.relative_to(root)}"
-                 for p, target in links.items()
-                 if not p.is_symlink() or p.resolve() != target.resolve()]
-    problems += [f"{p.relative_to(root)} has no source" for p in orphans(root, files)]
-    problems += [f"{p.relative_to(root)} has no shared skill" for p in orphan_links(root, links)]
-    for problem in problems:
-        print(f"  CODEX {problem}")
-    if problems:
-        print("        run python3 scripts/codex-support.py write")
-        return 1
-    print(f"  ok    {len(files)} Codex agents and {len(links)} skill links")
-    return 0
+def _is_reference(root):
+    # A reference install has no scripts/codex-support.py of its own: this
+    # check only runs there through `scripts/h`, with HARNESS_PROJECT naming
+    # the project and this file living in the shared checkout outside it.
+    # The starter, copied installs, and these unit tests run the file inside
+    # the tree being checked, so their check stays a read-only drift check.
+    project = os.environ.get("HARNESS_PROJECT")
+    if not project:
+        return False
+    try:
+        Path(__file__).resolve().relative_to(Path(root).resolve())
+        return False
+    except ValueError:
+        return True
 
 
-def write(root=ROOT):
+def _regenerate(root):
     files, links = artifacts(root)
     # A copied skill may contain local work. Replacing it is a migration for a
     # person to review, never an incidental effect of refreshing an agent.
@@ -95,6 +93,38 @@ def write(root=ROOT):
         p.symlink_to(os.path.relpath(target, p.parent), target_is_directory=True)
     for p in orphans(root, files) + orphan_links(root, links):
         p.unlink()
+
+
+def check(root=ROOT):
+    # A reference install's .codex/agents are derived, gitignored output, not
+    # committed state — regenerating them here hides nothing, and keeps a
+    # shared prompt edit from failing every project's gate on stale copies.
+    # Copied installs and the starter commit their agents, so their check
+    # stays a read-only drift check.
+    if _is_reference(root):
+        _regenerate(root)
+    files, links = artifacts(root)
+    problems = [f"{p.relative_to(root)} differs from the shared harness"
+                for p, text in files.items() if not p.is_file() or p.read_text() != text]
+    problems += [f"{p.relative_to(root)} must link to {target.relative_to(root)}"
+                 for p, target in links.items()
+                 if not p.is_symlink() or p.resolve() != target.resolve()]
+    problems += [f"{p.relative_to(root)} has no source" for p in orphans(root, files)]
+    problems += [f"{p.relative_to(root)} has no shared skill" for p in orphan_links(root, links)]
+    for problem in problems:
+        print(f"  CODEX {problem}")
+    if problems:
+        if _is_reference(root):
+            print("        run scripts/h codex-support write")
+        else:
+            print("        run python3 scripts/codex-support.py write")
+        return 1
+    print(f"  ok    {len(files)} Codex agents and {len(links)} skill links")
+    return 0
+
+
+def write(root=ROOT):
+    _regenerate(root)
     return check(root)
 
 

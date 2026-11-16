@@ -103,7 +103,18 @@ SETTINGS = [Path.home() / ".claude/settings.json",
 # `bd prime` hook (~1900 tokens) beside the brief that exists to replace it,
 # every time it runs. Matched by name rather than executed; a checker that ran
 # whatever it found configured would be a worse idea than the drift it catches.
-OWN_HOOKS = ("scripts/brief.sh", "scripts/dashboard.py")
+OWN_HOOKS = ("scripts/brief.sh", "scripts/dashboard.py",
+             "scripts/h session", "scripts/h dashboard")
+
+
+def _is_own_hook(command):
+    """Whether a SessionStart command is one the harness installed. Matched by
+    path with boundaries, not substring: a custom `scripts/h session-extra`
+    or `my-scripts/h session` is foreign cost the budget must not hide."""
+    for own in OWN_HOOKS:
+        if re.search(r"(?<![\w-])" + re.escape(own) + r"(?![\w/-])", command):
+            return True
+    return False
 
 
 def foreign_hooks():
@@ -123,7 +134,7 @@ def foreign_hooks():
         for entry in settings.get("hooks", {}).get("SessionStart", []):
             for hook in entry.get("hooks", []):
                 command = hook.get("command", "").strip()
-                if not any(own in command for own in OWN_HOOKS):
+                if not _is_own_hook(command):
                     found.append((path, command or "(entry with no command)"))
     return found
 
@@ -136,7 +147,12 @@ def stray_beads_blocks():
     for doc in (ROOT / "CLAUDE.md", ROOT / "AGENTS.md"):
         if not doc.exists():
             continue
-        blocks = doc.read_text().count("<!-- BEGIN BEADS")
+        try:
+            blocks = doc.read_text().count("<!-- BEGIN BEADS")
+        except OSError as exc:
+            # Unreadable like missing, but loud: silence would read as clean.
+            print(f"  ! {doc} unreadable ({exc}) — skipped", file=sys.stderr)
+            continue
         allowed = 1 if doc.name == "AGENTS.md" else 0
         if blocks > allowed:
             strays.append((doc, blocks))
@@ -156,7 +172,11 @@ def tokens(text):
 
 
 def sha(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else ""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else ""
+    except OSError:
+        # Unreadable like missing for the staleness compare; the budget warns.
+        return ""
 
 
 def tracked_by(doc, base):
@@ -235,23 +255,132 @@ def floor():
     return (opens[len(opens) // 2], len(opens)) if opens else (0, 0)
 
 
+def is_reference():
+    """Whether this project runs by reference: the harness lives outside the
+    checkout and the project carries no copy of its own.
+
+    scripts/h ships in every install now, so its presence no longer tells the
+    two apart. The copy's own brief.sh does: a reference install keeps no
+    shared scripts."""
+    try:
+        outside = not HARNESS.resolve().is_relative_to(ROOT.resolve())
+    except OSError:
+        outside = not HARNESS.is_relative_to(ROOT)
+    return outside and not (ROOT / "scripts/brief.sh").exists()
+
+
+def skill_description_tokens(skills_dir):
+    """Tokens in every skill description under skills_dir, reading through links.
+
+    One helper for both budget branches, so the copy and reference counts
+    can't drift apart: reference installs link each shared skill here."""
+    total = 0
+    if not skills_dir.is_dir():
+        return 0
+    try:
+        entries = sorted(skills_dir.iterdir())
+    except OSError as exc:
+        print(f"  ! {skills_dir} unreadable ({exc}) — skill descriptions counted as 0",
+              file=sys.stderr)
+        return 0
+    for entry in entries:
+        candidate = entry / "SKILL.md"
+        try:
+            text = candidate.read_text() if candidate.is_file() else ""
+        except OSError as exc:
+            # Unreadable counts as 0, loudly: silence would undercount the load.
+            print(f"  ! {candidate} unreadable ({exc}) — counted as 0",
+                  file=sys.stderr)
+            continue
+        if not text:
+            continue
+        found = re.search(r"^description:\s*(.*)$", text, re.M)
+        total += tokens(found.group(1)) if found else 0
+    return total
+
+
+def run_brief():
+    """The brief's stdout, via the project-first sibling resolution.
+
+    Never the finder: context.py is a read-only check, and `scripts/h session`
+    links, rewrites .gitignore and may clone. A failed brief is reported on
+    stderr rather than silently scored as 0 tokens."""
+    try:
+        proc = subprocess.run(["bash", str(harness_script("brief.sh"))],
+                              capture_output=True, text=True)
+    except OSError as exc:
+        print(f"  ! brief failed ({exc}) — run scripts/brief.sh and read the error",
+              file=sys.stderr)
+        return ""
+    if proc.returncode != 0:
+        print(f"  ! brief failed (exit {proc.returncode}) — "
+              f"run scripts/brief.sh and read the error", file=sys.stderr)
+    return proc.stdout
+
+
+def reference_budget():
+    """What a by-reference session actually loads: the shared contract the hook
+    injects, the brief's output, the stub files here, and the skill
+    descriptions through their links."""
+    parts = []
+    contract = HARNESS / "AGENTS.md"
+    if contract.exists():
+        try:
+            parts.append(("AGENTS.md (contract)", tokens(contract.read_text())))
+        except OSError as exc:
+            print(f"  ! {contract} unreadable ({exc}) — counted as 0",
+                  file=sys.stderr)
+    for doc in (ROOT / "CLAUDE.md", ROOT / "AGENTS.md"):
+        if not doc.exists():
+            continue
+        try:
+            text = doc.read_text()
+        except OSError as exc:
+            print(f"  ! {doc} unreadable ({exc}) — counted as 0",
+                  file=sys.stderr)
+            continue
+        name = doc.name + (" stub" if doc.name == "AGENTS.md" else "")
+        parts.append((name, tokens(text)))
+    parts.append(("session brief", tokens(run_brief())))
+    if MEMORY_INDEX.exists():
+        try:
+            parts.append(("MEMORY.md", tokens(MEMORY_INDEX.read_text())))
+        except OSError as exc:
+            print(f"  ! {MEMORY_INDEX} unreadable ({exc}) — counted as 0",
+                  file=sys.stderr)
+    parts.append(("skill descriptions (via links)",
+                  skill_description_tokens(ROOT / ".claude/skills")))
+    return parts, sum(n for _, n in parts)
+
+
 def budget():
-    brief = subprocess.run(["bash", str(harness_script("brief.sh"))],
-                           capture_output=True, text=True).stdout
+    if is_reference():
+        return reference_budget()
+    brief = run_brief()
     # Both instruction files, because both are always-loaded — CLAUDE.md by
     # Claude Code and AGENTS.md by opencode, and CLAUDE.md imports AGENTS.md so
     # Claude Code pays for both too. Counting only CLAUDE.md would let a session
     # move text into AGENTS.md and watch the number fall while nothing changed.
-    parts = [(doc.name, tokens(doc.read_text()))
-             for doc in (ROOT / "CLAUDE.md", ROOT / "AGENTS.md") if doc.exists()]
+    # Unreadable like missing, but loud: silence would undercount the load.
+    parts = []
+    for doc in (ROOT / "CLAUDE.md", ROOT / "AGENTS.md"):
+        if not doc.exists():
+            continue
+        try:
+            parts.append((doc.name, tokens(doc.read_text())))
+        except OSError as exc:
+            print(f"  ! {doc} unreadable ({exc}) — counted as 0",
+                  file=sys.stderr)
+            continue
     parts.append(("session brief", tokens(brief)))
     if MEMORY_INDEX.exists():
-        parts.append(("MEMORY.md", tokens(MEMORY_INDEX.read_text())))
-    descriptions = 0
-    for skill in sorted((ROOT / ".claude/skills").glob("*/SKILL.md")):
-        found = re.search(r"^description:\s*(.*)$", skill.read_text(), re.M)
-        descriptions += tokens(found.group(1)) if found else 0
-    parts.append(("skill descriptions", descriptions))
+        try:
+            parts.append(("MEMORY.md", tokens(MEMORY_INDEX.read_text())))
+        except OSError as exc:
+            print(f"  ! {MEMORY_INDEX} unreadable ({exc}) — counted as 0",
+                  file=sys.stderr)
+    parts.append(("skill descriptions",
+                  skill_description_tokens(ROOT / ".claude/skills")))
     return parts, sum(n for _, n in parts)
 
 

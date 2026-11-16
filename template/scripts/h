@@ -8,6 +8,8 @@
 #   scripts/h root                       print the resolved root, nothing else
 #   scripts/h doctor                     project, root, source, shadows
 #   scripts/h link                       symlink shared skills/agents here
+#   scripts/h session [--hook]           link, then the contract plus the brief
+#   scripts/h hook <name> [args]         run the shared hook for this project
 #   scripts/h brief|verify|review|...    run the shared script for this project
 #
 # Resolution itself is silent on both streams, so `h root` and dispatch keep
@@ -29,6 +31,13 @@ PROJECT="$(dirname "$FINDER_DIR")"
 
 ROOT=""
 SOURCE=""
+
+# Whether cmd_link created fresh skill links this run, which is what
+# `session` reports — Claude Code only discovers skills present at launch.
+# link_context says what kind is being linked ("skill" for skill dirs,
+# "agent" for agent file dirs); only a fresh skill link sets the flag.
+skill_linked_new=0
+link_context=""
 
 fail() {
   printf '✗ harness: %s — %s\n' "$1" "$2" >&2
@@ -115,6 +124,8 @@ usage: h [-h|--help] <command> [args]
   root        print the resolved harness root
   doctor      show project, root, source, revision, and shadows
   link        symlink shared skills/agents into this project
+  session     link, then the contract plus the brief [--hook for SessionStart JSON]
+  hook        run the shared hook for this project
   brief       session brief
   verify      run the gate
   review      build a review packet
@@ -124,6 +135,7 @@ usage: h [-h|--help] <command> [args]
   context     project context
   dashboard   dashboard server
   models      model configuration
+  codex-support  generate or check Codex agents and skill links
 EOF
 }
 
@@ -170,6 +182,7 @@ link_entry() {
       rm -f "$target"
       ln -s "$entry" "$target"
       printf 'harness: re-linked %s -> %s\n' "$rel" "$entry" >&2
+      if [ "$link_context" = "skill" ]; then skill_linked_new=1; fi
     fi
   elif [ -e "$target" ]; then
     # The project's own file or dir beside the shared ones: leave it alone.
@@ -177,6 +190,7 @@ link_entry() {
   else
     ln -s "$entry" "$target"
     printf 'harness: linked %s -> %s\n' "$rel" "$entry" >&2
+    if [ "$link_context" = "skill" ]; then skill_linked_new=1; fi
   fi
   ensure_gitignore "$PROJECT/.gitignore" "$rel"
 }
@@ -205,10 +219,12 @@ prune_dead_links() {
 }
 
 cmd_link() {
-  for p in .claude/skills .claude/agents .agents/skills; do
+  skill_linked_new=0
+  for p in .claude/skills .claude/agents .agents/skills .opencode/agent; do
     src="$ROOT/$p"
     dst="$PROJECT/$p"
-    # No shared entries here, nothing to link.
+    # No shared entries here, nothing to link — .opencode/agent only exists
+    # once the generated agents land, so older checkouts skip it quietly.
     if [ ! -e "$src" ] && [ ! -L "$src" ]; then
       continue
     fi
@@ -223,21 +239,233 @@ cmd_link() {
     mkdir -p "$dst" || fail "cannot make $dst" "check permissions in $PROJECT"
     # Agents link by file; skill dirs link by entry, so a project keeps its
     # own skills beside the shared ones.
-    if [ "$p" = ".claude/agents" ]; then
+    if [ "$p" = ".claude/agents" ] || [ "$p" = ".opencode/agent" ]; then
+      link_context="agent"
       for e in "$src"/*.md; do
         if [ -e "$e" ] || [ -L "$e" ]; then
           link_entry "$e" "$dst" "$p/$(basename "$e")"
         fi
       done
     else
+      link_context="skill"
       for e in "$src"/*; do
         if [ -e "$e" ] || [ -L "$e" ]; then
           link_entry "$e" "$dst" "$p/$(basename "$e")"
         fi
       done
     fi
+    link_context=""
     prune_dead_links "$dst" "$p"
   done
+  link_contract
+  link_codex
+}
+
+# The opencode-readable copy of the shared contract: a single link, not a
+# per-entry dir, so it needs its own few lines rather than link_entry.
+link_contract() {
+  src="$ROOT/AGENTS.md"
+  dst="$PROJECT/.harness-contract.md"
+  rel=".harness-contract.md"
+  if [ ! -e "$src" ] && [ ! -L "$src" ]; then
+    return 0
+  fi
+  # A real file here is stale generated output, not a project override the
+  # way a real skill file is — replace it so the contract stays the contract.
+  if [ -L "$dst" ]; then
+    if [ "$(readlink "$dst")" = "$src" ]; then
+      :
+    else
+      rm -f "$dst"
+      ln -s "$src" "$dst"
+      printf 'harness: re-linked %s -> %s\n' "$rel" "$src" >&2
+    fi
+  else
+    rm -f "$dst"
+    ln -s "$src" "$dst"
+    printf 'harness: linked %s -> %s\n' "$rel" "$src" >&2
+  fi
+  ensure_gitignore "$PROJECT/.gitignore" "$rel"
+}
+
+# Derived Codex agents for a reference install: the shared prompts are the
+# source of truth, so a reference project owns no .codex/agents of its own —
+# they are gitignored output, regenerated here (a fresh clone's first session)
+# rather than failing the gate on stale copies. Copied installs own their
+# agents alongside their own generator, so only a project without one — the
+# reference shape — gets this. Quiet on success, loud on failure, never fatal:
+# a link must not break the session that called it over generated output.
+link_codex() {
+  if [ -e "$PROJECT/scripts/codex-support.py" ]; then
+    return 0
+  fi
+  if [ ! -f "$ROOT/scripts/codex-support.py" ]; then
+    return 0
+  fi
+  if codex_out="$(HARNESS_PROJECT="$PROJECT" HARNESS_ROOT="$ROOT" HARNESS_SOURCE="$SOURCE" \
+      python3 "$ROOT/scripts/codex-support.py" write 2>&1)"; then
+    : # quiet on success: the regenerated agents are routine output
+  else
+    printf 'harness: codex-support write failed in %s — run scripts/h codex-support write and read the error\n' "$PROJECT" >&2
+    [ -n "$codex_out" ] && printf '%s\n' "$codex_out" >&2
+  fi
+}
+
+# One SessionStart JSON object on stdout, the same shape brief.sh emits. Used
+# only when the harness cannot be resolved and there is no brief to wrap —
+# the success path delegates to brief.sh so the wrapper stays in one place.
+emit_hook_json() {
+  text="$1"
+  if command -v python3 >/dev/null 2>&1 && python3 -c '
+import json, sys
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": sys.stdin.read().strip(),
+}}))' <<< "$text"; then
+    :
+  else
+    esc="$(printf '%s' "$text" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g')"
+    printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "%s"}}\n' "$esc"
+  fi
+}
+
+cmd_session() {
+  hook_mode=0
+  if [ "${1:-}" = "--hook" ]; then
+    hook_mode=1
+    shift
+  fi
+  if [ $# -gt 0 ]; then
+    fail "no such session option '$1'" "use: h session [--hook]" 2
+  fi
+  # Soft resolve: resolve() exits the subshell on failure, the parent stays
+  # alive to report it softly — a SessionStart hook must never fail the
+  # session it opens. ROOT/SOURCE travel back through files.
+  tmp_err="$(mktemp)" || fail "cannot make a temp file" "check /tmp"
+  tmp_root="$(mktemp)" || fail "cannot make a temp file" "check /tmp"
+  tmp_src="$(mktemp)" || fail "cannot make a temp file" "check /tmp"
+  if ( resolve 2>"$tmp_err"; printf '%s' "$ROOT" >"$tmp_root"; printf '%s' "$SOURCE" >"$tmp_src" ); then
+    resolve_ok=1
+  else
+    resolve_ok=0
+  fi
+  if [ "$resolve_ok" -eq 0 ]; then
+    loud="$(cat "$tmp_err")"
+    if [ -z "$loud" ]; then
+      loud="✗ harness: cannot resolve the harness root — set HARNESS_HOME or ~/.harness, or check the network for a fetch"
+    fi
+    rm -f "$tmp_err" "$tmp_root" "$tmp_src"
+    # Exit 0 either way: without a harness there is no contract and no
+    # brief, just the one loud line — and the same line on stderr, where a
+    # runner that only watches stderr still sees it.
+    if [ "$hook_mode" -eq 1 ]; then
+      emit_hook_json "$loud"
+      printf '%s\n' "$loud" >&2
+    else
+      printf '%s\n' "$loud"
+      printf '%s\n' "$loud" >&2
+    fi
+    exit 0
+  fi
+  ROOT="$(cat "$tmp_root")"
+  SOURCE="$(cat "$tmp_src")"
+  rm -f "$tmp_err" "$tmp_root" "$tmp_src"
+  cmd_link
+  # The contract every session reads before the brief. A missing AGENTS.md is
+  # itself a loud line in the context: a harness without a contract is broken,
+  # and silence would read as a healthy session with nothing to do.
+  contract_tmp=""
+  if [ -r "$ROOT/AGENTS.md" ]; then
+    contract_tmp="$(mktemp)" || fail "cannot make a temp file" "check /tmp"
+    # A readable path that still won't cat (a directory, a TOCTOU vanish)
+    # reads as damaged too, loudly — never an empty silent prepend.
+    if ! cat "$ROOT/AGENTS.md" >"$contract_tmp" 2>/dev/null; then
+      printf '✗ harness: %s AGENTS.md unreadable — the checkout is damaged; re-fetch it or point HARNESS_HOME at a harness-starter clone\n' "$ROOT" >"$contract_tmp"
+    fi
+  else
+    contract_tmp="$(mktemp)" || fail "cannot make a temp file" "check /tmp"
+    if [ -e "$ROOT/AGENTS.md" ] || [ -L "$ROOT/AGENTS.md" ]; then
+      printf '✗ harness: %s AGENTS.md unreadable — the checkout is damaged; re-fetch it or point HARNESS_HOME at a harness-starter clone\n' "$ROOT" >"$contract_tmp"
+    else
+      printf '✗ harness: %s has no AGENTS.md — the checkout is damaged; re-fetch it or point HARNESS_HOME at a harness-starter clone\n' "$ROOT" >"$contract_tmp"
+    fi
+  fi
+  # Fresh clone's first session: Claude Code only discovers skills present at
+  # launch, so name each shared SKILL.md to read directly this time — it
+  # loads natively from the next.
+  append_tmp=""
+  if [ "$skill_linked_new" -eq 1 ]; then
+    append_tmp="$(mktemp)" || fail "cannot make a temp file" "check /tmp"
+    {
+      printf 'note: this run linked shared skills — Claude Code only discovers skills present at launch, so read SKILL.md directly this session; it loads natively from the next:\n'
+      for d in "$ROOT/.claude/skills" "$ROOT/.agents/skills"; do
+        if [ -d "$d" ]; then
+          for f in "$d"/*/SKILL.md; do
+            if [ -e "$f" ] || [ -L "$f" ]; then
+              printf '  %s\n' "$f"
+            fi
+          done
+        fi
+      done
+    } >"$append_tmp"
+  fi
+  # A project copy shadows the shared one, the same way dispatch resolves.
+  if [ -f "$PROJECT/scripts/brief.sh" ]; then
+    brief_file="$PROJECT/scripts/brief.sh"
+  elif [ -f "$ROOT/scripts/brief.sh" ]; then
+    brief_file="$ROOT/scripts/brief.sh"
+  else
+    rm -f "$contract_tmp" "$append_tmp"
+    fail "brief is missing (no scripts/brief.sh under the project or $ROOT)" "re-resolve with a valid harness root"
+  fi
+  cd "$PROJECT" || fail "cannot cd to $PROJECT" "check the project directory"
+  HARNESS_PROJECT="$PROJECT" HARNESS_ROOT="$ROOT" HARNESS_SOURCE="$SOURCE"
+  export HARNESS_PROJECT HARNESS_ROOT HARNESS_SOURCE
+  # One argv for every shape below: --prepend/--append only for files that
+  # exist, so an empty flag never reaches brief.sh — it exits 2 on those,
+  # which would leave a SessionStart hook with no JSON.
+  brief_argv=()
+  if [ "$hook_mode" -eq 1 ]; then
+    brief_argv=(--hook)
+  fi
+  if [ -n "$contract_tmp" ] && [ -f "$contract_tmp" ]; then
+    brief_argv=("${brief_argv[@]}" --prepend "$contract_tmp")
+  fi
+  if [ -n "$append_tmp" ] && [ -f "$append_tmp" ]; then
+    brief_argv=("${brief_argv[@]}" --append "$append_tmp")
+  fi
+  # No exec: the temp files are cleaned up below whatever the brief exits.
+  bash "$brief_file" "${brief_argv[@]}"
+  rc=$?
+  rm -f "$contract_tmp" "$append_tmp"
+  exit "$rc"
+}
+
+cmd_hook() {
+  if [ $# -lt 1 ]; then
+    fail "usage: h hook <name> [args]" "use: h hook commit-msg <msg-file>" 2
+  fi
+  name="$1"
+  shift
+  case "$name" in
+    */..*|../*|*/../*|*/|*//*|\.\.)
+      fail "bad hook name '$name'" "use a file directly under scripts/hooks/" 2
+      ;;
+  esac
+  # Fail closed: an unresolvable harness exits 1 so commit-msg never passes
+  # on a missing check.
+  resolve
+  hook_file="$ROOT/scripts/hooks/$name"
+  if [ ! -f "$hook_file" ] && [ ! -L "$hook_file" ]; then
+    fail "no such hook '$name'" "use one of: $(ls "$ROOT/scripts/hooks" 2>/dev/null | tr '\n' ' ')"
+  fi
+  if [ ! -x "$hook_file" ]; then
+    fail "hook '$name' is not executable" "chmod +x $hook_file"
+  fi
+  cd "$PROJECT" || fail "cannot cd to $PROJECT" "check the project directory"
+  HARNESS_PROJECT="$PROJECT" HARNESS_ROOT="$ROOT" HARNESS_SOURCE="$SOURCE"
+  export HARNESS_PROJECT HARNESS_ROOT HARNESS_SOURCE
+  exec "$hook_file" "$@"
 }
 
 cmd_dispatch() {
@@ -253,7 +481,8 @@ cmd_dispatch() {
     context) file="context.py" ;;
     dashboard) file="dashboard.py" ;;
     models) file="models.py" ;;
-    *) fail "no such command '$name'" "use one of: root doctor link brief verify review wrap-up ledger-push agent context dashboard models" 2 ;;
+    codex-support) file="codex-support.py" ;;
+    *) fail "no such command '$name'" "use one of: root doctor link session hook brief verify review wrap-up ledger-push agent context dashboard models codex-support" 2 ;;
   esac
   # A project copy shadows the shared one; that is how overlays win.
   if [ -f "$PROJECT/scripts/$file" ]; then
@@ -292,6 +521,14 @@ main() {
     link)
       resolve
       cmd_link
+      ;;
+    session)
+      shift
+      cmd_session "$@"
+      ;;
+    hook)
+      shift
+      cmd_hook "$@"
       ;;
     *)
       resolve

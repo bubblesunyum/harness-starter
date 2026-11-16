@@ -500,13 +500,21 @@ harness_unknown_stacks() {
 }
 
 # harness_template_files narrowed to one project: every file, except stack
-# guidance for a stack the project doesn't list. What add installs, update
-# compares and diverge will acknowledge.
+# guidance for a stack the project doesn't list, and except the reference
+# stubs. The stubs are installer sources — `add --reference` reads them out
+# of template/stubs/ — not installed files; shipping them as stubs/* would
+# drop a second, dead copy of the contract into every plain project. Nor
+# .opencode/agent/: the starter generates it from the GENERIC prompts for
+# reference installs to link, and copying it would overwrite a copied
+# install's own agents, generated from its customised reviewer prompts.
 harness_files_for() {
   local here="$1" target="$2" files want rel stack
   files="$(harness_template_files "$here")" || return 1
   want="$(harness_stacks_want "$target")" || return 1
   while IFS= read -r rel; do
+    case "$rel" in
+      stubs/*|.opencode/*) continue ;;
+    esac
     if stack="$(harness_stack_of "$rel")"; then
       printf '%s\n' "$want" | grep -qxF "$stack" || continue
     fi
@@ -521,6 +529,73 @@ harness_files_for() {
 # `update` a plain comparison and `--apply` a plain copy.
 harness_render() {
   cat "$1"
+}
+
+# The shared checkout an `add --reference` install points at, on stdout.
+# HARNESS_HOME first, then ~/.harness, each needing template/.harness-root —
+# the same two sources scripts/h resolves from, minus its fetch fallback: a
+# reference install never clones the network on its own, so an unresolvable
+# harness fails here, before anything is written, naming the fix.
+harness_reference_root() {
+  if [ -n "${HARNESS_HOME:-}" ]; then
+    if [ -f "$HARNESS_HOME/template/.harness-root" ]; then
+      (cd "$HARNESS_HOME/template" && pwd -P)
+      return 0
+    fi
+    echo "✗ HARNESS_HOME=$HARNESS_HOME is not a harness checkout (no template/.harness-root)." >&2
+    echo "  Point it at a harness-starter clone, or unset it." >&2
+    return 1
+  fi
+  if [ -n "${HOME:-}" ] && { [ -e "$HOME/.harness" ] || [ -L "$HOME/.harness" ]; }; then
+    if [ -f "$HOME/.harness/template/.harness-root" ]; then
+      (cd "$HOME/.harness/template" && pwd -P)
+      return 0
+    fi
+    echo "✗ ~/.harness is not a harness checkout (no template/.harness-root)." >&2
+    echo "  Replace it with a harness-starter clone, or set HARNESS_HOME." >&2
+    return 1
+  fi
+  echo "✗ add --reference needs the shared harness and cannot find it." >&2
+  echo "  Set HARNESS_HOME to a harness-starter clone, or link one at ~/.harness." >&2
+  return 1
+}
+
+# Everything an `add --reference` install writes, as project-relative paths,
+# one per line: the stubs, the seeds and harness data files as today, and the
+# scripts/h finder. No shared scripts, no skills, no agents, no HARNESS.md,
+# no stacks guidance — those stay in the shared checkout and arrive through
+# `scripts/h link` and dispatch instead.
+harness_reference_files() {
+  cat <<'EOF'
+AGENTS.md
+.claude/settings.json
+opencode.json
+.codex/hooks.json
+scripts/hooks/commit-msg
+scripts/h
+harness/seat.md
+AGENTS.local.md
+scripts/verify.steps.sh
+scripts/review.scope.sh
+dashboard.toml
+harness/diverged.txt
+harness/laurels.jsonl
+harness/handoffs/.gitkeep
+EOF
+}
+
+# Where a reference-install path reads from under template/, on stdout.
+# Derived from the filesystem, not a second list: a list goes stale toward a
+# missing stub the caller then writes as a 0-byte file. Stubs are what
+# `add --reference` writes in place of the contract files; everything else
+# reads beside them.
+harness_reference_src() {
+  local base="${TEMPLATE:-}"
+  if [ -n "$base" ] && [ -e "$base/stubs/$1" ]; then
+    printf 'stubs/%s\n' "$1"
+  else
+    printf '%s\n' "$1"
+  fi
 }
 
 # Whether a target file still matches what the template would produce.
