@@ -16,10 +16,10 @@ change you wave through is an unreviewed change with extra steps.
 
 Delegate work that is **decided but not done, and trivially small**: one
 small bead, a single file, no partitioning needed — the bead says what done
-looks like (`--design` and `--acceptance` filled in), the files are known,
-and nothing in it sets taste. A rename across twenty files, a new gate step
-shaped like the last one, a fix whose cause you already found — at single-file
-scale. Anything bead-spanning, anything needing partitioning or parallel
+looks like (`--design` and `--acceptance` filled in), the file is known,
+and nothing in it sets taste. A one-file fix whose cause you already found,
+a copy tweak, a gate step shaped exactly like the last one. Anything
+bead-spanning, anything needing partitioning or parallel
 workers, defaults to `orchestrate` instead, including single-bead work that is
 more than trivial.
 
@@ -40,8 +40,10 @@ bd update <id> --claim
 scripts/h agent implement "<id>: <the brief>"     # run it in the background
 ```
 
-One implementer per working tree, and don't edit that tree while it runs — you
+One implementer with the whole working tree to itself — don't edit that tree while it runs, and don't run two delegates at once: you
 would be two writers on one diff with no way to tell whose line is whose.
+(Parallel work on one tree is `orchestrate` instead, where every worker
+holds only its own partition.)
 
 ## Review what came back
 
