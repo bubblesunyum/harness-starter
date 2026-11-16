@@ -3,11 +3,11 @@
 # export, verify, commit. `bd close` after the export re-dirties it and the
 # gate runs twice; a commit without the export leaves clones stale.
 #
-#   scripts/wrap-up.sh -m "lowercase terse message" --bead fol-xxx
+#   scripts/h wrap-up -m "lowercase terse message" --bead fol-xxx
 #     [--close fol-yyy --reason "..."] [--note fol-yyy "stands at ..."]
 #     [--remember "..."] [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 #
-# Lane default is the full gate (default verify.sh lane); --quick while
+# Lane default is the full gate (default verify lane); --quick while
 # iterating, --full for the browser suite. Everything ledger-shaped happens
 # first (closes, notes, memories), because every one of them invalidates the
 # export. The push goes next: it runs `bd dolt commit` and its own export

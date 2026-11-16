@@ -256,9 +256,13 @@ migrate_historic_sha() {
     # A worktree-only blob (a dirty checkout) has no commit; label it so the
     # caller can say "identical" instead of naming a revision it never
     # shipped in.
-    blob="$(git hash-object "$starter/template/$rel" 2>/dev/null)" || return 1
-    if ! grep -q "^$blob " "$list" 2>/dev/null; then
-      printf '%s worktree\n' "$blob" >> "$list" || return 1
+    # A path the starter has since deleted (the old copy-install configs) has
+    # no working-tree blob; its history alone still identifies old copies.
+    if [ -f "$starter/template/$rel" ]; then
+      blob="$(git hash-object "$starter/template/$rel" 2>/dev/null)" || return 1
+      if ! grep -q "^$blob " "$list" 2>/dev/null; then
+        printf '%s worktree\n' "$blob" >> "$list" || return 1
+      fi
     fi
   fi
   line="$(grep -m1 "^$want " "$list" 2>/dev/null)" || return 1
@@ -268,6 +272,30 @@ migrate_historic_sha() {
     line="$(git -C "$starter" rev-parse --short "$line" 2>/dev/null)" || return 1
   fi
   printf '%s\n' "$line"
+}
+
+# The newest starter commit that still shipped template/<rel>, on stdout: HEAD
+# while the path still exists there, else the parent of the commit that deleted
+# it. Fails when history holds no such commit (a shallow clone). One
+# resolution for two readers: migrate_last_shipped shows the content at this
+# revision, and the migrate probe archives the whole tree at it.
+migrate_last_shipped_rev() {
+  local starter="$1" rel="$2" rev
+  if git -C "$starter" cat-file -e "HEAD:template/$rel" 2>/dev/null; then
+    git -C "$starter" rev-parse HEAD
+    return
+  fi
+  rev="$(git -C "$starter" rev-list -1 HEAD -- "template/$rel")" || return 1
+  [ -n "$rev" ] || return 1
+  git -C "$starter" rev-parse "$rev^"
+}
+
+# The last content the starter shipped at template/<rel>, for a path it has
+# since deleted: the revision above resolves HEAD-vs-deleted, this shows it.
+migrate_last_shipped() {
+  local starter="$1" rel="$2" rev
+  rev="$(migrate_last_shipped_rev "$starter" "$rel")" || return 1
+  git -C "$starter" show "$rev:template/$rel"
 }
 
 # An acknowledged fork the migrate honors, on stdin, as project-relative

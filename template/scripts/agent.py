@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Runs one harness role through opencode, on the one model opencode runs on.
 
-    scripts/agent.py <role> <message...>                   # a fresh session
-    scripts/agent.py <role> --session <id> <message...>    # one more round in it
+    scripts/h agent <role> <message...>                   # a fresh session
+    scripts/h agent <role> --session <id> <message...>    # one more round in it
 
-    scripts/agent.py reviewer-correctness "Review /tmp/x-review.md — adds a cache"
-    scripts/agent.py implement "har-abc: $(bd show har-abc)"
-    scripts/agent.py implement --session ses_123 "verify fails: missing import in foo.py"
+    scripts/h agent reviewer-correctness "Review /tmp/x-review.md — adds a cache"
+    scripts/h agent implement "har-abc: $(bd show har-abc)"
+    scripts/h agent implement --session ses_123 "verify fails: missing import in foo.py"
 
 The reply goes to stdout. The session id, model and round go to stderr, as one
 line — the id is what a revision round needs.
@@ -19,7 +19,7 @@ written without what it asked for.
 This is how a session in any tool — Claude Code included — hands work to a
 model that isn't its own: the packet or the brief is read in a separate
 opencode process, off the caller's context, on OPENCODE_MODEL at
-OPENCODE_VARIANT (scripts/models.py). There is no flag or variable to pick
+OPENCODE_VARIANT (scripts/h models). There is no flag or variable to pick
 another: a roster naming one is refused before opencode is spawned.
 (Reviewers are the exception: under opencode they always run as native
 subagents, never through this script.)
@@ -67,12 +67,12 @@ your diff, and owns everything around the change. So, overriding AGENTS.md \
 for this session:
 
 - Do not commit, stage, or touch the bd ledger. The caller does all three.
-- Do not run scripts/review.sh or spawn reviewers. You are being reviewed.
+- Do not run scripts/h review or spawn reviewers. You are being reviewed.
 - Stay inside the brief. Something else worth doing goes in your report, not \
 in the diff.
-- Run scripts/verify.sh before you finish, and fix what it catches.
+- Run scripts/h verify before you finish, and fix what it catches.
 
-End with a short report: the files you changed, what verify.sh said, and \
+End with a short report: the files you changed, what the verify run said, and \
 anything you were unsure of or left undone. Say so plainly if you could not \
 finish — a half-done change reported as done costs the caller a review round.
 
@@ -142,7 +142,7 @@ def agent_for(role):
         return "build"
     if (OPENCODE_AGENTS / f"{role}.md").is_file():
         return role
-    fail(f"no .opencode/agent/{role}.md — run scripts/opencode-agents.py, "
+    fail(f"no .opencode/agent/{role}.md — run scripts/h opencode-agents, "
          f"or check the role name against .claude/agents/")
 
 
@@ -313,7 +313,7 @@ def require_pin(model, variant):
     on purpose — a future caller that skips it still can't reach opencode."""
     if (model, variant) != (OPENCODE_MODEL, OPENCODE_VARIANT):
         fail(f"refusing to run opencode on {model}#{variant} — opencode runs "
-             f"only on {OPENCODE_MODEL_ARG} (scripts/models.py)")
+             f"only on {OPENCODE_MODEL_ARG} (scripts/h models)")
 
 
 def run_agent(agent, model, variant, session, prompt):

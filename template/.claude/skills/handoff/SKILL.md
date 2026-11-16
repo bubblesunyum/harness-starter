@@ -15,13 +15,13 @@ and finish the piece first.
 
 ## The close
 
-Prefer `scripts/wrap-up.sh` over hand-ordering the steps below — it runs them
+Prefer `scripts/h wrap-up` over hand-ordering the steps below — it runs them
 in the one order that stays clean (ledger writes, push, export, verify,
 commit); every `bd` write after the export re-dirties it and forces a second
 full gate run:
 
 ```bash
-scripts/wrap-up.sh -m "lowercase terse message" --bead <id> \
+scripts/h wrap-up -m "lowercase terse message" --bead <id> \
   [--close <id> --reason "..."] [--note <id> "..."] [--remember "..."] \
   [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 ```
@@ -34,8 +34,8 @@ doesn't fit.
    open with `bd update <id> --status open`, followed by
    `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
    Anything that surprised you written with `bd remember`.
-2. **Prove the tree.** `scripts/verify.sh` passes and the work is committed.
-3. **Push the ledger.** `scripts/ledger-push.sh`. The beads are not in the commit
+2. **Prove the tree.** `scripts/h verify` passes and the work is committed.
+3. **Push the ledger.** `scripts/h ledger-push`. The beads are not in the commit
    you just made — they ride their own git ref, and nothing moves it for you. A
    session that skips this leaves the whole ledger on one disk.
 4. **Write the note.** Below.
@@ -55,7 +55,7 @@ echo "harness/handoffs/$(date +%Y%m%d-%H%M%S).md"    # write to this path
 One file per closing session, never overwritten — two sessions running at once
 would otherwise clobber each other, and the point of a note is that it survives.
 
-`scripts/brief.sh` reads **the newest note's first three lines** at wake-up, so
+`scripts/h brief` reads **the newest note's first three lines** at wake-up, so
 put what matters first and keep it to a few lines. What belongs here is what the
 structured fields can't hold: what you were mid-thought on, the approach you
 rejected and why it still tempts you, the thing that felt wrong but that you

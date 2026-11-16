@@ -25,7 +25,7 @@ from models import OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT, ROLES
 
 PINNED = {"model": OPENCODE_MODEL, "variant": OPENCODE_VARIANT}
 AGENT = (f"---\ndescription: x\nmodel: {OPENCODE_MODEL_ARG}\nmode: subagent\n---\n\n"
-         f"<!-- Generated from .claude/agents/x.md by scripts/opencode-agents.py. -->\n")
+         f"<!-- Generated from .claude/agents/x.md by scripts/h opencode-agents. -->\n")
 
 
 class PinCheckTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class PinCheckTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="opencode pin ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        shutil.copy(ROOT / "opencode.json", self.root / "opencode.json")
+        shutil.copy(ROOT / "stubs" / "opencode.json", self.root / "opencode.json")
         shutil.copytree(SCRIPTS, self.root / "scripts",
                         ignore=shutil.ignore_patterns("__pycache__"))
         (self.root / "harness").mkdir()
@@ -121,7 +121,7 @@ class PinCheckTests(unittest.TestCase):
     def test_a_foreign_agent_in_opencode_json_fails(self):
         for group in ("agent", "agents", "mode"):
             with self.subTest(group=group):
-                shutil.copy(ROOT / "opencode.json", self.root / "opencode.json")
+                shutil.copy(ROOT / "stubs" / "opencode.json", self.root / "opencode.json")
                 self.config(lambda t: t.setdefault(group, {}).update(
                     general={"model": "opencode-go/cheap-bulk"}))
                 self.assert_fails_naming(f"{group}.general")

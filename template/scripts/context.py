@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Guards the knowledge layer: is it still true, and is it still small.
 
-    scripts/context.py            # report both
-    scripts/context.py check      # exit 1 if a doc is stale or the budget is blown
-    scripts/context.py bless      # re-record hashes after updating a doc
-    scripts/context.py digest     # everything the librarian pass needs to read
-    scripts/context.py spend      # what recent sessions actually cost, per session
+    scripts/h context            # report both
+    scripts/h context check      # exit 1 if a doc is stale or the budget is blown
+    scripts/h context bless      # re-record hashes after updating a doc
+    scripts/h context digest     # everything the librarian pass needs to read
+    scripts/h context spend      # what recent sessions actually cost, per session
 
 Two failures this catches, both of which shipped before it existed:
 
@@ -309,12 +309,12 @@ def run_brief():
         proc = subprocess.run(["bash", str(harness_script("brief.sh"))],
                               capture_output=True, text=True)
     except OSError as exc:
-        print(f"  ! brief failed ({exc}) — run scripts/brief.sh and read the error",
+        print(f"  ! brief failed ({exc}) — run scripts/h brief and read the error",
               file=sys.stderr)
         return ""
     if proc.returncode != 0:
         print(f"  ! brief failed (exit {proc.returncode}) — "
-              f"run scripts/brief.sh and read the error", file=sys.stderr)
+              f"run scripts/h brief and read the error", file=sys.stderr)
     return proc.stdout
 
 
@@ -543,7 +543,7 @@ def report(strict):
         print(f"  {line}")
 
     for doc in unblessed:
-        print(f"  new   {doc.relative_to(ROOT)} — run 'scripts/context.py bless'")
+        print(f"  new   {doc.relative_to(ROOT)} — run 'scripts/h context bless'")
 
     # Reported, never enforced. A threshold here only ever measured how long it
     # had been since someone argued with the layer, and the librarian does that

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """The harness dashboard: what the development system is doing, as a live picture.
 
-    scripts/dashboard.py            # start it in the background if nothing is serving
-    scripts/dashboard.py up          # the same thing, spelled the way the hooks call it
-    scripts/dashboard.py serve      # stay in the foreground instead (ctrl-c to stop)
-    scripts/dashboard.py snapshot   # just write dashboard/state.json
-    scripts/dashboard.py shot [png] [state ...]  # photograph it, for the design review pass
-    scripts/dashboard.py --port N   # serve somewhere else
+    scripts/h dashboard            # start it in the background if nothing is serving
+    scripts/h dashboard up          # the same thing, spelled the way the hooks call it
+    scripts/h dashboard serve      # stay in the foreground instead (ctrl-c to stop)
+    scripts/h dashboard snapshot   # just write dashboard/state.json
+    scripts/h dashboard shot [png] [state ...]  # photograph it, for the design review pass
+    scripts/h dashboard --port N   # serve somewhere else
 
 Backgrounding is the default because of who runs this: a hook at the end of a
 turn, or an agent that has other work to get to. A foreground server there is a
@@ -889,7 +889,7 @@ SYSTEM = [
         # issues.jsonl only exists when the ledger's JSONL export is enabled
         # (bd ships it disabled); it is a readable copy for diffs, never the
         # transport — git carries the ledger as the Dolt ref, pushed by
-        # scripts/ledger-push.sh. A row for a file that isn't there is simply
+        # scripts/h ledger-push. A row for a file that isn't there is simply
         # not drawn (see resolve), so this never sends anyone looking for one.
         (".beads/issues.jsonl", "harness", "the issue graph, as a readable export"),
         (".claude/skills/beads/SKILL.md", "harness", "the bd surface, on demand"),
@@ -1527,7 +1527,7 @@ def close_bead(payload):
 # the last good table and says so on stderr. Either way the page never waits.
 DEFAULT_TASKS = {
     "verify": {
-        "command": ["scripts/verify.sh"],
+        "command": ["scripts/h", "verify"],
         "label": "run",
         "busy": "running…",
         "where": "gate",
@@ -3152,7 +3152,7 @@ def main():
     explicit_port = "--port" in args
     port = int(args[args.index("--port") + 1]) if explicit_port else free_port(PORT)
 
-    # Named so `scripts/review.sh` picks it up with the app's own captures.
+    # Named so `scripts/h review` picks it up with the app's own captures.
     # Extra positionals name states (see SHOT_STATES): one png per state,
     # written beside the path. A first positional that names a state keeps
     # the default path, so `shot gate` captures just the gate popover.

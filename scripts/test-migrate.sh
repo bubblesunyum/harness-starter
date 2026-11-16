@@ -24,6 +24,12 @@ export HARNESS_HOME="$REPO"
 export GIT_AUTHOR_NAME=probe GIT_COMMITTER_NAME=probe
 export GIT_AUTHOR_EMAIL=probe@t GIT_COMMITTER_EMAIL=probe@t
 
+# The same rev resolution the migrate uses: the fixture archives the whole
+# template tree at the last commit that shipped the copy-install configs, and
+# migrate_last_shipped reads the same revision content-wise — one helper, so
+# the two cannot disagree about HEAD-vs-deleted.
+. "$REPO/commands/lib/migrate.sh"
+
 FAILS=0
 pass() { printf 'ok %s\n' "$1"; }
 failcase() { FAILS=$((FAILS + 1)); printf 'FAIL %s: %s\n' "$1" "$2"; }
@@ -46,11 +52,21 @@ FIX="$TMP/fix"
 mkdir -p "$FIX" || { echo "FAIL setup: cannot make the fixture project"; exit 1; }
 git init -q "$FIX" || { echo "FAIL setup: git init failed"; exit 1; }
 (cd "$FIX" && bd init --prefix fix >/dev/null 2>&1) || { echo "FAIL setup: bd init failed"; exit 1; }
+# Taken from the last starter commit that still shipped the copy-install
+# configs, because that is what every real copied install was made from —
+# today's template no longer carries them. A shallow clone may lack it: say so.
+# Newest such commit: HEAD while the configs still exist there, else the
+# parent of the commit that deleted them.
+OLD_REV="$(migrate_last_shipped_rev "$REPO" ".claude/settings.json")" || OLD_REV=""
+[ -n "$OLD_REV" ] || { echo "FAIL setup: no starter commit with copy-install configs — this probe needs full history"; exit 1; }
+OLD_TREE="$TMP/old-template"
+mkdir -p "$OLD_TREE" && git -C "$REPO" archive "$OLD_REV" template | tar -x -C "$OLD_TREE" ||
+  { echo "FAIL setup: cannot export template at $OLD_REV"; exit 1; }
 while IFS= read -r rel; do
   case "$rel" in stubs/*|.opencode/*|harness/stacks/*) continue ;; esac
   mkdir -p "$FIX/$(dirname "$rel")" || { echo "FAIL setup: cannot make $(dirname "$rel")"; exit 1; }
-  cp -p "$REPO/template/$rel" "$FIX/$rel" || { echo "FAIL setup: cannot copy $rel"; exit 1; }
-done <<< "$(git -C "$REPO" ls-files --cached -- template | sed 's|^template/||' | sort)"
+  cp -p "$OLD_TREE/template/$rel" "$FIX/$rel" || { echo "FAIL setup: cannot copy $rel"; exit 1; }
+done <<< "$(cd "$OLD_TREE/template" && find . -type f | sed 's|^\./||' | sort)"
 # Normalized the way `add` left them: no doc bd init may have planted that the
 # copy doesn't overwrite, and no copied beads skill beside the shared ones.
 rm -f "$FIX/CLAUDE.md"
@@ -244,6 +260,14 @@ if [ -f "$FIX/.claude/settings.json" ] && ! grep -q "dashboard" "$FIX/.claude/se
 else
   failcase "apply drops the per-project dashboard hooks" "settings.json still runs a dashboard hook"
 fi
+# Tracked AND ignored in a link area means a copy the link replaced is still in
+# the index; the project's own skill stays tracked (it is not ignored).
+stale_index="$(git -C "$FIX" ls-files -ci --exclude-standard -- .claude/skills .claude/agents .opencode/agent .codex/agents .agents/skills)"
+if [ -z "$stale_index" ] && git -C "$FIX" ls-files --error-unmatch .claude/skills/own-skill/SKILL.md >/dev/null 2>&1; then
+  pass "apply untracks the linked and derived paths"
+else
+  failcase "apply untracks the linked and derived paths" "tracked but ignored: $(printf '%s' "$stale_index" | head -3 | tr '\n' ' ') (or the own skill was untracked)"
+fi
 if [ -f "$FIX/scripts/dashboard.py" ] && ! [ -L "$FIX/scripts/dashboard.py" ] &&
    grep -q "project VERDICT tuning" "$FIX/scripts/dashboard.py" 2>/dev/null &&
    grep -q "name.*scripts/dashboard\.py" "$TMP/apply.log" 2>/dev/null; then
@@ -256,14 +280,16 @@ if [ -f "$FIX/.claude/skills/own-skill/SKILL.md" ]; then
 else
   failcase "apply keeps the own skill" "own skill removed"
 fi
-if cmp -s "$REPO/template/stubs/AGENTS.md" "$FIX/AGENTS.md" &&
-   cmp -s "$REPO/template/stubs/opencode.json" "$FIX/opencode.json" &&
-   cmp -s "$REPO/template/stubs/scripts/hooks/commit-msg" "$FIX/scripts/hooks/commit-msg" &&
-   [ -x "$FIX/scripts/h" ] &&
-   grep -q "scripts/h session" "$FIX/.claude/settings.json" 2>/dev/null; then
+stub_miss=""
+for stub in AGENTS.md opencode.json .codex/hooks.json scripts/hooks/commit-msg; do
+  cmp -s "$REPO/template/stubs/$stub" "$FIX/$stub" || stub_miss="$stub_miss $stub"
+done
+[ -x "$FIX/scripts/h" ] || stub_miss="$stub_miss scripts/h(not executable)"
+grep -q "scripts/h session" "$FIX/.claude/settings.json" 2>/dev/null || stub_miss="$stub_miss .claude/settings.json(no session hook)"
+if [ -z "$stub_miss" ]; then
   pass "apply writes the reference stubs"
 else
-  failcase "apply writes the reference stubs" "a stub differs, h is not executable, or hooks still point at copies"
+  failcase "apply writes the reference stubs" "not the stub:$stub_miss"
 fi
 if [ -L "$FIX/.claude/skills/beads" ] || [ -L "$FIX/.claude/skills/delegate" ]; then
   pass "apply links the shared skills"

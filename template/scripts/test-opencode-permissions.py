@@ -31,7 +31,7 @@ BASH_DENY = ("*>*/tmp/*", "*>*/private/tmp/*", "*>*/var/folders/*",
 
 
 def configs():
-    paths = [REPO / "opencode.json", REPO / "template" / "opencode.json"]
+    paths = [REPO / "stubs" / "opencode.json"]
     return [p for p in paths if p.is_file()]
 
 

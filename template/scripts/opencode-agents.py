@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Regenerates .opencode/agent/*.md from .claude/agents/*.md, and pins opencode.json.
 
-    scripts/opencode-agents.py          # write agents and pin opencode.json pins
-    scripts/opencode-agents.py check    # exit 1 if any agent is stale, write nothing
+    scripts/h opencode-agents          # write agents and pin opencode.json pins
+    scripts/h opencode-agents check    # exit 1 if any agent is stale, write nothing
 
 One prompt, two frontmatter dialects. The prompt body is the expensive part and
 there is exactly one copy of it, in .claude/agents/; this translates the header
 around it into the shape opencode accepts and writes the result beside it.
 
 The same run merge-writes the model pins in opencode.json and
-template/opencode.json from OPENCODE_MODEL and OPENCODE_VARIANT in
-scripts/models.py: top-level model, small_model, and every agent/mode entry.
+template/stubs/opencode.json from OPENCODE_MODEL and OPENCODE_VARIANT in
+scripts/h models: top-level model, small_model, and every agent/mode entry.
 Unknown user keys (permissions, instructions, extra settings) are kept;
 only the pin fields are set. A hand edit that names another model is
-restored by re-running this script. scripts/opencode-pin.py stays the gate
+restored by re-running this script. scripts/h opencode-pin stays the gate
 that holds every file to the pin.
 
 In the starter the shared side is generated too: template/.claude/agents/
@@ -31,7 +31,7 @@ agent picker. It looks installed and fails at spawn, which is the worst place to
 find out.
 
 Every generated agent carries `model: OPENCODE_MODEL#OPENCODE_VARIANT` from
-scripts/models.py — the one model opencode runs on. Claude's tier names
+scripts/h models — the one model opencode runs on. Claude's tier names
 (haiku, sonnet) are aliases opencode doesn't resolve, so the source's own
 `model:` line is never translated.
 
@@ -52,7 +52,7 @@ from harness_paths import HARNESS, ROOT
 CLAUDE_AGENTS = ROOT / ".claude/agents"
 OPENCODE_AGENTS = ROOT / ".opencode/agent"
 OPENCODE_JSON = ROOT / "opencode.json"
-TEMPLATE_JSON = ROOT / "template/opencode.json"
+TEMPLATE_JSON = ROOT / "template/stubs/opencode.json"
 
 # The project's scripts first, so a same-path shadow wins; the harness copy
 # behind it, so a shadow still finds the siblings it did not replace.
@@ -113,7 +113,7 @@ GUARDED = {
     "task": ("Task", "Agent"),
 }
 
-GENERATED_BY = "scripts/opencode-agents.py"
+GENERATED_BY = "scripts/h opencode-agents"
 
 
 def frontmatter(text):
@@ -306,7 +306,7 @@ def pin_file(path):
 
 
 def pin_opencode_jsons():
-    """Pin the root and template opencode.json files. Skips whatever is not
+    """Pin the root and stub opencode.json files. Skips whatever is not
     there (installed projects have no template dir)."""
     for path in (OPENCODE_JSON, TEMPLATE_JSON):
         try:

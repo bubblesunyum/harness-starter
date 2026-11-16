@@ -69,7 +69,7 @@ class SharedAgentsTests(unittest.TestCase):
             dest = base / ".opencode/agent" / f"{name}.md"
             self.assertTrue(dest.is_file(), f"missing {dest}")
             text = dest.read_text()
-            self.assertIn("scripts/opencode-agents.py", text)
+            self.assertIn("scripts/h opencode-agents", text)
             self.assertIn("model: ", text)
         out = run_script("check", root, harness)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)

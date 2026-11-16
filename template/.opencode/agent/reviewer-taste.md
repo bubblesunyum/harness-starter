@@ -10,7 +10,7 @@ permission:
   websearch: deny
 ---
 
-<!-- Generated from .claude/agents/reviewer-taste.md by scripts/opencode-agents.py.
+<!-- Generated from .claude/agents/reviewer-taste.md by scripts/h opencode-agents.
      Edit that file, not this one, and re-run the script. -->
 
 You review changes in this project against the project's own standards — the app

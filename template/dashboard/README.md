@@ -6,9 +6,9 @@ and refreshes its snapshot while the page is open.
 
 ## Files
 
-- `scripts/dashboard.py` serves the board and implements `up`, `down`, `serve`,
+- `scripts/h dashboard` serves the board and implements `up`, `down`, `serve`,
   `snapshot`, and `shot`.
-- `scripts/dashboard-persist.sh` starts a board that survives session-end hooks
+- `scripts/h dashboard-persist` starts a board that survives session-end hooks
   and idle shutdown.
 - `dashboard/index.html` is the page; `dashboard/vendor/` contains its bundled
   browser libraries and their licenses.
@@ -31,35 +31,35 @@ From the project root, start the background server and open the printed local
 URL in the project's browser pane:
 
 ```bash
-python3 scripts/dashboard.py
+scripts/h dashboard
 ```
 
 The default command is `up`; it chooses an available port starting at 7391.
-Use `python3 scripts/dashboard.py up --port 7391` to request a specific port.
-Run `python3 scripts/dashboard.py serve` to keep the server in the foreground
+Use `scripts/h dashboard up --port 7391` to request a specific port.
+Run `scripts/h dashboard serve` to keep the server in the foreground
 and stop it with Ctrl-C.
 
 Stop a board started for the current session with:
 
 ```bash
-python3 scripts/dashboard.py down
+scripts/h dashboard down
 ```
 
 To keep it running across session-end hooks and idle shutdown, use
-`scripts/dashboard-persist.sh`. Stop that persistent board with
-`python3 scripts/dashboard.py down --force`.
+`scripts/h dashboard-persist`. Stop that persistent board with
+`scripts/h dashboard down --force`.
 
 Write the current snapshot without starting a server with:
 
 ```bash
-python3 scripts/dashboard.py snapshot
+scripts/h dashboard snapshot
 ```
 
 Capture a screenshot from a running board with Chrome:
 
 ```bash
 mkdir -p .tmp
-python3 scripts/dashboard.py shot .tmp/dashboard.png gate peers
+scripts/h dashboard shot .tmp/dashboard.png gate peers
 ```
 
 The supported states are `gate`, `pulse`, `review`, `staging`, `commit`,

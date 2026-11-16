@@ -5,8 +5,8 @@ description: Hand implementation to an opencode agent and review what comes back
 
 # Delegating implementation
 
-`scripts/agent.py implement` runs the change in a separate opencode process, on
-the one model opencode runs on (`OPENCODE_MODEL` in `scripts/models.py` — never
+`scripts/h agent implement` runs the change in a separate opencode process, on
+the one model opencode runs on (`OPENCODE_MODEL` in `scripts/h models` — never
 pick or pass another). You stay the
 reviewer: the implementer never sees your context, and you never pay for its
 reads. That split only earns its keep when you actually review — a delegated
@@ -33,7 +33,7 @@ the review pass on your side.
 
 ```bash
 bd update <id> --claim
-scripts/agent.py implement "<id>: <the brief>"     # run it in the background
+scripts/h agent implement "<id>: <the brief>"     # run it in the background
 ```
 
 One implementer per working tree, and don't edit that tree while it runs — you
@@ -42,14 +42,14 @@ would be two writers on one diff with no way to tell whose line is whose.
 ## Review what came back
 
 Its report is a claim, not evidence. Read `git diff` yourself, run
-`scripts/verify.sh` yourself, and check the acceptance criteria against the diff
+`scripts/h verify` yourself, and check the acceptance criteria against the diff
 rather than against the report. Then one of three outcomes:
 
 - **Accept.** It's right. Carry on to the standing review pass and commit as
   usual — you didn't write it either, but the reviewers still read it cold.
 - **Revise.** Send every finding in *one* message, each with the file, what's
   wrong, and what done looks like:
-  `scripts/agent.py implement --session <id> "<all of it>"`.
+  `scripts/h agent implement --session <id> "<all of it>"`.
   The session id is on stderr from the last run.
 - **Take it back.** Below.
 

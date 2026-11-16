@@ -27,7 +27,7 @@ how the pieces fit together.
   discoveries go there, not into TodoWrite or markdown TODOs. It is the thing
   that survives a session ending, so a bead that's still `open` mid-implementation
   is a ledger that's lying.
-  `scripts/ledger-push.sh` regenerates the tracked `.beads/issues.jsonl` (with
+  `scripts/h ledger-push` regenerates the tracked `.beads/issues.jsonl` (with
   memories) on every push — the Dolt ref is the primary transport, the JSONL is
   what a fresh clone hydrates from, so the file stays committed, never ignored.
 - **Skills:** `.claude/skills/` — `workflow` (the hub), `agentic-review`,
@@ -37,7 +37,7 @@ how the pieces fit together.
 - **Reviewers:** `.claude/agents/` — `reviewer-taste`,
   `reviewer-correctness` and `reviewer-design`, each on the model its
   frontmatter names, run against a
-  packet from `scripts/review.sh`. Design reads screenshots rather than the
+  packet from `scripts/h review`. Design reads screenshots rather than the
   diff, because a diff can't show you clipping. The packet carries untracked
   files too, and stages nothing to do it; its captures are dated from the
   working tree's first edit, so an unrelated session's screenshots stay out.
@@ -46,20 +46,50 @@ how the pieces fit together.
   session decides.
 - **opencode:** `opencode.json` names the always-loaded files, and
   `.opencode/agent/` holds the reviewers translated into opencode's dialect by
-  `scripts/opencode-agents.py`. See below — two of the obvious moves here are
+  `scripts/h opencode-agents`. See below — two of the obvious moves here are
   traps.
-- **Gate:** `scripts/verify.sh` — build, tests, optional smoke, plus doc
-  staleness. Tiny output on purpose.
-- **Dashboard:** `scripts/dashboard.py` serves a live diagram at localhost:7391.
+- **Gate:** `scripts/h verify` — build, tests, optional smoke, plus doc
+  staleness. Tiny output on purpose. The gate also compares a fresh ledger
+  export against the committed `.beads/issues.jsonl`, both directions: bd's
+  auto-export is a timer, not a per-write flush, so without this a session
+  commits a file that still lists closed beads and misses new ones. Checked
+  rather than regenerated — a gate that rewrote the file would still need the
+  session to commit it, so it says the command instead. The check runs before
+  every other `bd` call in the gate, because several of them auto-import a
+  stale export when the ledger looks stale — resurrecting deleted beads — and
+  anything earlier would heal the drift under test and report a match on
+  resurrected state.
+- **Dashboard:** `scripts/h dashboard` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in
   Claude Code's browser pane — the one browser the agent can read back and
   screenshot, and the one that doesn't land behind whatever window the human was
   already in. It backgrounds by default — the callers are hooks and
   agents, and a foreground server there is a terminal nobody gets back;
-  `dashboard.py serve` is the form that blocks. If Portside knows the port it
+  `scripts/h dashboard serve` is the form that blocks. If Portside knows the port it
   also prints the alias, matched on the launch directory too so a stale map
   can't name the board after someone else's server.
+
+There is one board, run from the starter, and it costs nothing when nobody is
+looking — which took deliberate work. Rebuilding state means three `bd`
+spawns — each opening the embedded Dolt engine cold — plus git and a read of
+every skill and gate log. Doing that every two seconds for an empty room
+measured at roughly two thirds of a core across three projects' dashboards,
+and it was the largest single consumer of idle CPU on the machine. So the
+refresher watches for polls: a browser that asked for state in the last 30s
+gets the `REFRESH` cadence, nobody gets `IDLE_REFRESH`, and a poll after a
+quiet spell wakes the thread rather than waiting out the rest. Past
+`EXIT_AFTER` with no poll at all the server stops itself, and the SessionEnd
+hook calls `scripts/h dashboard down` to stop it properly first — the timeout
+is the backstop for a session that dies without running its hooks.
+
+`harness add` also turns bd's telemetry off (`metrics.disabled`). Every `bd`
+invocation otherwise forks a detached `bd send-metrics` that POSTs to a
+third-party endpoint, and the dashboard runs `bd` several times a poll — on
+one machine that came to roughly 150k requests a day. Network wakeups are
+weighted heavily in macOS's energy accounting, which is why `bd` and not
+`python` was what showed up at the top of Activity Monitor. The setting is
+global to the user, so turning it off once covers every project.
 
 ## How a project reaches the harness
 
@@ -162,14 +192,14 @@ go in `harness/reviewers/<role>.md` instead. A new stack is one file in
 
 ## Codex context
 
-The template supplies `.codex/hooks.json` to run the existing project brief and
+The template's stubs supply `.codex/hooks.json` to run the existing project brief and
 `harness/codex.md` for Codex task completion guidance. The installer removes
 generated Beads instruction blocks and replaces generic Beads context hooks,
 preserving unrelated hooks. Re-running it does not restore `bd prime` policy.
 Codex hook trust remains local; run the brief manually until the hook is trusted.
 Claude and OpenCode keep their existing startup configuration.
 
-The gate and ledger-only probes share `scripts/ledger-export-check.sh`, so a
+The gate and ledger-only probes share `scripts/h ledger-export-check`, so a
 probe proves export integrity without running unrelated checks. Project gate
 lanes live in `scripts/verify.steps.sh`; additive guidance in `AGENTS.local.md`
 is never touched after install. Installation disables memory-less auto-export and
@@ -181,7 +211,7 @@ session-only handoff and laurel commits use a narrow path-based exception.
 One account, not a team of thirteen agents, so the whole design is
 token-budgeted: progressive disclosure over always-loaded context, cheap
 Claude tiers for bulk reading, diff-scoped review. The stock beads SessionStart hook
-(`bd prime`, ~1900 tokens every session) is replaced by `scripts/brief.sh`
+(`bd prime`, ~1900 tokens every session) is replaced by `scripts/h brief`
 (~500) — see below, because that replacement does not stay done on its own.
 
 ## The brief overrides `bd setup claude`, and has to be re-applied
@@ -213,7 +243,7 @@ report a clean session while the hook ran from the user's home directory.
 New procedures become skills, new work becomes beads — the instinct to add one
 more paragraph to CLAUDE.md is the thing this design exists to resist.
 
-`scripts/context.py` reports what a session pays before it does anything —
+`scripts/h context` reports what a session pays before it does anything —
 both instruction files, the brief, `MEMORY.md`, and skill descriptions. It
 counts `AGENTS.md` as well as `CLAUDE.md` because both are always-loaded, and
 counting only one would let a session move text into the other and watch the
@@ -255,16 +285,16 @@ then corrupts. `model: haiku` parses as provider "haiku" with an empty model id,
 the comma-separated `tools:` string resolves to invalid, and `mode: all` puts
 each reviewer in the primary agent picker beside build and plan. It looks like
 it worked and fails at spawn. So the prompt body has one home,
-`.claude/agents/`, and `scripts/opencode-agents.py` writes the other dialect's
+`.claude/agents/`, and `scripts/h opencode-agents` writes the other dialect's
 header around it into `.opencode/agent/`. The gate checks the two match, because
 nothing about editing the source makes opencode complain.
 
 **opencode runs on one model at one variant, and the harness enforces it.**
-`OPENCODE_MODEL` and `OPENCODE_VARIANT` in `scripts/models.py` are the only
-definition. `scripts/agent.py` sends them as `-m model#variant` and refuses to
+`OPENCODE_MODEL` and `OPENCODE_VARIANT` in `scripts/h models` are the only
+definition. `scripts/h agent` sends them as `-m model#variant` and refuses to
 spawn on anything else; the generator bakes them onto every agent's `model:`
 line; `opencode.json` pins the session model and every built-in agent to them;
-`scripts/opencode-pin.py` fails the gate on any roster entry, agent file,
+`scripts/h opencode-pin` fails the gate on any roster entry, agent file,
 config, script or doc example that names another. `harness/models.json` only
 records the pin per role plus an optional packet budget, and `ensure` writes
 it without prompting.
@@ -279,7 +309,7 @@ choose is checked.
 Two paths to a model: the `.claude/agents/` frontmatter names Claude Code's
 reviewers; the pin names everything opencode runs. Codex inherits the host's.
 
-**`scripts/agent.py` is how every tool except opencode reaches opencode.**
+**`scripts/h agent` is how every tool except opencode reaches opencode.**
 
 It runs one role through `opencode run` — so Claude Code can put its
 reviewers, and delegated implementation, on another provider's bill without
@@ -313,7 +343,7 @@ messages back out of `opencode session export`, so there is no counter file to l
 `tool.execute.before/after`, `auth`, `config`, and `permission.*`. None of them
 can inject context at session start — `event` is a notification sink with no
 return channel. So the dynamic half of the brief has no automatic path here, and
-AGENTS.md's "run `scripts/brief.sh` yourself" line is the fallback that covers
+AGENTS.md's "run `scripts/h session` yourself" line is the fallback that covers
 it. Don't build the plugin.
 
 `opencode.json`'s `instructions` list is `AGENTS.md` and `CLAUDE.md` — exactly

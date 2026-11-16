@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """The one model opencode runs on, and the per-role roster that records it.
 
-    scripts/models.py ensure          # write harness/models.json, pinned
-    scripts/models.py ensure --again  # rewrite it even when it's already pinned
-    scripts/models.py get <role>      # print the model id a role runs on
-    scripts/models.py budget <role>   # print one role's packet budget in tokens
+    scripts/h models ensure          # write harness/models.json, pinned
+    scripts/h models ensure --again  # rewrite it even when it's already pinned
+    scripts/h models get <role>      # print the model id a role runs on
+    scripts/h models budget <role>   # print one role's packet budget in tokens
 
 **opencode runs on OPENCODE_MODEL at OPENCODE_VARIANT, and nothing else.**
 Every role, every path: agent.py's `opencode run -m`, the generated
@@ -13,7 +13,7 @@ all read the two constants below. No flag, environment variable, or roster
 entry changes them. A roster naming anything else is refused, not quietly
 overridden — the incident that put this here (bloomerang-mcp, 2026-11-03) was
 a hand-written roster of paid models nothing checked, which spawned ~15
-sessions and exhausted the provider's limit. scripts/opencode-pin.py is the
+sessions and exhausted the provider's limit. scripts/h opencode-pin is the
 gate step that holds every file to this.
 
 harness/models.json is tracked and committed: the pinned baseline every
@@ -26,14 +26,14 @@ hand-written. A roster carrying a foreign model or variant is rewritten by
 `ensure`, which names what it replaced; every other reader refuses it.
 Checkouts from before the roster was tracked have no file at all, and that
 stays passing: every reader treats a missing roster or entry as the pin
-applying anyway — `scripts/models.py ensure` backfills it.
+applying anyway — `scripts/h models ensure` backfills it.
 
 A role's packet budget is its explicit "context", else the limit opencode's
 cached models.dev catalog lists for the pinned model, else OPENCODE_CONTEXT —
 the pin's window as the catalog listed it when the pin was set, so a machine
 whose opencode never cached the catalog (or has no opencode at all) doesn't
 refuse every ordinary packet. "context" is a per-role token budget override
-in tokens: scripts/review.sh sizes each review packet against the smallest
+in tokens: scripts/h review sizes each review packet against the smallest
 budget across the reviewing roles and refuses packets no reviewer can read
 whole. `budget` never prompts, so review.sh can call it from hooks and
 gates.
@@ -228,7 +228,7 @@ def require_pinned(role):
     if entry is not None:
         problem = pin_problem(role, entry)
         if problem:
-            raise ForeignModel(problem + " — run scripts/models.py ensure "
+            raise ForeignModel(problem + " — run scripts/h models ensure "
                                "to rewrite the roster pinned")
 
 
@@ -346,7 +346,7 @@ def ensure(again=False):
 
 def usage():
     print(__doc__.strip().splitlines()[0], file=sys.stderr)
-    print("usage: scripts/models.py ensure [--again] | get <role> | budget <role>",
+    print("usage: scripts/h models ensure [--again] | get <role> | budget <role>",
           file=sys.stderr)
     sys.exit(2)
 

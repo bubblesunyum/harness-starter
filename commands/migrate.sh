@@ -93,6 +93,17 @@ if [ -e "$target/harness/stacks.txt" ] && ! harness_stacks_want "$target" >/dev/
   exit 1
 fi
 files="$(harness_files_for "$HERE" "$target")" || exit 1
+# Every stub path, named once: the force-include loop below and the classify
+# dispatch both read this, so a new stub cannot land in one but not the other.
+# The stubs are classified whatever today's template holds: their old shared
+# counterparts (.claude/settings.json, opencode.json, ...) left template/
+# when installs went by reference, but every copied install still carries them
+# and they still need replacing with the stub.
+MIGRATE_STUBS="AGENTS.md opencode.json .claude/settings.json .codex/hooks.json scripts/hooks/commit-msg"
+for stub_rel in $MIGRATE_STUBS; do
+  printf '%s\n' "$files" | grep -qxF "$stub_rel" || files="$files
+$stub_rel"
+done
 # A broken diverged list fails before anything is written — in the dry run as
 # well as --apply — or a typo silently un-acknowledges the fork it meant.
 migrate_validate_diverged "$files" "$diverged_want" || exit 1
@@ -203,8 +214,15 @@ migrate_classify_stub() {
   if harness_same "$rel" "$stubsrc" "$target/$rel"; then
     migrate_plan_add "keep" "$rel" "already the reference file"
   else
-    harness_render "$TEMPLATE/$rel" > "$rendered"
-    if harness_same "$rel" "$rendered" "$target/$rel"; then
+    if [ -f "$TEMPLATE/$rel" ]; then
+      harness_render "$TEMPLATE/$rel" > "$rendered" 2>/dev/null || : > "$rendered"
+    else
+      # Gone from template/ since installs went by reference: compare against
+      # the last version the starter shipped, content-aware like today's file
+      # would be — an install tidies these JSON hooks, so bytes rarely match.
+      migrate_last_shipped "$HERE" "$rel" > "$rendered" 2>/dev/null || : > "$rendered"
+    fi
+    if [ -s "$rendered" ] && harness_same "$rel" "$rendered" "$target/$rel"; then
       migrate_plan_add "stub" "$rel" "matches the shared contract; the reference stub takes its place"
     elif histsha="$(migrate_historic_sha "$HERE" "$rel" "$target/$rel" "$histcache")"; then
       migrate_say_older stub "$rel" "$histsha"
@@ -263,11 +281,10 @@ while IFS= read -r rel; do
       continue
       ;;
   esac
-  case "$rel" in
-    AGENTS.md|opencode.json|.claude/settings.json|.codex/hooks.json|scripts/hooks/commit-msg)
-      migrate_classify_stub "$rel"
-      continue
-      ;;
+  # One list with the force-include loop above: space-padded, so only a whole
+  # path matches and never a prefix of one.
+  case " $MIGRATE_STUBS " in
+    *" $rel "*) migrate_classify_stub "$rel"; continue ;;
   esac
   if [ "$rel" = "scripts/h" ]; then
     harness_render "$TEMPLATE/$rel" > "$rendered"
@@ -358,8 +375,10 @@ migrate_classify_generated() {
 
 # Generated files the copy carries: derived output the reference regenerates.
 # A file matching what the shared generator produces goes; anything else is
-# named and kept — migrating must never delete what it cannot reproduce.
-migrate_classify_generated ".opencode/agent" "md" "scripts/opencode-agents.py"
+# named and kept — migrating must never delete what it cannot reproduce. The
+# opencode marker matches both vintages: older generated agents name
+# scripts/opencode-agents.py, newer ones scripts/h opencode-agents.
+migrate_classify_generated ".opencode/agent" "md" "opencode-agents"
 migrate_classify_generated ".codex/agents" "toml" "scripts/codex-support.py"
 
 # Own files under managed dirs: entries the template has no counterpart for.
@@ -576,6 +595,29 @@ if ! "$target/scripts/h" link </dev/null; then
   echo "✗ scripts/h link failed in $target — run it yourself and read the error." >&2
   exit 1
 fi
+# A .gitignore line does not untrack: the copies the links replaced are still
+# in the index, and the next commit would record absolute-path symlinks into
+# this machine's starter. Untrack exactly what the link areas now ignore —
+# never a tracked file the project ignores elsewhere on purpose. The listing
+# itself fails loudly: untracking nothing and continuing would commit those
+# same absolute-path symlinks.
+ignored_list="$(mktemp)" || { echo "✗ mktemp failed" >&2; exit 1; }
+trap 'rm -f "$plan" "$rendered" "$expected" "$ignored_list"; rm -rf "$histcache"' EXIT
+if ! git -C "$target" ls-files -z -ci --exclude-standard >"$ignored_list"; then
+  echo "✗ cannot list the ignored files in $target — run 'git ls-files -ci --exclude-standard' there and re-run." >&2
+  exit 1
+fi
+untracked=0
+while IFS= read -r -d '' rel; do
+  case "$rel" in
+    .claude/skills/*|.claude/agents/*|.agents/skills/*|.opencode/agent/*|.codex/agents/*|harness/stacks/*|.harness-contract.md) ;;
+    *) continue ;;
+  esac
+  git -C "$target" rm -q --cached -- "$rel" ||
+    { echo "✗ cannot untrack $rel — run 'git rm --cached $rel' yourself." >&2; exit 1; }
+  untracked=$((untracked + 1))
+done < "$ignored_list"
+[ "$untracked" -gt 0 ] && echo "  untrack $untracked path(s) now linked or derived — the links stay out of git"
 echo
 
 n_named="$(migrate_tally name)"

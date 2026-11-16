@@ -177,7 +177,7 @@ else
 fi
 
 # --- 4: the stub pin block matches the template ---
-if ! python3 - "$REPO/template/opencode.json" "$PROJ/opencode.json" <<'PYEOF' 2>"$TMP/pin.err"; then
+if ! python3 - "$REPO/template/stubs/opencode.json" "$PROJ/opencode.json" <<'PYEOF' 2>"$TMP/pin.err"; then
 import json
 import sys
 full = json.load(open(sys.argv[1]))

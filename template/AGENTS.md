@@ -129,9 +129,9 @@ through `scripts/h agent`. The visual reviewer's model must accept images. The
 
 **opencode runs on one model, at one variant — nothing else, ever.** Every
 opencode session, subagent, reviewer and implementer runs on
-`OPENCODE_MODEL` at `OPENCODE_VARIANT`, defined once in `scripts/models.py`.
+`OPENCODE_MODEL` at `OPENCODE_VARIANT`, defined once in `scripts/h models`.
 Never choose, change, add or substitute an opencode model — not per role, not
-for "bulk" work, not by hand-editing `harness/models.json`. `scripts/agent.py`
+for "bulk" work, not by hand-editing `harness/models.json`. `scripts/h agent`
 refuses anything else before spawning, and the gate fails on any file that
 names another.
 

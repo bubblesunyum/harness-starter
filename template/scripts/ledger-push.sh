@@ -1,8 +1,8 @@
 #!/bin/bash
 # push the ledger to git, so the beads outlive this machine
 #
-#   scripts/ledger-push.sh          # push now
-#   scripts/ledger-push.sh --check  # one line when a push is needed, silence otherwise
+#   scripts/h ledger-push          # push now
+#   scripts/h ledger-push --check  # one line when a push is needed, silence otherwise
 #
 # --check is what the brief and the gate run: a session cannot end with an
 # unpushed ledger without being told, and pushing on its behalf stays opt-in.
@@ -35,9 +35,9 @@ ledger_check() {
   [ -d .beads/embeddeddolt ] || return 0
   if ! bd dolt remote list 2>/dev/null | grep -q '^origin'; then
     if [ -z "$(git remote get-url origin 2>/dev/null)" ]; then
-      echo "push the ledger: no git origin, so no Dolt remote — the beads have never left this machine. Once the repo has an origin, wire it (bd dolt remote add origin git+<the origin URL>), then run scripts/ledger-push.sh."
+      echo "push the ledger: no git origin, so no Dolt remote — the beads have never left this machine. Once the repo has an origin, wire it (bd dolt remote add origin git+<the origin URL>), then run scripts/h ledger-push."
     else
-      echo "push the ledger: no Dolt remote — the beads have never left this machine. Wire it to the repo's origin (bd dolt remote add origin git+<the origin URL>), then run scripts/ledger-push.sh."
+      echo "push the ledger: no Dolt remote — the beads have never left this machine. Wire it to the repo's origin (bd dolt remote add origin git+<the origin URL>), then run scripts/h ledger-push."
     fi
     return 0
   fi
@@ -46,7 +46,7 @@ ledger_check() {
   command -v dolt >/dev/null 2>&1 || return 0
   dir="$(ledger_datadir)" || return 0
   if ! dolt --data-dir "$dir" status 2>/dev/null | grep -q "nothing to commit, working tree clean"; then
-    echo "push the ledger: uncommitted bead changes — run bd dolt commit, then scripts/ledger-push.sh."
+    echo "push the ledger: uncommitted bead changes — run bd dolt commit, then scripts/h ledger-push."
   fi
   branch="$(dolt --data-dir "$dir" branch 2>/dev/null | awk '/^\*/ { print $2 }')"
   [ -n "${branch:-}" ] || return 0
@@ -54,12 +54,12 @@ ledger_check() {
   # when only origin/main2 exists, and the ledger that was never pushed reads
   # as silent — the one outcome this check exists to prevent.
   if ! dolt --data-dir "$dir" branch -a 2>/dev/null | awk '{ print $NF }' | grep -q -x -F "remotes/origin/$branch"; then
-    echo "push the ledger: never pushed to origin — the beads are still only on this machine. Run scripts/ledger-push.sh."
+    echo "push the ledger: never pushed to origin — the beads are still only on this machine. Run scripts/h ledger-push."
     return 0
   fi
   ahead="$(dolt --data-dir "$dir" log "origin/$branch..$branch" --oneline 2>/dev/null | wc -l | tr -d ' ')"
   if [ -n "$ahead" ] && [ "$ahead" -gt 0 ] 2>/dev/null; then
-    echo "push the ledger: $ahead commit(s) ahead of origin — run scripts/ledger-push.sh."
+    echo "push the ledger: $ahead commit(s) ahead of origin — run scripts/h ledger-push."
   fi
 }
 
@@ -119,10 +119,10 @@ else
   # here — so retry this script first. A working `git push` proves nothing
   # about this path either way: the ledger travels on its own Dolt ref, not
   # on any branch git pushes.
-  echo "  Retry scripts/ledger-push.sh — a transient host rejection clears on its own." >&2
+  echo "  Retry scripts/h ledger-push — a transient host rejection clears on its own." >&2
   echo "  If it persists, separate the read path from the write path:" >&2
   echo "      bd dolt pull                    # the read path; usually still works" >&2
   echo "      bd dolt remote list             # the ref this pushes to" >&2
-  echo "      scripts/ledger-push.sh --check  # how far behind the push is" >&2
+  echo "      scripts/h ledger-push --check  # how far behind the push is" >&2
   exit 1
 fi

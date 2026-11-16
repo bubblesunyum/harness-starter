@@ -10,6 +10,11 @@
 # probes, heavy suites — goes through `probe_step` instead: same contract,
 # but skipped in the --quick lane, which is what keeps iteration fast.
 
+# The gate usually arrives through `scripts/h verify`, which exports the
+# dispatch environment for the shared scripts. Every probe below builds its
+# own fixture and must resolve its own project and harness, so none inherits it.
+unset HARNESS_PROJECT HARNESS_ROOT HARNESS_SOURCE
+
 # There is no compiler here, so the gate is what a compiler would have caught:
 # every script parses, and the CLI can still list its own commands. Cheap enough
 # that there's no excuse for skipping it.
@@ -48,7 +53,8 @@ probe_step "editing template takes effect immediately" bash -c '
 import sys
 p = sys.argv[1]
 t = open(p).read()
-t = t.replace("usage: scripts/models.py ensure [--again] | get <role> | budget <role>", "usage: probe-marker-12345")
+t = t.replace("usage:", "usage: probe-marker-12345", 1)
+assert "probe-marker-12345" in t, "no usage line to mark"
 open(p, "w").write(t)
 PYEOF
     { echo "error: cannot plant marker"; exit 1; }
@@ -710,7 +716,7 @@ EOF
     { echo "error: review passed an over-budget packet"; echo "$out"; exit 1; }
   echo "$out" | grep -q "reviewer-taste" ||
     { echo "error: refusal never named the binding role"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "scripts/review.sh <commit>" ||
+  echo "$out" | grep -q "scripts/h review <commit>" ||
     { echo "error: refusal never said how to narrow"; echo "$out"; exit 1; }'
 
 # A packet within budget still prints its path — the refusal must not fire on
@@ -741,7 +747,7 @@ probe_step "a fresh install pins opencode to one model" bash -c '
   [ ! -e "$probe/harness/models.json" ] ||
     { echo "error: a reference install carries a roster"; exit 1; }
   modroot="$(probe_shared_root "$probe")" || exit 1
-  python3 - "$probe/opencode.json" "$modroot/opencode.json" <<EOF ||
+  python3 - "$probe/opencode.json" "$modroot/stubs/opencode.json" <<EOF ||
 import json, sys
 stub, full = (json.load(open(p)) for p in sys.argv[1:3])
 sys.exit(0 if stub.get("model") == full.get("model") == "$pin#xhigh"

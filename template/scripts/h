@@ -30,6 +30,22 @@ DEFAULT_URL="https://github.com/bubblesunyum/harness-starter.git"
 FINDER_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT="$(dirname "$FINDER_DIR")"
 
+# A project's committed finder is a copy and goes stale; the shared one does
+# not. So the committed copy only locates the harness, then hands the whole
+# command to ROOT/scripts/h with what it found — every fix to the finder is
+# live in every project, like any other shared script. The handed-to finder
+# takes the project and root from these instead of its own location.
+# Read once and unset: children (agents, the brief, task buttons) must never
+# inherit a hand-over meant for this one command.
+HANDED_ROOT=""
+HANDED_SOURCE=""
+if [ -n "${HARNESS_FINDER_PROJECT:-}" ] && [ -n "${HARNESS_FINDER_ROOT:-}" ]; then
+  PROJECT="$HARNESS_FINDER_PROJECT"
+  HANDED_ROOT="$HARNESS_FINDER_ROOT"
+  HANDED_SOURCE="${HARNESS_FINDER_SOURCE:-handed over}"
+fi
+unset HARNESS_FINDER_PROJECT HARNESS_FINDER_ROOT HARNESS_FINDER_SOURCE
+
 ROOT=""
 SOURCE=""
 
@@ -85,6 +101,12 @@ fetch() {
 }
 
 resolve() {
+  # Handed over by a project's committed finder, which already resolved.
+  if [ -n "$HANDED_ROOT" ]; then
+    ROOT="$HANDED_ROOT"
+    SOURCE="$HANDED_SOURCE"
+    return 0
+  fi
   # A starter checkout resolves to its own template/ first, ahead of
   # HARNESS_HOME and ~/.harness, so editing template/ takes effect in the
   # starter immediately with no machine setup.
@@ -138,11 +160,15 @@ usage: h [-h|--help] <command> [args]
   review      build a review packet
   wrap-up     close-out checks
   ledger-push push the ledger
+  ledger-export-check  check the committed ledger export matches
   agent       run the agent runner
   context     project context
   dashboard   dashboard server
+  dashboard-persist  dashboard server that survives session end
   models      model configuration
   codex-support  generate or check Codex agents and skill links
+  opencode-agents  regenerate opencode agents and pins
+  opencode-pin  fail on any opencode model outside the pin
 EOF
 }
 
@@ -565,12 +591,16 @@ cmd_dispatch() {
     review) file="review.sh" ;;
     wrap-up) file="wrap-up.sh" ;;
     ledger-push) file="ledger-push.sh" ;;
+    ledger-export-check) file="ledger-export-check.sh" ;;
     agent) file="agent.py" ;;
     context) file="context.py" ;;
     dashboard) file="dashboard.py" ;;
+    dashboard-persist) file="dashboard-persist.sh" ;;
     models) file="models.py" ;;
     codex-support) file="codex-support.py" ;;
-    *) fail "no such command '$name'" "use one of: root doctor link session hook brief verify review wrap-up ledger-push agent context dashboard models codex-support" 2 ;;
+    opencode-agents) file="opencode-agents.py" ;;
+    opencode-pin) file="opencode-pin.py" ;;
+    *) fail "no such command '$name'" "use one of: root doctor link session hook brief verify review wrap-up ledger-push ledger-export-check agent context dashboard dashboard-persist models codex-support opencode-agents opencode-pin" 2 ;; 
   esac
   # A project copy shadows the shared one; that is how overlays win.
   if [ -f "$PROJECT/scripts/$file" ]; then
@@ -589,7 +619,24 @@ cmd_dispatch() {
   esac
 }
 
+# Hand the command to the shared finder when it is a different file from this
+# one. Resolution runs in a subshell so a failure stays this finder's to
+# report, loudly, through the command it was given (session stays exit 0).
+hand_over() {
+  local found root source
+  [ -z "$HANDED_ROOT" ] || return 0
+  found="$( resolve 2>/dev/null && printf '%s\n%s' "$ROOT" "$SOURCE" )" || return 0
+  root="${found%%$'\n'*}"
+  source="${found#*$'\n'}"
+  [ -f "$root/scripts/h" ] || return 0
+  [ "$root/scripts/h" -ef "$FINDER_DIR/$(basename "$0")" ] && return 0
+  HARNESS_FINDER_PROJECT="$PROJECT" HARNESS_FINDER_ROOT="$root" HARNESS_FINDER_SOURCE="$source"
+  export HARNESS_FINDER_PROJECT HARNESS_FINDER_ROOT HARNESS_FINDER_SOURCE
+  exec bash "$root/scripts/h" "$@"
+}
+
 main() {
+  case "${1:-}" in ""|-h|--help) ;; *) hand_over "$@" ;; esac
   if [ $# -eq 0 ]; then
     usage
     exit 0

@@ -1,7 +1,7 @@
 #!/bin/bash
 # dashboard-persist.sh — start the dashboard so it stays up after the session.
 #
-# Usage: dashboard-persist.sh [--port N]
+# Usage: scripts/h dashboard-persist [--port N]
 #
 # The SessionEnd hook runs `dashboard.py down` and the server times itself out
 # when idle; this launcher opts out of both by starting the server with
@@ -11,7 +11,7 @@
 # spawns the server in a session of its own, which is what outlives the hook.
 # Stop it explicitly when you are done with it:
 #
-#   scripts/dashboard.py down --force
+#   scripts/h dashboard down --force
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -41,7 +41,7 @@ fi
 echo "$out"
 case "$out" in
   *started*|*already\ serving*)
-    echo "stop it with: scripts/dashboard.py down --force"
+    echo "stop it with: scripts/h dashboard down --force"
     ;;
   *)
     exit 1

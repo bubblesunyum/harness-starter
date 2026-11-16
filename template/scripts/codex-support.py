@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generate Codex agents and skill links from the shared harness.
 
-    python3 scripts/codex-support.py write
-    python3 scripts/codex-support.py check   # read-only drift check
+    scripts/h codex-support write
+    scripts/h codex-support check   # read-only drift check
 
 Agent prompts and skills stay in .claude/. Codex inherits its host's model;
 Claude model aliases and tool allowlists are not Codex configuration fields.

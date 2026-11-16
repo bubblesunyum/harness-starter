@@ -1,44 +1,44 @@
 {
   ".claude/HARNESS.md": {
-    ".claude/agents/librarian.md": "bd87aae352bdea4f",
-    ".claude/agents/reviewer-correctness.md": "cf91eab68e2f843f",
+    ".claude/agents/librarian.md": "5ac8c8f30136fc23",
+    ".claude/agents/reviewer-correctness.md": "65fb284553b04f42",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
-    ".claude/skills/workflow/SKILL.md": "80b9c8919a77c91b",
-    "doc": "8db5c8a47894996f",
-    "scripts/agent.py": "455d5b85e6c46e2a",
-    "scripts/brief.sh": "d8dade8b488b0241",
-    "scripts/context.py": "72272e32b893ab72",
-    "scripts/opencode-agents.py": "647f748a70a06169",
-    "scripts/review.sh": "b2cc0c48c2a84fc5",
-    "scripts/verify.sh": "e7e964273634e80f"
+    ".claude/skills/workflow/SKILL.md": "2095431648b7bf74",
+    "doc": "d85a90d4f308831b",
+    "scripts/agent.py": "c5991a16467704a4",
+    "scripts/brief.sh": "d9a9091a6ff70a76",
+    "scripts/context.py": "11897bcdc1e78f08",
+    "scripts/opencode-agents.py": "bc83af1af2d898e8",
+    "scripts/review.sh": "f45f70fd2fe228b5",
+    "scripts/verify.sh": "0d3a3205a9c9727f"
   },
   ".claude/skills/agentic-review/SKILL.md": {
-    ".claude/agents/reviewer-correctness.md": "cf91eab68e2f843f",
+    ".claude/agents/reviewer-correctness.md": "65fb284553b04f42",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
-    "doc": "1a6612e1a5dcf8c2",
-    "scripts/agent.py": "455d5b85e6c46e2a",
-    "scripts/review.sh": "b2cc0c48c2a84fc5"
+    "doc": "c32a1c2998872572",
+    "scripts/agent.py": "c5991a16467704a4",
+    "scripts/review.sh": "f45f70fd2fe228b5"
   },
   ".claude/skills/delegate/SKILL.md": {
-    "doc": "208b3ae213483692",
-    "scripts/agent.py": "455d5b85e6c46e2a"
+    "doc": "6e7593ae23e1fac0",
+    "scripts/agent.py": "c5991a16467704a4"
   },
   ".claude/skills/handoff/SKILL.md": {
-    "doc": "8e5d79253e67b6af",
-    "scripts/brief.sh": "d8dade8b488b0241",
-    "scripts/wrap-up.sh": "f738ed1087a9c965"
+    "doc": "0bd493dc77425dc4",
+    "scripts/brief.sh": "d9a9091a6ff70a76",
+    "scripts/wrap-up.sh": "21cbca050ea4028e"
   },
   ".claude/skills/orchestrate/SKILL.md": {
-    "doc": "77089f69ce8d06d7",
-    "scripts/agent.py": "455d5b85e6c46e2a",
-    "scripts/brief.sh": "d8dade8b488b0241",
-    "scripts/review.sh": "b2cc0c48c2a84fc5",
-    "scripts/verify.sh": "e7e964273634e80f"
+    "doc": "9a6fdb1bf76cf09c",
+    "scripts/agent.py": "c5991a16467704a4",
+    "scripts/brief.sh": "d9a9091a6ff70a76",
+    "scripts/review.sh": "f45f70fd2fe228b5",
+    "scripts/verify.sh": "0d3a3205a9c9727f"
   },
   ".claude/skills/workflow/SKILL.md": {
-    "doc": "80b9c8919a77c91b",
+    "doc": "2095431648b7bf74",
     "\u2026": ""
   }
 }

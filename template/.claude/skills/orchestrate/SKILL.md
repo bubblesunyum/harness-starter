@@ -31,7 +31,7 @@ Every round starts with three answers, from the user or your judgment:
 
 ## Phase 1 — Select and claim
 
-1. `scripts/brief.sh` first. It is the state: ready work, memory keys,
+1. `scripts/h brief` first. It is the state: ready work, memory keys,
    last session's note. Do not re-derive it by hand.
 2. Select from `bd ready` inside the focus areas, minus the excludes.
    Prefer beads whose acceptance is already written; the next step specs
@@ -60,7 +60,7 @@ else. One message per worker:
 - OWNED paths vs FORBIDDEN paths (its partition, and everything outside it);
 - known traps (from memory keys and the bead);
 - acceptance criteria and only the scoped checks that prove them —
-  never `scripts/verify.sh` (the gate runs once, on the frozen tree,
+  never `scripts/h verify` (the gate runs once, on the frozen tree,
   by the orchestrator);
 - the fix-as-you-go rule (below).
 
@@ -69,9 +69,9 @@ else. One message per worker:
 Spawn one implementer per partition, in parallel, all on opencode — the same
 rule reviewers already follow. Inside opencode, spawn native background
 subagents. From Claude Code or Codex, run them through the opencode CLI
-(`scripts/agent.py implement` — never the host-native Task/agent
+(`scripts/h agent implement` — never the host-native Task/agent
 mechanism for a round). Every worker runs on the one pinned opencode model
-(`scripts/models.py`): never choose, pass or configure another, and never
+(`scripts/h models`): never choose, pass or configure another, and never
 reach for a cheaper "bulk" model to afford a wider round — narrow the round
 instead. The parallel same-tree contract below travels in every brief
 regardless of tool; pass it through in the brief as-is — do not duplicate
@@ -80,8 +80,8 @@ the contract here — this skill *is* it.
 **Parallel same-tree contract** (in every brief, no exceptions):
 
 - edit only OWNED paths; read anything, touch nothing else;
-- no `bd` commands, no commits, no `scripts/verify.sh`,
-  no `scripts/review.sh`, no reviewers;
+- no `bd` commands, no commits, no `scripts/h verify`,
+  no `scripts/h review`, no reviewers;
 - **fix things as you go** rather than filing beads — a broken import
   on the path to done gets fixed, not filed. File a bead only for
   something significant enough to be its own bead: out of scope,
@@ -92,7 +92,7 @@ the contract here — this skill *is* it.
 1. Collect reports. **A report is a claim, not evidence**: re-read
    every diff yourself before believing any of it.
 2. Freeze the tree — no edits until the gate reports — and run
-   `scripts/verify.sh` once. One gate per round: a gate per worker
+   `scripts/h verify` once. One gate per round: a gate per worker
    multiplies slow probe runs for no new signal, and editing mid-run
    manufactures phantom failures (a probe split across an edit reads
    as drift that isn't there).
@@ -101,7 +101,7 @@ the contract here — this skill *is* it.
 
 ## Phase 5 — Review
 
-1. `scripts/review.sh` builds the packet; run `reviewer-taste` and
+1. `scripts/h review` builds the packet; run `reviewer-taste` and
    `reviewer-correctness` against it in parallel, plus
    `reviewer-design` whenever anything on screen moved.
 2. **Packets are static — rebuild before each round.** A packet built

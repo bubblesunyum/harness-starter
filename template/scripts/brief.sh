@@ -8,9 +8,9 @@
 # in the `beads` and `workflow` skills instead, where it costs a description
 # line until something actually needs it.
 #
-#   scripts/brief.sh          # the brief, as text
-#   scripts/brief.sh --hook   # wrapped as Claude Code SessionStart JSON
-#   scripts/brief.sh --hook --prepend <file> [--append <file>]
+#   scripts/h brief          # the brief, as text
+#   scripts/h brief --hook   # wrapped as Claude Code SessionStart JSON
+#   scripts/h brief --hook --prepend <file> [--append <file>]
 #                           # contract first, brief, skill note last — one JSON
 set -euo pipefail
 
@@ -94,7 +94,7 @@ preflight() {
     echo "gate: scripts/verify.steps.sh is still the placeholder — replace 'step \"build\" false' with real commands"
   fi
   [ -f "$ROOT/harness/models.json" ] || \
-    echo "models: no harness/models.json — run scripts/models.py ensure to write it"
+    echo "models: no harness/models.json — run scripts/h models ensure to write it"
 }
 
 brief() {

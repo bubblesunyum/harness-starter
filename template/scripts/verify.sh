@@ -2,9 +2,9 @@
 # The gate: build, test, and smoke the app behind a single exit code, so an
 # agent can prove its own work without a human reading a screen.
 #
-#   scripts/verify.sh           # build + tests
-#   scripts/verify.sh --full    # project-defined full lane; see verify.steps.sh
-#   scripts/verify.sh --quick   # fast lane only: no throwaway-repo probes
+#   scripts/h verify           # build + tests
+#   scripts/h verify --full    # project-defined full lane; see verify.steps.sh
+#   scripts/h verify --quick   # fast lane only: no throwaway-repo probes
 #
 # Two lanes, one contract. The probe steps below each build a throwaway repo
 # and cost seconds apiece, which prices a full run in minutes — too slow for
@@ -159,7 +159,7 @@ else
   echo "$agents_out"
 fi
 
-# opencode runs on one model at one variant (scripts/models.py), and every
+# opencode runs on one model at one variant (scripts/h models), and every
 # file that could pick another — the roster, the generated agents,
 # opencode.json, the scripts, the docs — is held to it here. The prose rule
 # came first and a session with no terminal walked straight past it.

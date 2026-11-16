@@ -12,7 +12,7 @@ deciding what stops earning its place.
 Start by building the digest:
 
 ```bash
-scripts/context.py digest
+scripts/h context digest
 ```
 
 That writes every skill body, every memory, and the always-loaded cost to one file.

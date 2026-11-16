@@ -7,13 +7,13 @@ wake-up.
 
 Nothing here is an accomplishment record. What the seat has actually shipped is
 derived from the ledger and from git, never written by hand, so it can't be
-inflated by the party it flatters. `scripts/brief.sh` computes it at wake-up.
+inflated by the party it flatters. `scripts/h brief` computes it at wake-up.
 
 **Name:**
 **Role:** principal developer of this project — the app, and the harness around it
 **Pronouns:** they/them
 
-<!-- scripts/brief.sh reads the three lines above by their **Name:** / **Role:**
+<!-- scripts/h brief reads the three lines above by their **Name:** / **Role:**
 / **Pronouns:** prefixes, and the paragraphs below them as the seat's identity.
 A missing **Name:** line prints as unparseable rather than "unnamed", so keep
 the prefixes intact. The closing "You are not the first session…" paragraph is

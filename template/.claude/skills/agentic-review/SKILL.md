@@ -12,9 +12,9 @@ the reasoning behind the code catch what you can't.
 ## The pass
 
 ```bash
-scripts/verify.sh            # 1. it has to build and pass tests first
-                             # 2. drive the app and capture it — see below
-scripts/review.sh            # 3. build the packet, prints its path
+scripts/h verify            # 1. it has to build and pass tests first
+                            # 2. drive the app and capture it — see below
+scripts/h review            # 3. build the packet, prints its path
 ```
 
 Run the applicable reviewers against the same packet:
@@ -23,7 +23,7 @@ Run the applicable reviewers against the same packet:
 - `reviewer-correctness` — real defects
 - `reviewer-design` — what it actually renders
 
-`scripts/review.sh` refuses (non-zero) when the packet exceeds the smallest
+`scripts/h review` refuses (non-zero) when the packet exceeds the smallest
 reviewer budget instead of printing a path — narrow the range and re-run.
 
 Give each one only the packet path and one line on what the change was meant to
@@ -31,24 +31,24 @@ do. They read `CLAUDE.md` themselves. Don't paste the diff into the prompt —
 that's the packet's job, and pasting it doubles the cost.
 
 **In opencode, always spawn the reviewers natively as parallel subagents —
-never `scripts/agent.py`.** That script is how every tool except opencode
+never `scripts/h agent`.** That script is how every tool except opencode
 runs reviewers through opencode; inside opencode the generated agents
 already carry the pinned `model:` line, so shelling out buys nothing.
 
 Everywhere else, go off the account: run each reviewer through opencode —
 each as its own background command, so the applicable roles run at once.
-opencode runs every role on the one pinned model (`scripts/models.py`); never
+opencode runs every role on the one pinned model (`scripts/h models`); never
 pick, pass or configure another. The design model must support image input. Outside opencode only (in opencode, spawn native
 subagents instead — never run these):
 
 ```bash
-scripts/agent.py reviewer-taste "Review <packet> — <what it was meant to do>"
-scripts/agent.py reviewer-correctness "Review <packet> — <what it was meant to do>"
-scripts/agent.py reviewer-design "Review <packet> — <what it was meant to do>"
+scripts/h agent reviewer-taste "Review <packet> — <what it was meant to do>"
+scripts/h agent reviewer-correctness "Review <packet> — <what it was meant to do>"
+scripts/h agent reviewer-design "Review <packet> — <what it was meant to do>"
 ```
 
 Run `reviewer-design` only when the change affects the screen; it must inspect
-every listed capture. Through `scripts/agent.py`, each role gets its own prompt
+every listed capture. Through `scripts/h agent`, each role gets its own prompt
 and the same packet, outside the calling session. A non-zero exit is a reviewer
 that didn't run, not one that found nothing — spawn it natively instead.
 `reviewer-design` refused for lack of image support runs natively too.
@@ -58,7 +58,7 @@ breakage instead of the design, so keep the order.
 
 ## Step 2 is not optional for anything on screen
 
-`scripts/review.sh` collects the `/tmp/<prefix>-*.png` captures (the ledger's
+`scripts/h review` collects the `/tmp/<prefix>-*.png` captures (the ledger's
 prefix, resolved at runtime) and lists them
 in the packet, so whatever you shot while verifying is what the design reviewer
 looks at. Shoot the screens the change touches, on every surface it ships to.
@@ -85,7 +85,7 @@ nobody looked at is the defect.
   the whole tree costs more than writing the feature did. The cost of that is a
   `SCOPE` list in `scripts/review.scope.sh` that has to earn every suffix it carries:
   a file type missing from it is a file no reviewer has ever read.
-- **One packet, many readers.** `scripts/review.sh` writes the diff to a file
+- **One packet, many readers.** `scripts/h review` writes the diff to a file
   once; each reviewer reads that file instead of running its own git commands.
   Three agents, one diff-assembly cost.
 - **New files are in the diff too.** A file git doesn't track yet is where a new
@@ -96,7 +96,7 @@ nobody looked at is the defect.
   else's commit.
 - **Know which model each path runs.** A native Claude Code spawn runs the model and
   effort in the reviewer's `.claude/agents/` frontmatter. Through
-  `scripts/agent.py`, and in any native opencode spawn, every role runs on
+  `scripts/h agent`, and in any native opencode spawn, every role runs on
   the one pinned opencode model — there is nothing to fit. Under Codex every
   role inherits the host model.
 - **One reviewer looks at pixels.** In the project this came from, both diff
@@ -121,7 +121,7 @@ one place they're guaranteed to be lost.
 ## Scaling it down
 
 Not every change earns three agents. A one-line fix, a comment, a test tweak —
-just `scripts/verify.sh` and commit. Reach for the full pass when the change
+just `scripts/h verify` and commit. Reach for the full pass when the change
 introduces a component, alters shared state, touches concurrency or a parser,
 or spans more than a couple of files.
 

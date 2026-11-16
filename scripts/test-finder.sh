@@ -107,6 +107,33 @@ printf 'probe agent\n' > "$CHECKOUT/template/.opencode/agent/probe-agent.md" || 
 mkdir -p "$CHECKOUT/template/harness/stacks" || { echo "FAIL setup: stacks fixture"; exit 1; }
 printf '# probe stack\n' > "$CHECKOUT/template/harness/stacks/probe.md" || { echo "FAIL setup: stacks file"; exit 1; }
 printf '# probe extra stack\n' > "$CHECKOUT/template/harness/stacks/probe-extra.md" || { echo "FAIL setup: stacks extra"; exit 1; }
+# One extra dispatch command only the shared finder knows: the hand-off case
+# below proves the project's committed finder reached it.
+python3 - "$CHECKOUT/template/scripts/h" <<'PYEOF' || { echo "FAIL setup: probe-only patch"; exit 1; }
+import sys
+path = sys.argv[1]
+text = open(path).read()
+old = '    opencode-pin) file="opencode-pin.py" ;;'
+assert text.count(old) == 1, "shared finder dispatch shape changed"
+open(path, "w").write(text.replace(old, old + '\n    probe-only) file="probe-only.sh" ;;'))
+PYEOF
+cat > "$CHECKOUT/template/scripts/probe-only.sh" <<'STUB' || { echo "FAIL setup: probe-only script"; exit 1; }
+#!/bin/bash
+# Probe-only dispatch for the hand-off case: only the shared finder knows this
+# command, so its marker proves the project's committed finder handed over —
+# and no HARNESS_FINDER_* variable may leak into it or its children.
+echo "PROBE-HANDOVER-MARKER"
+leaked="$(env | grep '^HARNESS_FINDER_' || true)"
+if [ -n "$leaked" ]; then
+  echo "LEAKED into the dispatched command: $leaked"
+  exit 1
+fi
+if bash -c 'env' | grep -q '^HARNESS_FINDER_'; then
+  echo "LEAKED into a child of the dispatched command"
+  exit 1
+fi
+STUB
+chmod +x "$CHECKOUT/template/scripts/probe-only.sh" || { echo "FAIL setup: chmod probe-only"; exit 1; }
 (cd "$CHECKOUT" && git init -q .) >/dev/null || { echo "FAIL setup: git init"; exit 1; }
 (cd "$CHECKOUT" && git add -A) >/dev/null || { echo "FAIL setup: git add"; exit 1; }
 (cd "$CHECKOUT" && git -c user.email=probe@t -c user.name=probe -c commit.gpgsign=false commit -qm probe) >/dev/null || { echo "FAIL setup: git commit"; exit 1; }
@@ -729,6 +756,18 @@ else
 fi
 if [ "$FAILS" -eq "$before26" ]; then
   pass "starter resolves to its own template first"
+fi
+
+# --- 27: the committed finder hands the command to the shared finder ---
+newproj p27 || { echo "FAIL setup: p27"; exit 1; }
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" probe-only >"$TMP/got" 2>"$TMP/err"; then
+  if grep -q "PROBE-HANDOVER-MARKER" "$TMP/got" && [ ! -s "$TMP/err" ]; then
+    pass "committed finder hands off to the shared finder"
+  else
+    failcase "committed finder hands off to the shared finder" "marker missing from stdout or stderr noisy"
+  fi
+else
+  failcase "committed finder hands off to the shared finder" "non-zero exit — the shared finder never ran, or a HARNESS_FINDER_* variable leaked"
 fi
 
 if [ "$FAILS" -eq 0 ]; then
