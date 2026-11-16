@@ -1,5 +1,8 @@
 # Codex harness guidance
 
+**Untested.** No Codex session has run the reference install yet. First
+prove it works in your environment (see the Codex section of the contract).
+
 Use `AGENTS.md` for the workflow and `CLAUDE.md` for project standards. The
 shared procedures live in `.claude/skills/`; use their Beads and handoff steps.
 

@@ -177,5 +177,9 @@ before rearranging any of them.
 
 ## Codex
 
-**Codex only:** read [harness/codex.md](harness/codex.md) for startup and task
-completion guidance.
+**Codex only:** the reference install is untested under Codex — start-up
+hooks, links and `.codex/agents` have never run there. Before any task, check
+that `scripts/h session` and `scripts/h doctor` work, the brief arrived, and the
+shared skills and reviewers resolve; report anything broken before working
+around it. Then read `harness/codex.md` in the shared harness (`scripts/h
+root` prints where) for startup and task completion guidance.
