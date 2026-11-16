@@ -337,3 +337,49 @@ user wants to be worked with, which is a bad thing to quietly get wrong.
 So: anything removed from it is copied to `.claude/memory-archive/` and shown to
 the user first. Durable facts belong here in the repo, where the staleness gate
 can watch them; the memory file keeps a pointer.
+
+## Reference install: what each tool can load from outside the repo
+
+Spike har-b5n8.1, run against Claude Code 2.1.251, opencode 2.0.19 and
+codex-cli 0.163 on macOS. Each row was proved by a canary run unless marked
+unverified; re-test a row before leaning on it after a tool upgrade.
+
+| Artefact | Claude Code | opencode | Codex |
+|---|---|---|---|
+| Always-loaded contract | `CLAUDE.md` `@`-import of a path outside the project is **silently skipped** (absolute, `~`, and a symlink whose target is outside all failed in a live session; an in-project import loaded). Use a SessionStart hook that prints the contract as context. | A project `AGENTS.md` symlinked to the checkout loads. `instructions[]` entries pointing outside did not load in the worker's runs (not independently confirmed). A plugin `context` hook also injects text. | `AGENTS.md` `@`-import loads for absolute, `~` and `$VAR` paths; `$CODEX_HOME/AGENTS.md` loads alongside. |
+| Skills | Symlinked `.claude/skills` loads. `--plugin-dir` loads but is a per-run flag. Project-scope `extraKnownMarketplaces` is silently ignored; a user-scope marketplace works but writes global config. `--add-dir` exposes nothing. | `skills: ["<path>"]` in config, or a symlinked `.claude/skills` / `.agents/skills`. | `<repo>/.codex/skills`, `$CODEX_HOME/skills`, `~/.agents/skills`. |
+| Agents | Symlinked `.claude/agents` loads; plugin `agents/` loads. | File and directory symlinks under `.opencode/agent(s)/` now load (the older "cannot be symlinked" finding no longer holds on 2.0.19). `.claude/agents` is still ignored. Inline `{file:…}` loads but a missing target returns 500 for every run in the project. | not tested |
+| Session start | Project SessionStart hook runs an outside script; `~` and `$HOME` expand; it fires headless even in a never-trusted folder. | No hook. A plugin loaded from an outside path runs `setup()` at load; otherwise the "run the brief yourself" line. | `.codex/hooks.json` SessionStart did **not** fire under `codex exec` in four configurations; interactive unverified. Keep the manual-brief line. |
+| Running shared scripts | Unverified (CLI was logged out). Project `permissions.allow` rules are dropped in a never-trusted folder until the trust dialog is accepted. | Denied headless without a grant (exit 1); `permission.external_directory` with an absolute or `~` path allows it. | not tested |
+| Harness absent | Missing import, marketplace, `--add-dir`: silent. Missing hook script: exit 127, session continues. | Missing instruction, skills path, dangling agent symlink: silent. Missing plugin: warning only. | Missing import: silent. |
+
+Also proved: a commit-msg shim that `exec`s the shared hook fails closed when
+the checkout is absent; `core.hooksPath` pointed at the checkout fails **open**
+(commit passes, no hooks) and would displace the beads hooks that already own
+`core.hooksPath`. `.opencode/opencode.json` now merges with the root config
+rather than shadowing it. The starter repo clones anonymously in under a
+second (3.6 MB shallow).
+
+What this decides:
+
+- **Almost every missing-path case is silent**, so no stub may name the shared
+  checkout directly. Each project commits one small resolver; hooks, the git
+  shim and every command go through it, and it is the only place that fails
+  loudly.
+- **The resolver's order is `$HARNESS_HOME`, then `~/.harness`, then a
+  gitignored in-project `.harness/` it clones itself** (cloud, CI). No tool
+  needs a fixed home path once the resolver exists.
+- **Skills and agents arrive as gitignored symlinks the resolver creates**,
+  the one mechanism proved on both Claude Code and opencode with no global
+  config. Pointing them at whichever root was resolved covers the fetched case.
+- **The contract arrives by injection, not import**: SessionStart hook on
+  Claude Code, symlinked `AGENTS.md` or plugin on opencode, `@`-import plus the
+  brief line on Codex.
+- **Agent-run commands use an in-project path** (the resolver), so permission
+  rules never name a path outside the repo.
+
+Unverified and owed to har-b5n8.4: Claude Code running an outside script and
+invoking a symlinked skill end to end (needs a logged-in CLI); whether skills
+symlinked by a SessionStart hook are discovered in that same first session;
+Codex interactive hooks; opencode `instructions[]` outside an ancestor
+`AGENTS.md`.
