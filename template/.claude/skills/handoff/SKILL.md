@@ -15,11 +15,17 @@ and finish the piece first.
 
 ## The close
 
+The close ends on the commit, period: after the capture lands, zero `bd`
+writes and zero file edits. Anything that moves afterwards is not finishing
+the round — it is starting a new one, and it gets its own bead and its own
+gate.
+
 Prefer `scripts/h wrap-up` over hand-ordering the steps below — it runs them
 in the order that stays clean (ledger writes, export, verify, commit, push).
 The pre-commit hook stages a fresh export on every commit, so the order is
 belt and braces; the manual export is the fast path and the gate check the
-backstop:
+backstop. The script proves the promise itself (wrap-up's step 7 fails a dirty
+tree), so a green run already means the rule held:
 
 ```bash
 scripts/h wrap-up -m "lowercase terse message" --bead <id> \
@@ -27,20 +33,32 @@ scripts/h wrap-up -m "lowercase terse message" --bead <id> \
   [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 ```
 
-Write the note first and pass it as `--note-file` to fold its capture commit
-into the same run. The numbered steps are the manual fallback when the script
-doesn't fit.
+Write the note first and pass it as `--note-file`: the run commits the work
+first (the note file excluded), then lands the note in its own capture commit
+— that capture commit is the one the close ends on. Append any laurel before
+the run so it rides the work commit. All closes, notes, and remembers go
+through the flags — never a `bd` call after the capture lands. Push is the
+only thing that runs after (it moves the Dolt ref, not the tree). The numbered
+steps are the manual fallback when the script doesn't fit — same shape, same
+proof at the end:
 
 1. **Settle the ledger.** Claimed beads are closed with a reason, or returned to
    open with `bd update <id> --status open`, followed by
    `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
-   Anything that surprised you written with `bd remember`.
-2. **Prove the tree.** `scripts/h verify` passes and the work is committed.
+   Anything that surprised you written with `bd remember`. Write the handoff
+   note file now, before anything commits.
+2. **Prove the tree and commit.** `scripts/h verify` passes; commit the work
+   (leaving the note file out), then commit the note file on its own as the
+   capture — that capture commit is the ending commit, and nothing moves
+   after it.
 3. **Push the ledger, after the commit.** `scripts/h ledger-push`, best-effort:
    a failed push warns and the commit stands. The beads are not in the commit
    you just made — they ride their own git ref, and nothing moves it for you. A
    session that skips this leaves the whole ledger on one disk.
-4. **Write the note.** Below.
+4. **Prove the promise.** `git status --porcelain` empty and the ledger export
+   check green. A red proof means the close is still in progress — not over —
+   so fixes here are still the same round, not a new one. What would break the
+   rule is writing after a green proof.
 5. **Say what you'd pick up next**, in the note. The next session's brief shows
    this before it shows the ready list.
 
@@ -91,6 +109,12 @@ one it stops being recognition and turns into a score worth farming. Padding
 this file corrupts the one signal in the harness that isn't a metric.
 
 ## Commit the capture
+
+The capture commit is the close's ending commit: wrap-up lands it itself
+(step 5, note file only, after the work commit), and the manual fallback does
+the same by hand. It is the last mutation either way — nothing moves after it.
+The standalone form below is only for a note-only close, where no work commit
+exists to precede it.
 
 Stage the handoff note and laurel entry, then commit them as session artifacts:
 

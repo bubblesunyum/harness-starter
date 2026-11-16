@@ -168,7 +168,13 @@ file the rest as beads, and say plainly what you left and why.
   filed in the same note or a memory so the next round's budget is a
   measurement, not a guess.
 - Close with `scripts/h wrap-up` — it settles the ledger, runs the gate,
-  and leaves the handoff note for the next session.
+  and leaves the handoff note for the next session. The close ends on the
+  commit, period: all closes, notes, and remembers go through wrap-up's
+  flags, the note rides `--note-file`, and zero `bd` writes and zero file
+  edits happen after the commit — push is the sole exception (Dolt ref, not
+  the tree) — prove it with `git status` before signing
+  off. Anything that moves afterwards is a new round, with its own bead and
+  its own gate.
 
 ## Budget
 

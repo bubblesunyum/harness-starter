@@ -26,12 +26,12 @@
     "scripts/agent.py": "c5991a16467704a4"
   },
   ".claude/skills/handoff/SKILL.md": {
-    "doc": "f1b9853a921a68d8",
+    "doc": "6bdb18b8f9e73cfa",
     "scripts/brief.sh": "530bab9ec7b334d7",
     "scripts/wrap-up.sh": "906e8be2a8e2cff7"
   },
   ".claude/skills/orchestrate/SKILL.md": {
-    "doc": "151b0369088d9943",
+    "doc": "7ce8954ba2fc7812",
     "scripts/agent.py": "02a95c9c8ac9c672",
     "scripts/brief.sh": "530bab9ec7b334d7",
     "scripts/review.sh": "f45f70fd2fe228b5",

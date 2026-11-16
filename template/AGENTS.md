@@ -168,7 +168,8 @@ read, and apply its voice there.
 ## Closing a session
 
 Settle the ledger, run the gate, commit, and leave a note for whoever wakes up
-next. The `handoff` skill has the procedure.
+next — the close ends on the commit, period: nothing moves after it except
+`ledger-push` (Dolt ref, not the tree). The `handoff` skill has the procedure.
 
 ---
 
