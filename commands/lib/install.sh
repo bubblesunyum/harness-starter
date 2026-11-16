@@ -7,13 +7,14 @@
 # carry the shared contract — or `migrate` misclassifies a file `add` wrote,
 # which is a worse lie than saying nothing.
 
-# Seeds vs data vs overlays have one source of truth: the three predicates
-# below. Everything else — the reference file list, the migrate classifier —
+# Seeds vs data vs overlays have one source of truth: the seed list in
+# harness_is_seed below. Data and overlays exclude seeds first, so no path is
+# ever two of these at once — one list to update, not three to keep in
+# agreement. Everything else — the reference file list, the migrate classifier —
 # derives from these, never from a second list.
 # Files the installer copies byte-for-byte and never compares. Three different
 # reasons, all meaning "a difference here is not drift":
 #   dashboard/vendor/*   third-party assets, copied whole, no substitution
-#   dashboard.toml       project-owned run buttons; installed once, never touched
 #   *.gitkeep            empty by definition
 #   harness/laurels.jsonl  a log the project appends to; the template ships it empty
 #   harness/diverged.txt   the acknowledged-fork list; the project edits it,
@@ -21,8 +22,12 @@
 #   .claude/context.lock   doc hashes; the template's covers the shared docs,
 #                          and a project's own bless adds its docs to it
 harness_is_data() {
+  # Seeds win: dashboard.toml is a seed, and without this guard it would sit
+  # in two predicates — one edit to the seed list would then silently change
+  # what this matches.
+  harness_is_seed "$1" && return 1
   case "$1" in
-    dashboard/vendor/*|dashboard.toml|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt|.claude/context.lock) return 0 ;;
+    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt|.claude/context.lock) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -30,7 +35,8 @@ harness_is_data() {
 # Seeds: the files `harness add` writes once and the project then owns. Only
 # seeds may carry a fill-in block — the gate's contract-split probe fails on
 # one in any other template file. One list here, not read off content: a list
-# goes stale toward false quiet, never toward false alarms.
+# goes stale toward false quiet, never toward false alarms. The one list the
+# other two predicates defer to — a path named here is never data or overlay.
 harness_is_seed() {
   case "$1" in
     harness/seat.md|AGENTS.local.md|scripts/verify.steps.sh|scripts/review.scope.sh|dashboard.toml) return 0 ;;
@@ -67,6 +73,9 @@ harness_is_customised() {
 #   scripts/review.scope.sh   what a review may see, sourced by review.sh
 #   AGENTS.local.md           additive project guidance, read beside AGENTS.md
 harness_is_overlay() {
+  # Every overlay file is also a seed, and the seed wins: without this guard
+  # the same path is both, and the predicates stop being disjoint.
+  harness_is_seed "$1" && return 1
   case "$1" in
     scripts/verify.steps.sh|scripts/review.scope.sh|AGENTS.local.md) return 0 ;;
     *) return 1 ;;
@@ -163,6 +172,7 @@ harness_set_manual_export_policy() {
 # and a fix that shipped in the starter never arrived.
 harness_is_contract() {
   local rel="$1" src="$2"
+  harness_is_seed "$rel" && return 1
   harness_is_data "$rel" && return 1
   harness_is_overlay "$rel" && return 1
   harness_is_customised "$src" && return 1
