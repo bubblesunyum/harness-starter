@@ -1251,3 +1251,50 @@ if bad:
     sys.exit(1)
 PYEOF'
 
+# Closed and backlog are mutually exclusive: a closed bead is finished work,
+# not shelved work, so it never renders in the backlog strip (ledger_state
+# seeds backlog_ids open-only) and never counts as ready. bd itself keeps the
+# label on close, and no hook may strip it (hooks are not harness-owned), so
+# the gate fails the bead instead — closing must clear backlog, or drop it by
+# hand. A fast step, not a probe: one read-only `bd list`, the same command
+# the prefix lookup trusts never to import, so this also runs in the ledger
+# lane where a close-only diff would otherwise skip every probe. Own labels
+# only: an open child of a shelved parent stays shelved by inheritance without
+# carrying the label itself.
+step "no closed bead carries backlog" bash -c '
+  python3 - <<PYEOF || exit 1
+import json
+import os
+import subprocess
+import sys
+try:
+    out = subprocess.run(
+        ["bd", "list", "--json", "--all", "--limit", "0"],
+        capture_output=True, text=True)
+except FileNotFoundError:
+    print("no bd here, skipping")
+    sys.exit(0)
+if out.returncode != 0:
+    if not os.path.isdir(".beads/embeddeddolt"):
+        print("no live ledger, skipping")
+        sys.exit(0)
+    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
+    print("error: cannot list the beads: " + err)
+    sys.exit(1)
+try:
+    issues = json.loads(out.stdout or "[]")
+except ValueError:
+    print("error: cannot read the bead list")
+    sys.exit(1)
+bad = sorted(
+    (issue.get("id", "?") for issue in issues
+     if (issue.get("status") or "open") == "closed"
+     and "backlog" in (issue.get("labels") or [])))
+if bad:
+    print("error: closed beads still carry the backlog label — closed and backlog are mutually exclusive:")
+    for line in bad:
+        print("  - " + line)
+    print("clear it on close (bd label remove <id> backlog), or drop the label by hand")
+    sys.exit(1)
+PYEOF'
+
