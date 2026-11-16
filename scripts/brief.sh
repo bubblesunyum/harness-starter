@@ -113,7 +113,7 @@ brief() {
     2>/dev/null > "$ready_json" || return 0
 
   python3 - "$READY_SHOWN" "$ROOT" "$ready_json" "$HARNESS" <<'PY'
-import json, os, re, subprocess, sys, glob, datetime
+import json, os, re, socket, subprocess, sys, glob, datetime
 
 shown = int(sys.argv[1])
 root = sys.argv[2]
@@ -361,12 +361,67 @@ def ledger_push():
               "--check")
     return out.strip() or None
 
+# --- the one board ------------------------------------------------------
+# There is exactly one dashboard, run from the harness-starter checkout. A
+# project running by reference (HARNESS outside ROOT) names its URL here when
+# that board is live, so a session working in the project can still find it.
+# Copy installs and the starter itself stay silent: harness == root there.
+# Liveness is read off the board's /tmp claim file (see dashboard.py
+# claim_file: the port rides in the filename, the root and pid in the JSON),
+# never by importing dashboard.py. Nothing here may raise: an uncaught
+# exception prints no brief at all.
+def board_line():
+    try:
+        if harness == root or harness.startswith(root + os.sep):
+            return None
+        checkout = os.path.dirname(harness)
+        # Bounded: each stale claim costs up to the 0.5s probe below, and /tmp
+        # accumulates them. The cap applies to THIS checkout's claims only —
+        # other checkouts' files are cheap to skip and must not crowd it out.
+        mine = []
+        for path in sorted(glob.glob("/tmp/*-dashboard-*.json")):
+            try:
+                c = json.load(open(path))
+            except (OSError, ValueError):
+                continue
+            if isinstance(c, dict) and c.get("root") == checkout:
+                mine.append(path)
+        for path in mine[:20]:
+            try:
+                port = int(path.rsplit("-", 1)[1].rsplit(".", 1)[0])
+            except ValueError:
+                continue
+            try:
+                claim = json.load(open(path))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(claim, dict) or claim.get("root") != checkout:
+                continue
+            pid = claim.get("pid")
+            if isinstance(pid, int):
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    continue
+            try:
+                probe = socket.create_connection(("127.0.0.1", port), timeout=0.5)
+                probe.close()
+            except OSError:
+                continue
+            return f"board: http://localhost:{port}/ (starter board live)"
+    except (OSError, ValueError, socket.error):
+        pass
+    return None
+
 out = [s for s in (seat(), identity(), laurel(), handoff()) if s]
 out.append(f"ledger: {counts.get('open_issues', 0)} open, "
            f"{len(ready)} ready, {len(active)} in progress")
 push = ledger_push()
 if push:
     out.extend(push.splitlines())
+found = board_line()
+if found:
+    out.append(found)
 if active:
     out.append("in progress:")
     out += [line(i) for i in active]

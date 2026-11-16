@@ -105,11 +105,9 @@ codex = json.load(open(sys.argv[2]))
 starts = settings["hooks"]["SessionStart"][0]["hooks"]
 assert starts[0]["command"] == 'cd "$CLAUDE_PROJECT_DIR" && scripts/h session --hook', starts[0]
 assert starts[0]["timeout"] == 60, starts[0]
-cmds = [h["command"] for group in settings["hooks"]["SessionStart"] for h in group["hooks"]]
-cmds += [h["command"] for group in settings["hooks"]["Stop"] for h in group["hooks"]]
-cmds += [h["command"] for group in settings["hooks"]["SessionEnd"] for h in group["hooks"]]
-assert 'cd "$CLAUDE_PROJECT_DIR" && scripts/h dashboard up' in cmds, cmds
-assert 'cd "$CLAUDE_PROJECT_DIR" && scripts/h dashboard down' in cmds, cmds
+cmds = [h["command"] for group in settings["hooks"].values() for entry in group for h in entry["hooks"]]
+assert 'cd "$CLAUDE_PROJECT_DIR" && scripts/h session --hook' in cmds, cmds
+assert not [c for c in cmds if "dashboard" in c], "a dashboard hook survived in the stubs: %s" % (cmds,)
 assert settings["permissions"] == {"allow": ["Bash(scripts/h:*)"]}, settings.get("permissions")
 assert "bd prime" not in open(sys.argv[1]).read(), "bd prime survived in settings.json"
 centries = [h["command"] for group in codex["hooks"]["SessionStart"] for h in group["hooks"]]

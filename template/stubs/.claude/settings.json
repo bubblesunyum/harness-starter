@@ -8,40 +8,8 @@
             "type": "command",
             "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h session --hook",
             "timeout": 60
-          },
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard up",
-            "timeout": 30,
-            "statusMessage": "bringing up the harness dashboard"
           }
         ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard up",
-            "async": true,
-            "timeout": 120,
-            "statusMessage": "bringing up the harness dashboard"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard down",
-            "timeout": 15,
-            "statusMessage": "stopping the harness dashboard"
-          }
-        ],
-        "matcher": ""
       }
     ]
   },

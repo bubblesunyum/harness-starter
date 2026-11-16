@@ -3,11 +3,14 @@
 
     python3 scripts/test-dashboard-switch.py
 
-The switch endpoint only lands on a checkout whose page already speaks switch
-(the marker in template/dashboard/index.html), and the page's peer tabs must
-always offer the way back. What's under test: switch_capable's truth table,
-switch_root's move-or-leave-untouched contract, and the way-back shape in the
-template page. Chrome-free and offline — the page is read as text.
+There is one board, run from the harness-starter checkout, and its page is
+always the board's own: switching to a checkout never needs a page there.
+So the switch endpoint lands on any sibling checkout that runs the harness
+(copied or referenced), and the page's peer tabs always offer the way back.
+What's under test: switch_capable's truth table, sibling discovery of both
+install shapes, switch_root's move-or-leave-untouched contract, and the
+way-back shape in the template page. Chrome-free and offline — the page is
+read as text.
 """
 
 import importlib.util
@@ -43,7 +46,8 @@ BUSY_CHECK = r"startingPeerRoot\s*&&\s*\w+\.root\s*===\s*startingPeerRoot"
 
 
 class SwitchCapableTests(unittest.TestCase):
-    """The marker gate: a board is switchable only if its page speaks switch."""
+    """The marker gate: a checkout is switchable when the board's own page
+    speaks switch. The target carries no page of its own to check."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="switch capable ", dir=SCRATCH)
@@ -63,12 +67,17 @@ class SwitchCapableTests(unittest.TestCase):
         self.write_page(f"<script>fetch('{MARKER}', {{method: 'POST'}})</script>")
         self.assertTrue(dashboard.switch_capable(str(self.root)))
 
-    def test_markerless_page_is_not_capable(self):
+    def test_markerless_page_is_capable(self):
+        # One board, one page: a checkout whose own page predates the switch
+        # (or has none at all) is still viewed through the board's page.
         self.write_page("<h1>a board from before the switch</h1>")
-        self.assertFalse(dashboard.switch_capable(str(self.root)))
+        self.assertTrue(dashboard.switch_capable(str(self.root)))
 
-    def test_missing_page_is_not_capable(self):
-        self.assertFalse(dashboard.switch_capable(str(self.root)))
+    def test_missing_page_is_capable(self):
+        self.assertTrue(dashboard.switch_capable(str(self.root)))
+
+    def test_missing_checkout_is_not_capable(self):
+        self.assertFalse(dashboard.switch_capable(str(self.root / "nowhere")))
 
 
 class SwitchRootTests(unittest.TestCase):
@@ -81,11 +90,33 @@ class SwitchRootTests(unittest.TestCase):
         self.root = parent / "here"
         self.markerless = parent / "p1"
         self.peer = parent / "p2"
+        self.ref = parent / "p3"
+        self.fresh = parent / "p4"
         # sibling_roots() lists children of ROOT.parent holding the harness,
-        # so every fake checkout needs scripts/dashboard.py to be seen at all.
+        # so every fake checkout needs its install shape to be seen at all:
+        # copied installs carry scripts/dashboard.py, reference installs the
+        # scripts/h finder — with or without a ledger yet.
         for r in (self.root, self.markerless, self.peer):
             (r / "scripts").mkdir(parents=True)
             (r / "scripts" / "dashboard.py").write_text("# fake checkout\n")
+        (self.ref / "scripts").mkdir(parents=True)
+        (self.ref / "scripts" / "h").write_text("# fake finder\n")
+        (self.ref / ".beads").mkdir()
+        # A fresh `add --reference` project: the finder, no ledger yet.
+        (self.fresh / "scripts").mkdir(parents=True)
+        (self.fresh / "scripts" / "h").write_text("# fake finder\n")
+        # switch_root publishes the viewed project through the environment;
+        # keep that inside the tests so the real env survives them.
+        saved = {k: os.environ.get(k) for k in ("HARNESS_PROJECT", "HARNESS_ROOT")}
+
+        def restore():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        self.addCleanup(restore)
         (self.peer / "dashboard").mkdir()
         (self.peer / "dashboard" / "index.html").write_text(
             f"<script>fetch('{MARKER}', {{method: 'POST'}})</script>")
@@ -122,6 +153,52 @@ class SwitchRootTests(unittest.TestCase):
         self.assertEqual(rows[0][0], str(dashboard.MEMORY_DIR / "x.md"))
         self.assertEqual(rows[1][0], str(Path.home() / "elsewhere.md"))
 
+    def test_undispatched_switch_hands_children_the_viewed_project(self):
+        # A board started directly (`dashboard.py up`, no env) must still hand
+        # children the viewed checkout: budget's brief runs with HARNESS_PROJECT
+        # naming the reference project, which carries no brief.sh of its own.
+        with mock.patch.dict(os.environ):
+            os.environ.pop("HARNESS_PROJECT", None)
+            os.environ.pop("HARNESS_ROOT", None)
+            self.assertEqual(dashboard.switch_root({"root": str(self.ref)}), {"ok": True})
+            self.assertEqual(os.environ["HARNESS_PROJECT"], str(self.ref))
+            self.assertEqual(os.environ["HARNESS_ROOT"], str(dashboard.HARNESS))
+            seen = {}
+
+            def fake_run(*args, **kw):
+                seen["script"] = args[1] if len(args) > 1 else ""
+                seen["project"] = os.environ.get("HARNESS_PROJECT")
+                return ""
+
+            saved_budget = dict(dashboard._budget)
+            self.addCleanup(lambda: dashboard._budget.update(saved_budget))
+            with mock.patch.object(dashboard, "run", side_effect=fake_run):
+                dashboard._budget["data"] = None
+                data = dashboard.budget([], [])
+            self.assertEqual(seen["project"], str(self.ref))
+            self.assertTrue(seen["script"].endswith("brief.sh"))
+            self.assertEqual(data["brief_tokens"], 0)
+
+    def test_peer_build_reads_the_board_page_once(self):
+        # The marker is the board's own capability: one read per build, not
+        # one per peer.
+        reads = []
+        real_read_text = Path.read_text
+
+        def counting(self, *args, **kwargs):
+            if self.name == "index.html":
+                reads.append(str(self))
+            return real_read_text(self, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", counting), \
+             mock.patch.object(dashboard, "live_claims", return_value={}), \
+             mock.patch.object(dashboard, "sibling_roots",
+                               return_value=[self.markerless, self.peer, self.ref]), \
+             mock.patch.object(dashboard, "project_name", return_value="Here"):
+            dashboard.build_peers()
+        self.assertEqual(len(reads), 1)
+        self.assertTrue(reads[0].endswith("dashboard/index.html"))
+
     def test_dispatched_switch_hands_children_the_new_project(self):
         # A board started through scripts/h carries HARNESS_PROJECT, which its
         # children (brief, verify, task buttons) read instead of the globals.
@@ -131,13 +208,17 @@ class SwitchRootTests(unittest.TestCase):
             self.assertEqual(dashboard.harness_script("x.sh").parent.parent,
                              dashboard.HARNESS)
 
-    def test_peer_payload_marks_markerless_sibling_incapable(self):
+    def test_peer_payload_marks_every_sibling_capable(self):
+        # The page is the board's own, so capability no longer depends on the
+        # target's page: a markerless sibling and a reference sibling without
+        # any page at all are both listed as switchable.
         with mock.patch.object(dashboard, "live_claims", return_value={}), \
-             mock.patch.object(dashboard, "sibling_roots", return_value=[self.markerless, self.peer]), \
+             mock.patch.object(dashboard, "sibling_roots", return_value=[self.markerless, self.peer, self.ref]), \
              mock.patch.object(dashboard, "project_name", return_value="Here"):
             peers = {p["root"]: p for p in dashboard.build_peers()["peers"]}
         self.assertTrue(peers[str(self.peer)]["switch_capable"])
-        self.assertFalse(peers[str(self.markerless)]["switch_capable"])
+        self.assertTrue(peers[str(self.markerless)]["switch_capable"])
+        self.assertTrue(peers[str(self.ref)]["switch_capable"])
 
     def test_live_external_checkout_is_not_advertised_as_switchable(self):
         outside = Path(tempfile.mkdtemp(prefix="external live "))
@@ -150,6 +231,22 @@ class SwitchRootTests(unittest.TestCase):
              mock.patch.object(dashboard, "project_name", return_value="Here"):
             peers = {p["root"]: p for p in dashboard.build_peers()["peers"]}
         self.assertFalse(peers[str(outside)]["switch_capable"])
+
+    def test_reference_sibling_is_discovered_and_switchable(self):
+        # A project running by reference (finder + ledger, no dashboard of
+        # its own) is listed and lands like any other checkout.
+        self.assertIn(self.ref, dashboard.sibling_roots())
+        res = dashboard.switch_root({"root": str(self.ref)})
+        self.assertEqual(res, {"ok": True})
+        self.assertEqual(dashboard.ROOT, self.ref)
+
+    def test_reference_without_a_ledger_is_listed_and_switchable(self):
+        # A fresh `add --reference` project carries the finder but no ledger
+        # yet: it lists, and switching lands instead of "unknown checkout".
+        self.assertIn(self.fresh, dashboard.sibling_roots())
+        res = dashboard.switch_root({"root": str(self.fresh)})
+        self.assertEqual(res, {"ok": True})
+        self.assertEqual(dashboard.ROOT, self.fresh)
 
     def assert_untouched(self, payload, error):
         before_root = dashboard.ROOT
@@ -165,9 +262,12 @@ class SwitchRootTests(unittest.TestCase):
     def test_unknown_root_is_refused(self):
         self.assert_untouched({"root": str(self.root.parent / "nowhere")}, "unknown checkout")
 
-    def test_markerless_sibling_is_refused(self):
-        self.assert_untouched({"root": str(self.markerless)},
-                              "checkout does not support switching")
+    def test_markerless_sibling_switches(self):
+        # The page is the board's own, so a sibling whose page predates the
+        # switch (or has none) still lands.
+        res = dashboard.switch_root({"root": str(self.markerless)})
+        self.assertEqual(res, {"ok": True})
+        self.assertEqual(dashboard.ROOT, self.markerless)
 
 
 class WayBackTests(unittest.TestCase):

@@ -75,6 +75,12 @@ import harness_paths
 ROOT, HARNESS, harness_script = harness_paths.resolve(
     ROOT, Path(__file__).resolve().parent.parent)
 
+# The checkout this board was started in, frozen before any switch re-points
+# ROOT. Runtime state the board writes (state.json, the launch entry, shot
+# fixtures) lives here — never in HARNESS (which is template/ when dispatched)
+# and never in a viewed project, which must gain no files.
+BOARD_ROOT = ROOT
+
 
 def _bd_prefix():
     """The ledger's bead prefix, asked of the ledger itself at runtime — the
@@ -2097,7 +2103,10 @@ def cached_state():
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
-        super().__init__(*a, directory=str(ROOT / "dashboard"), **kw)
+        # The page is always the board's own, whatever checkout is viewed: a
+        # switch re-points ROOT at another project, and serving its page would
+        # strand the tab bar with no way back. HARNESS never moves on switch.
+        super().__init__(*a, directory=str(HARNESS / "dashboard"), **kw)
 
     def do_POST(self):
         # The page can only ask for a task by name; the command behind that name
@@ -2340,26 +2349,46 @@ def live_claims():
     return found
 
 
+# The string this board's own page must contain before its peer tabs switch
+# anywhere. The served page is always the board's own, whatever is viewed, so
+# the marker is this board's capability — no target page is ever checked.
+SWITCH_MARKER = "dashboards/switch"
+
+
+def _is_checkout(d):
+    """A directory that runs this harness, by copy or by reference: a copied
+    install carries its own scripts/dashboard.py, a reference install the
+    scripts/h finder. The ledger is not required — a fresh `add --reference`
+    project lists before its first bead exists."""
+    if (d / "scripts" / "dashboard.py").is_file():
+        return True
+    return (d / "scripts" / "h").is_file()
+
+
 def sibling_roots():
     """The checkouts beside this one — children of the parent directory that
-    run this same harness. Sorted and capped: a home directory holds dozens
-    of checkouts and the board only has room to name them."""
+    run this same harness, copied or referenced. Sorted and capped: a home
+    directory holds dozens of checkouts and the board only has room to name
+    them."""
     try:
         children = sorted((d for d in ROOT.parent.iterdir()), key=lambda d: d.name)
     except OSError:
         return []
-    return [d for d in children
-            if d.is_dir() and (d / "scripts" / "dashboard.py").is_file()][:50]
+    return [d for d in children if d.is_dir() and _is_checkout(d)][:50]
 
 
 def build_peers():
-    """This board and every board beside it: live ones with ports, quiet ones
-    without. Self is always in the list and always live — the board answering
-    is proof enough it is serving."""
+    """This board and every checkout beside it: live ones with ports, quiet
+    ones without. Self is always in the list and always live — the board
+    answering is proof enough it is serving."""
     claims = live_claims()
     siblings = sibling_roots()
     sibling_paths = {str(d) for d in siblings}
     switch_targets = sibling_paths | {str(ROOT)}
+    # One read: the marker is this board's own capability, and every candidate
+    # below is already a directory — siblings by construction, claims by
+    # live_claims — so per peer only the allowlist is left to check.
+    speaks = board_speaks_switch()
     own_port = _bound_port["port"]
     if own_port is None:
         own_port = claims.get(str(ROOT))
@@ -2371,9 +2400,10 @@ def build_peers():
             "port": port,
             "url": f"http://localhost:{port}/",
             "live": True,
-            # Per-peer capability so the page greys out boards that predate
-            # the switch marker instead of stranding their tabs.
-            "switch_capable": root in switch_targets and switch_capable(root),
+            # Per-peer capability so the page greys out tabs the board cannot
+            # land on instead of stranding them: anything off the switch
+            # allowlist, or a board whose own page predates the marker.
+            "switch_capable": speaks and root in switch_targets,
         }
     for d in siblings:
         if str(d) == str(ROOT) or str(d) in by_root:
@@ -2384,7 +2414,7 @@ def build_peers():
             "port": None,
             "url": "",
             "live": False,
-            "switch_capable": str(d) in switch_targets and switch_capable(str(d)),
+            "switch_capable": speaks and str(d) in switch_targets,
         }
     if str(ROOT) not in by_root:
         by_root[str(ROOT)] = {
@@ -2399,10 +2429,25 @@ def build_peers():
     return {"self": str(ROOT), "peers": peers}
 
 
-# The string a sibling board's page must contain to be switched to. A board
-# from before the switch speaks only `start`, so landing there would strand
-# the tab bar with no way back — every listed tab must round-trip.
-SWITCH_MARKER = "dashboards/switch"
+def board_speaks_switch():
+    """Whether this board's own page offers peer tabs. Read once per peer
+    build, not once per peer: the served page never depends on the target."""
+    try:
+        return SWITCH_MARKER in (HARNESS / "dashboard" / "index.html").read_text(errors="ignore")
+    except OSError:
+        return False
+
+
+def switch_capable(root):
+    """Whether `root` can be switched to: an existing checkout viewed through
+    a board whose own page speaks switch. The target carries no page to check
+    — the page is always this board's own."""
+    try:
+        if not Path(root).is_dir():
+            return False
+    except OSError:
+        return False
+    return board_speaks_switch()
 
 
 def _repoint_memory(member, old_mem):
@@ -2415,12 +2460,11 @@ def _repoint_memory(member, old_mem):
     return (pattern, origin, role, *cap)
 
 
-def switch_capable(root):
-    """Whether `root` can be switched to: its page already speaks `switch`."""
-    try:
-        return SWITCH_MARKER in (Path(root) / "dashboard" / "index.html").read_text(errors="ignore")
-    except OSError:
-        return False
+def _publish_project_env():
+    """Hand children the viewed checkout. Unconditional: a board started
+    directly carries no HARNESS_PROJECT until its first switch."""
+    os.environ["HARNESS_PROJECT"] = str(ROOT)
+    os.environ["HARNESS_ROOT"] = str(HARNESS)
 
 
 def switch_root(payload):
@@ -2437,6 +2481,7 @@ def switch_root(payload):
     if not root:
         return {"ok": False, "error": "root is empty"}
     if root == str(ROOT):
+        _publish_project_env()
         return {"ok": True}
     if root not in {str(d) for d in sibling_roots()}:
         return {"ok": False, "error": "unknown checkout"}
@@ -2448,9 +2493,11 @@ def switch_root(payload):
         # root, so the run button would keep running the old checkout's scripts.
         ROOT, HARNESS, harness_script = harness_paths.resolve(Path(root), HARNESS, env=False)
         # Children (brief, verify, task buttons) read the project from the
-        # environment, so a dispatched board must hand them the new one too.
-        if os.environ.get("HARNESS_PROJECT"):
-            os.environ["HARNESS_PROJECT"] = str(ROOT)
+        # environment, so every switch hands them the viewed checkout — not
+        # only a dispatched board that already carried one. A board started
+        # directly (`dashboard.py up`, no env) describes the starter until
+        # this runs.
+        _publish_project_env()
         _prefix = None
         MEMORY_DIR = Path.home() / ".claude/projects" / str(ROOT).replace("/", "-") / "memory"
         SYSTEM = [(name, blurb, [_repoint_memory(m, old_mem) for m in members])
@@ -2584,7 +2631,12 @@ def write_snapshot():
     # snapshot lands in a checkout whose board it doesn't describe.
     with _state_lock:
         data = state(fast=True)
-        out = ROOT / "dashboard/state.json"
+        # The snapshot lives with the board that started (BOARD_ROOT), never
+        # inside a viewed project: a switch re-points ROOT at another checkout,
+        # and the Stop hook must not create a dashboard/ dir there — and never
+        # in HARNESS, which is template/ when dispatched. Unswitched
+        # (BOARD_ROOT == ROOT) this is the same path as before.
+        out = BOARD_ROOT / "dashboard/state.json"
         out.parent.mkdir(exist_ok=True)
         out.write_text(json.dumps(data, indent=2))
     return out
@@ -2607,8 +2659,10 @@ def write_launch_config(port):
     rather than starting a second one. The port moves between checkouts and
     across restarts, so this is rewritten on every bind — a stale entry points
     the pane at someone else's dashboard, which is worse than no entry at all.
+    Beside the board that started (BOARD_ROOT), never the viewed checkout,
+    which must gain no files.
     """
-    path = ROOT / ".claude/launch.json"
+    path = BOARD_ROOT / ".claude/launch.json"
     config = {"version": "0.0.1", "configurations": []}
     if path.exists():
         try:
@@ -2902,7 +2956,10 @@ def _shot_peer_state(state, out, width, height):
     """Stage one PEER_SHOT_STATES capture on a throwaway fixture server and
     photograph it. Lone is a single checkout; the rest share an overflowing
     crowd, each with its own gesture from the scratch driver."""
-    scratch = ROOT / ".tmp" / "peer-shot-fixtures" / state
+    # Staged beside the board that started (BOARD_ROOT) — not the viewed
+    # checkout, which a switch re-points ROOT at, and not HARNESS, which is
+    # template/ when dispatched — so the fixtures never land where viewed.
+    scratch = BOARD_ROOT / ".tmp" / "peer-shot-fixtures" / state
     shutil.rmtree(scratch, ignore_errors=True)
     page = _peer_shot_source_page().read_text()
     head, sep, tail = page.rpartition("</body>")

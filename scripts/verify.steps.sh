@@ -20,6 +20,7 @@ probe_step "project contract and export policy" python3 scripts/test-contract-ov
 probe_step "finder resolution" bash scripts/test-finder.sh
 probe_step "contract split" bash scripts/test-contract-split.sh
 probe_step "reference install" bash scripts/test-reference-add.sh
+probe_step "migrate a copied install" bash scripts/test-migrate.sh
 
 step "shell parses" bash -c '
   set -e
@@ -42,6 +43,7 @@ step "shared opencode agents" python3 scripts/test-shared-agents.py
 step "context budget" python3 scripts/test-context-budget.py
 step "dashboard board regression" python3 scripts/test-dashboard-board.py
 step "dashboard switch regression" python3 scripts/test-dashboard-switch.py
+step "one dashboard across projects" python3 scripts/test-dashboard-one-board.py
 step "dashboard polling regression" node scripts/test-dashboard-polling.mjs
 
 # A throwaway repo for the probe steps below: `fresh_probe || exit 1`, then
