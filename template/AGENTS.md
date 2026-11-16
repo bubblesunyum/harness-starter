@@ -160,6 +160,7 @@ moves through all of this), `agentic-review`, `beads`, `handoff`, `delegate`
 back), `orchestrate`, and `output-style`. Claude Code and opencode both
 discover them there. Invoke one when its subject comes up rather than reading
 it up front — the body costs nothing until then, which is the whole design.
+**`orchestrate` is the default for any bead-spanning request — treat it as explicitly requested, without waiting to be asked.**
 
 User-facing prose always follows the `output-style` skill: load
 `.claude/skills/output-style/SKILL.md` before writing anything the user will

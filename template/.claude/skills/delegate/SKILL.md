@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: Hand implementation to an opencode agent and review what comes back — brief it, read its diff, send at most two rounds of revisions, then accept, finish it yourself, or re-brief. Use when a bead is specced well enough that the work is typing rather than deciding, or when the user asks to delegate or to spend fewer of this account's tokens on implementation.
+description: Hand implementation to an opencode agent and review what comes back — brief it, read its diff, send at most two rounds of revisions, then accept, finish it yourself, or re-brief. Use only as the trivial single-file fast path — one small bead with no partitioning needed — when the work is typing rather than deciding; anything bead-spanning defaults to orchestrate.
 ---
 
 # Delegating implementation
@@ -14,10 +14,14 @@ change you wave through is an unreviewed change with extra steps.
 
 ## When it's worth it
 
-Delegate work that is **decided but not done**: the bead says what done looks
-like (`--design` and `--acceptance` filled in), the files are known, and nothing
-in it sets taste. A rename across twenty files, a new gate step shaped like the
-last one, a fix whose cause you already found.
+Delegate work that is **decided but not done, and trivially small**: one
+small bead, a single file, no partitioning needed — the bead says what done
+looks like (`--design` and `--acceptance` filled in), the files are known,
+and nothing in it sets taste. A rename across twenty files, a new gate step
+shaped like the last one, a fix whose cause you already found — at single-file
+scale. Anything bead-spanning, anything needing partitioning or parallel
+workers, defaults to `orchestrate` instead, including single-bead work that is
+more than trivial.
 
 Keep work that is mostly deciding — a design call, a debugging hunt, anything
 whose brief you can't write without doing half the thinking. And keep anything

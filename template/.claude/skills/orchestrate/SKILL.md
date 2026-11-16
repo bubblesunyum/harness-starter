@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Run a multi-bead implementation round as PM — select and partition beads, spawn parallel implementers, gate once, review, and land follow-ups. Use when the user asks to orchestrate a batch of beads, run a wrap-up round, or fan work out to parallel implementers while keeping ledger, commits, gate, and reviews on one owner.
+description: Default for any bead-spanning request — run the implementation round as PM: select and partition beads, spawn implementers, gate once, review, and land follow-ups. The trigger is the request, not the ready count; single-bead requests also orchestrate as a one-worker round unless trivially small.
 ---
 
 # Orchestrating an implementation round
@@ -14,6 +14,15 @@ or a gate run per worker.
 Proven shape: N beads, N background implementers, one gate run, one
 review packet round, per-bead commits. Provenance for a specific round
 lives in its beads and commits, not here.
+
+## When to use — standing default
+
+`orchestrate` is the default for any bead-spanning request — treat it as
+explicitly requested, without waiting to be asked. The trigger is the
+request, not the ready count: N beads sitting in `bd ready` does not
+start a round. Single-bead requests also run as a one-worker round under
+this same contract unless trivially small; `delegate` is the trivial
+single-file fast path only.
 
 ## Inputs
 
@@ -31,7 +40,7 @@ Every round starts with three answers, from the user or your judgment:
 
 ## Phase 1 — Select and claim
 
-1. `scripts/h brief` first. It is the state: ready work, memory keys,
+1. `scripts/h brief` first — the `scripts/brief.sh` preflight. It is the state: ready work, memory keys,
    last session's note. Do not re-derive it by hand.
 2. Select from `bd ready` inside the focus areas, minus the excludes.
    Prefer beads whose acceptance is already written; the next step specs
@@ -142,6 +151,8 @@ file the rest as beads, and say plainly what you left and why.
 - Round accounting: per-worker spend vs cap, round total vs budget,
   filed in the same note or a memory so the next round's budget is a
   measurement, not a guess.
+- Close with `scripts/h wrap-up` — it settles the ledger, runs the gate,
+  and leaves the handoff note for the next session.
 
 ## Budget
 
@@ -163,7 +174,7 @@ that never existed.
 | Question | Answer |
 |---|---|
 | Who owns ledger, commits, gate, reviews? | Orchestrator, always. |
-| One implementer per tree (`delegate`) vs parallel? | `delegate` for single decided work; this skill for parallel same-tree rounds under the contract above. |
+| One implementer per tree (`delegate`) vs round? | `delegate` is the trivial single-file fast path only; anything bead-spanning — including single-bead work unless trivially small — runs under this skill. |
 | Fix or file mid-task? | Fix, unless significant enough for its own bead. |
 | Who fixes review findings? | Re-spawned implementers; orchestrator only when super small. |
 | Batched or per-bead commits? | Per-bead by default; batched only when super tightly coupled. |

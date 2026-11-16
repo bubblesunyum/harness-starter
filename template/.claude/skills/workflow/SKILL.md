@@ -36,7 +36,7 @@ bd ready → claim → build → scripts/h verify → review → commit → clos
    when the user says so, via `bd label remove <id> <label>`.
 2. **Claim it.** `bd update <id> --claim`. This is what makes the dashboard and
    the next session show the work as live rather than available.
-3. **Build it.** Normal work, under the taste in CLAUDE.md.
+3. **Build it.** Normal work, under the taste in CLAUDE.md — for any bead-spanning request default to `orchestrate` (a single bead runs as a one-worker round unless trivially small; N beads sitting in `bd ready` alone never starts a round).
 4. **Prove it.** `scripts/h verify` — the build and the tests behind one exit
    code; `scripts/verify.steps.sh` defines any `--full`-only checks. Don't ask the user to look at
    something you can check yourself: if the project has a way to drive the real
