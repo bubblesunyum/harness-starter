@@ -350,7 +350,7 @@ unverified; re-test a row before leaning on it after a tool upgrade.
 | Skills | Symlinked `.claude/skills` loads. `--plugin-dir` loads but is a per-run flag. Project-scope `extraKnownMarketplaces` is silently ignored; a user-scope marketplace works but writes global config. `--add-dir` exposes nothing. | `skills: ["<path>"]` in config, or a symlinked `.claude/skills` / `.agents/skills`. | `<repo>/.codex/skills`, `$CODEX_HOME/skills`, `~/.agents/skills`. |
 | Agents | Symlinked `.claude/agents` loads; plugin `agents/` loads. | File and directory symlinks under `.opencode/agent(s)/` now load (the older "cannot be symlinked" finding no longer holds on 2.0.19). `.claude/agents` is still ignored. Inline `{file:…}` loads but a missing target returns 500 for every run in the project. | not tested |
 | Session start | Project SessionStart hook runs an outside script; `~` and `$HOME` expand; it fires headless even in a never-trusted folder. | No hook. A plugin loaded from an outside path runs `setup()` at load; otherwise the "run the brief yourself" line. | `.codex/hooks.json` SessionStart did **not** fire under `codex exec` in four configurations; interactive unverified. Keep the manual-brief line. |
-| Running shared scripts | Unverified (CLI was logged out). Project `permissions.allow` rules are dropped in a never-trusted folder until the trust dialog is accepted. | Denied headless without a grant (exit 1); `permission.external_directory` with an absolute or `~` path allows it. | not tested |
+| Running shared scripts | Denied headless by default ("requires approval"); an allow rule naming the script lets it run. Project `permissions.allow` rules are dropped in a never-trusted folder until the trust dialog is accepted. | Denied headless without a grant (exit 1); `permission.external_directory` with an absolute or `~` path allows it. | not tested |
 | Harness absent | Missing import, marketplace, `--add-dir`: silent. Missing hook script: exit 127, session continues. | Missing instruction, skills path, dangling agent symlink: silent. Missing plugin: warning only. | Missing import: silent. |
 
 Also proved: a commit-msg shim that `exec`s the shared hook fails closed when
@@ -378,8 +378,10 @@ What this decides:
 - **Agent-run commands use an in-project path** (the resolver), so permission
   rules never name a path outside the repo.
 
-Unverified and owed to har-b5n8.4: Claude Code running an outside script and
-invoking a symlinked skill end to end (needs a logged-in CLI); whether skills
+A skill reached through a symlinked `.claude/skills` invokes end to end, and a
+headless Claude Code session confirms the outside `@`-import is not loaded.
+
+Unverified and owed to har-b5n8.4: whether skills
 symlinked by a SessionStart hook are discovered in that same first session;
 Codex interactive hooks; opencode `instructions[]` outside an ancestor
 `AGENTS.md`.
