@@ -53,6 +53,8 @@ and the same packet, outside the calling session. A non-zero exit is a reviewer
 that didn't run, not one that found nothing — spawn it natively instead.
 `reviewer-design` refused for lack of image support runs natively too.
 
+Reviewer runs through `scripts/h agent` carry the idle watchdog: a run silent past the idle limit is killed with exit 5 — check `scripts/h agent ps` for its age rather than waiting blind.
+
 Review a change that doesn't build yet and you'll get findings about the
 breakage instead of the design, so keep the order.
 

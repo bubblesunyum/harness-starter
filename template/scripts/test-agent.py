@@ -11,9 +11,11 @@ it asks for, how it reads the event stream, and when it refuses.
 import json
 import os
 import shutil
+import signal
 import sys
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -26,7 +28,7 @@ PINNED = {"model": OPENCODE_MODEL, "variant": OPENCODE_VARIANT}
 # Replays whatever $FAKE_EVENTS holds as `run` output, answers `export` with
 # $FAKE_ROUNDS user messages, and records its argv and the config it was given.
 FAKE_OPENCODE = """#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, time
 if len(sys.argv) > 1 and sys.argv[1] == "--version":
     print(os.environ.get("FAKE_VERSION_STDOUT", os.environ.get("FAKE_VERSION", "opencode v2.0.19")))
     if os.environ.get("FAKE_VERSION_STDERR"):
@@ -47,6 +49,7 @@ if sys.argv[1] == "models":
     sys.exit(int(os.environ.get("FAKE_MODELS_EXIT", "0")))
 sys.stdout.write(os.environ.get("FAKE_EVENTS", ""))
 sys.stderr.write(os.environ.get("FAKE_STDERR", ""))
+time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 """
 
@@ -123,7 +126,7 @@ class AgentTests(unittest.TestCase):
 
     def test_existing_config_content_is_merged_not_replaced(self):
         self.env["OPENCODE_CONFIG_CONTENT"] = '{"theme": "x", "agent": {"other": {"mode": "all"}}}'
-        self.agent("reviewer-taste", "go", events=text_event("ok"))
+        self.agent("reviewer-taste", "go do it", events=text_event("ok"))
         config = json.loads(self.calls()[0]["config"])
         self.assertEqual(config["theme"], "x")
         self.assertEqual(config["agent"]["other"]["mode"], "all")
@@ -139,7 +142,7 @@ class AgentTests(unittest.TestCase):
                     "agent": {"reviewer-taste": {"model": "go/cheap", "variant": "low"},
                               "general": {"model": "go/cheap"}},
                     "agents": {"explore": {"model": "go/cheap"}}})
-                self.agent(role, "go", events=text_event("ok"))
+                self.agent(role, "go do it", events=text_event("ok"))
                 config = json.loads(self.calls()[-1]["config"])
                 self.assertEqual(config["model"], OPENCODE_MODEL_ARG)
                 for settings in (*config["agent"].values(), *config["agents"].values()):
@@ -161,7 +164,7 @@ class AgentTests(unittest.TestCase):
     def test_every_role_runs_on_the_pin(self):
         for role in ("implement", "reviewer-taste", "reviewer-correctness"):
             with self.subTest(role=role):
-                out = self.agent(role, "go", events=text_event("done"))
+                out = self.agent(role, "go do it", events=text_event("done"))
                 self.assertEqual(out.returncode, 0, out.stderr)
                 self.assertIn(f"on {OPENCODE_MODEL} ({OPENCODE_VARIANT})", out.stderr)
                 argv = self.calls()[-1]["argv"]
@@ -174,7 +177,7 @@ class AgentTests(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.log.unlink(missing_ok=True)
                 self.roster.write_text(json.dumps({"implement": entry}))
-                out = self.agent("implement", "go", events=text_event("done"))
+                out = self.agent("implement", "go do it", events=text_event("done"))
                 self.assertEqual(out.returncode, 1)
                 self.assertIn(f"opencode runs only on {OPENCODE_MODEL}", out.stderr)
                 self.assertNotIn("run", [c["argv"][0] for c in self.calls()])
@@ -187,7 +190,7 @@ class AgentTests(unittest.TestCase):
                 if variant:
                     entry["variant"] = variant
                 self.roster.write_text(json.dumps({"reviewer-taste": entry}))
-                out = self.agent("reviewer-taste", "go", events=text_event("ok"))
+                out = self.agent("reviewer-taste", "go do it", events=text_event("ok"))
                 self.assertEqual(out.returncode, 1)
                 self.assertIn("scripts/h models ensure", out.stderr)
                 self.assertNotIn("run", [c["argv"][0] for c in self.calls()])
@@ -233,7 +236,7 @@ class AgentTests(unittest.TestCase):
         self.assertIn("no reply", out.stderr)
 
     def test_a_refused_permission_fails_but_keeps_the_reply(self):
-        out = self.agent("implement", "go", events=text_event("changed foo.py"),
+        out = self.agent("implement", "go do it", events=text_event("changed foo.py"),
                          stderr="\x1b[93m! \x1b[0mpermission requested: external_directory (/x/*); auto-rejecting\n")
         self.assertEqual(out.returncode, 4)
         self.assertEqual(out.stdout.strip(), "changed foo.py")
@@ -242,12 +245,12 @@ class AgentTests(unittest.TestCase):
 
     def test_only_the_final_step_is_the_reply(self):
         step = json.dumps({"type": "step_start", "sessionID": "ses_fake"}) + "\n"
-        out = self.agent("reviewer-taste", "go", events=(
+        out = self.agent("reviewer-taste", "go do it", events=(
             step + text_event("Let me read the packet.") + step + text_event("## Findings")))
         self.assertEqual(out.stdout.strip(), "## Findings")
 
     def test_a_failed_run_with_a_reply_says_it_was_discarded(self):
-        out = self.agent("reviewer-taste", "go", events=text_event("half"), exit="2")
+        out = self.agent("reviewer-taste", "go do it", events=text_event("half"), exit="2")
         self.assertEqual(out.returncode, 1)
         self.assertIn("exited 2", out.stderr)
         self.assertIn("discarded", out.stderr)
@@ -258,7 +261,7 @@ class AgentTests(unittest.TestCase):
                       '{"agent": {"reviewer-taste": {"permission": {"external_directory": "allow"}}}}'):
             with self.subTest(shape=shape):
                 self.env["OPENCODE_CONFIG_CONTENT"] = shape
-                out = self.agent("reviewer-taste", "go", events=text_event("ok"))
+                out = self.agent("reviewer-taste", "go do it", events=text_event("ok"))
                 self.assertEqual(out.returncode, 1)
                 self.assertNotIn("Traceback", out.stderr)
                 self.assertIn("OPENCODE_CONFIG_CONTENT", out.stderr)
@@ -348,6 +351,55 @@ class AgentTests(unittest.TestCase):
                          events=text_event("ok"))
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(), "ok")
+
+    def test_ctrl_c_kills_the_child_group_and_keeps_exit_130(self):
+        # Ctrl-C on the wrapper must not orphan the headless child: the wall
+        # cap died with the wrapper, so the group dies here instead.
+        env = dict(self.env, FAKE_LOG=str(self.log), FAKE_MODEL=OPENCODE_MODEL,
+                   FAKE_SLEEP="30", HARNESS_AGENT_IDLE_SECONDS="600",
+                   HARNESS_AGENT_HEARTBEAT_SECONDS="60")
+        proc = subprocess.Popen(
+            [sys.executable, str(self.root / "scripts/agent.py"),
+             "reviewer-taste", "go now please"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        try:
+            runs = self.root / ".tmp" / "agent-runs"
+            child = None
+            for _ in range(100):
+                files = list(runs.glob("*.json")) if runs.exists() else []
+                if files:
+                    child = json.loads(files[0].read_text()).get("child_pid")
+                    break
+                time.sleep(0.1)
+            self.assertIsNotNone(child, "no status file for the live run")
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                self.fail("agent did not exit after SIGINT")
+            self.assertEqual(proc.returncode, 130)
+            with self.assertRaises(OSError):
+                os.kill(child, 0)
+            self.assertEqual(list(runs.glob("*.json")), [])
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+    def test_non_finite_timeouts_are_refused(self):
+        # nan parses and compares False against everything, so without an
+        # explicit check it would silently disable the clock it was meant to set.
+        for name, bad in (("HARNESS_AGENT_IDLE_SECONDS", "nan"),
+                          ("HARNESS_AGENT_IDLE_SECONDS", "inf"),
+                          ("HARNESS_AGENT_HEARTBEAT_SECONDS", "-inf")):
+            with self.subTest(name=name, bad=bad):
+                self.env[name] = bad
+                try:
+                    out = self.agent("reviewer-taste", "go now please")
+                finally:
+                    del self.env[name]
+                self.assertEqual(out.returncode, 2)
+                self.assertIn("finite", out.stderr)
 
     def test_broken_shim_shadowing_path_still_fails_in_the_scripts_voice(self):
         bad = self.root / "badbin"

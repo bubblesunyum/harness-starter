@@ -3,18 +3,32 @@
 
     scripts/h agent <role> <message...>                   # a fresh session
     scripts/h agent <role> --session <id> <message...>    # one more round in it
+    scripts/h agent ps                                    # live runs and their age
+    scripts/h agent stop <run-id>                         # end one live run
 
     scripts/h agent reviewer-correctness "Review /tmp/x-review.md — adds a cache"
     scripts/h agent implement "har-abc: $(bd show har-abc)"
     scripts/h agent implement --session ses_123 "verify fails: missing import in foo.py"
 
 The reply goes to stdout. The session id, model and round go to stderr, as one
-line — the id is what a revision round needs.
+line — the id is what a revision round needs. A `-h`/`--help` anywhere after
+the role is usage, never a brief — it exits 2 without spawning anything.
 
 Exits 0 with a reply; 1 when the run failed and there is no reply to trust; 2 on
 a usage error; 3 when the session is past its revision cap, without running; 4
 when opencode refused a permission — the reply is still printed, but was
-written without what it asked for.
+written without what it asked for; 5 when the child went silent past the idle
+limit and was killed.
+
+A silent child is killed: no output or events for HARNESS_AGENT_IDLE_SECONDS
+(default 600) ends the run with exit 5, whatever the wall cap still allows.
+While it runs, a heartbeat line goes to stderr every
+HARNESS_AGENT_HEARTBEAT_SECONDS (default 120) with the elapsed time and the
+last activity, and .tmp/agent-runs/<run-id>.json carries the same for
+`agent.py ps` and `agent.py stop`. HARNESS_AGENT_RUNS_DIR overrides the dir
+(hermetic tests point it at a temp dir). An interrupted wrapper (Ctrl-C)
+kills the child's process group before exiting 130, so no headless run
+outlives the wrapper that was capping it.
 
 This is how a session in any tool — Claude Code included — hands work to a
 model that isn't its own: the packet or the brief is read in a separate
@@ -35,11 +49,15 @@ first three didn't, and each one re-reads the whole thread.
 """
 
 import json
+import math
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -60,6 +78,17 @@ MAX_ROUNDS = 3
 # hung provider is noticed before the calling session gives up on it.
 TIMEOUT_SECONDS = 45 * 60
 EXPORT_TIMEOUT_SECONDS = 60
+# No output or events for this long and the child is dead weight: kill it,
+# separate from the wall cap above (a chatty run may still use all 45 minutes).
+IDLE_TIMEOUT_SECONDS = 10 * 60
+# How often a running child says its age on stderr and refreshes its status.
+HEARTBEAT_SECONDS = 2 * 60
+# How often the wait loop re-checks the idle and wall clocks.
+POLL_SECONDS = 1.0
+# TERM-to-KILL patience when stopping a child or a silent one.
+KILL_GRACE_SECONDS = 10
+# A silent child was killed (exit 1 stays the failed run, 2 the usage error).
+IDLE_EXIT = 5
 
 IMPLEMENT_CONTRACT = """\
 You are a delegated implementer. Another agent wrote this brief, will review \
@@ -120,7 +149,8 @@ def require_opencode_v2():
 
 
 def parse_args(argv):
-    """(role, session or None, message)."""
+    """(role, session or None, message). `-h`/`--help` after the role is usage,
+    never a brief; only an empty message is refused."""
     if len(argv) < 2 or argv[0] in ("-h", "--help"):
         print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
         sys.exit(2)
@@ -129,6 +159,9 @@ def parse_args(argv):
         if len(rest) < 3:
             fail("--session needs an id and a message", 2)
         session, rest = rest[1], rest[2:]
+    if any(token in ("-h", "--help") for token in rest):
+        print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
+        sys.exit(2)
     message = " ".join(rest).strip()
     if not message:
         fail("an empty message — say what the role should do", 2)
@@ -307,6 +340,192 @@ def parse_events(stdout, session):
     return texts, errors, session_id
 
 
+def fmt_age(seconds):
+    """90 -> '1m30s': compact ages for heartbeats and `ps`."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+def _seconds_env(name, default):
+    """An env timeout override, or the default; garbage fails loudly rather
+    than silently stretching or shrinking a bound nobody can see."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        fail(f"{name}={raw!r} is not a number of seconds — unset it or fix it", 2)
+    if not math.isfinite(value):
+        # nan parses and compares False against everything, so without this
+        # a nan timeout silently disables the clock it was meant to set.
+        fail(f"{name}={raw!r} is not a finite number of seconds — unset it or fix it", 2)
+    if value <= 0:
+        fail(f"{name}={raw!r} is not positive — unset it or fix it", 2)
+    return value
+
+
+def runs_dir():
+    """Where live-run status files live: the project's .tmp/, overridden for
+    hermetic tests. The dir existing is load-bearing — `ps` reads it."""
+    override = os.environ.get("HARNESS_AGENT_RUNS_DIR", "").strip()
+    base = Path(override) if override else ROOT / ".tmp" / "agent-runs"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        fail(f"cannot make runs dir {base} ({exc})")
+    return base
+
+
+def write_status(path, **fields):
+    """Best-effort status refresh: losing it must never fail the run it
+    describes."""
+    try:
+        path.write_text(json.dumps(fields))
+    except OSError:
+        pass
+
+
+def _alive(pid):
+    """Whether a pid answers a signal — the liveness half of `ps`."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def live_runs():
+    """Live status dicts (each with run_id, elapsed, idle_for), pruning files
+    whose agent is gone — a killed session must not haunt `ps` forever."""
+    directory = runs_dir()
+    live, now = [], time.time()
+    for path in sorted(directory.glob("*.json")):
+        try:
+            info = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(info.get("agent_pid"), int) or not _alive(info["agent_pid"]):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        info["run_id"] = path.stem
+        info["elapsed"] = max(0.0, now - info.get("started_at", now))
+        info["idle_for"] = max(0.0, now - info.get("last_activity_at",
+                                                  info.get("started_at", now)))
+        live.append(info)
+    return live
+
+
+def cmd_ps():
+    """Every live run with its age: the answer to "is it stuck or working?"."""
+    live = live_runs()
+    if not live:
+        print("agent.py: no live runs", file=sys.stderr)
+        return 0
+    print("RUN ROLE SESSION ELAPSED IDLE PID")
+    for info in sorted(live, key=lambda i: i.get("started_at", 0)):
+        print(f"{info['run_id']} {info.get('role', '?')} "
+              f"{info.get('session') or '-'} {fmt_age(info['elapsed'])} "
+              f"{fmt_age(info['idle_for'])} {info.get('child_pid', '?')}")
+    return 0
+
+
+def _signal_group(pid, sig):
+    """A whole child group (grandchildren die too), or the child alone where
+    groups don't exist."""
+    killpg = getattr(os, "killpg", None)
+    if killpg is not None:
+        try:
+            killpg(pid, sig)
+            return
+        except OSError:
+            pass
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
+def cmd_stop(args):
+    """End one live run: TERM its group, KILL it when it lingers."""
+    if len(args) != 1 or args[0] in ("-h", "--help"):
+        print("usage: agent.py stop <run-id>  (full id or unique prefix; see `agent.py ps`)",
+              file=sys.stderr)
+        return 2
+    want = args[0]
+    matches = [i for i in live_runs()
+               if i["run_id"] == want or i["run_id"].startswith(want)]
+    if not matches:
+        print(f"agent.py: no live run {want} (`agent.py ps` lists live runs)",
+              file=sys.stderr)
+        return 1
+    if len(matches) > 1:
+        print(f"agent.py: {want!r} matches {len(matches)} runs — use the full id",
+              file=sys.stderr)
+        return 2
+    info = matches[0]
+    child = info.get("child_pid")
+    if not isinstance(child, int):
+        fail(f"run {info['run_id']} has no child pid recorded", 1)
+    _signal_group(child, signal.SIGTERM)
+    deadline = time.time() + KILL_GRACE_SECONDS
+    while time.time() < deadline and _alive(child):
+        time.sleep(0.5)
+    if _alive(child):
+        _signal_group(child, signal.SIGKILL)
+    print(f"agent.py: stopped {info['run_id']} ({info.get('role', '?')})",
+          file=sys.stderr)
+    return 0
+
+
+def _drain(stream, chunks, shared, sniff_session):
+    """One pipe's reader thread: bank every chunk, stamp the activity clock,
+    and (stdout only) pick up the session id from the event stream."""
+    buf = ""
+    try:
+        for chunk in iter(lambda: stream.read(65536), ""):
+            chunks.append(chunk)
+            shared["last_activity"] = time.time()
+            if not sniff_session:
+                continue
+            buf += chunk
+            *lines, buf = buf.split("\n")
+            for line in lines:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("sessionID"):
+                    shared["session_id"] = event["sessionID"]
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _kill_proc(proc):
+    """TERM a silent or walled child's group (grandchildren die too), KILL it
+    when it lingers past the grace period."""
+    _signal_group(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        _signal_group(proc.pid, signal.SIGKILL)
+        proc.wait()
+
+
 def require_pin(model, variant):
     """The last check before opencode is spawned: whatever the roster said,
     the run goes out on the pin or not at all. Redundant with model_for today,
@@ -316,9 +535,10 @@ def require_pin(model, variant):
              f"only on {OPENCODE_MODEL_ARG} (scripts/h models)")
 
 
-def run_agent(agent, model, variant, session, prompt):
+def run_agent(role, agent, model, variant, session, prompt):
     """(reply, session id, refused permissions) from one `opencode run`, or
-    fail loudly."""
+    fail loudly. Output is drained on threads so the wait loop can watch the
+    idle and wall clocks, heartbeat, and keep the status file fresh."""
     require_pin(model, variant)
     # -m carries the variant too, including for `implement`, which runs
     # opencode's own build agent with no file of ours at all. opencode 2
@@ -333,39 +553,119 @@ def run_agent(agent, model, variant, session, prompt):
     env = dict(os.environ)
     env["OPENCODE_CONFIG_CONTENT"] = (json.dumps(pin_config(inherited_config()))
                                       if agent == "build" else agent_config(agent))
+    idle_timeout = _seconds_env("HARNESS_AGENT_IDLE_SECONDS", IDLE_TIMEOUT_SECONDS)
+    heartbeat_every = _seconds_env("HARNESS_AGENT_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+    # Before spawning: a bad HARNESS_AGENT_RUNS_DIR must fail while no child
+    # exists, not orphan one while reporting the dir.
+    status_dir = runs_dir()
     try:
-        # `--`, or a message starting with "-" is read as a flag and dropped.
-        out = subprocess.run(command + ["--", prompt], capture_output=True, text=True,
-                             stdin=subprocess.DEVNULL, cwd=ROOT, env=env,
-                             timeout=TIMEOUT_SECONDS)
+        # A group of its own, so killing a silent run takes the grandchildren
+        # (opencode's tool processes) with it instead of orphaning them.
+        proc = subprocess.Popen(command + ["--", prompt], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                stdin=subprocess.DEVNULL, cwd=ROOT, env=env,
+                                start_new_session=(os.name == "posix"))
     except FileNotFoundError:
         fail("opencode is not on PATH or in ~/.opencode/bin — install it, set OPENCODE_BIN, "
              "or spawn the role natively")
-    except subprocess.TimeoutExpired:
+    except OSError as exc:
+        fail(f"opencode can't be run ({exc}) — check the install")
+    start = time.time()
+    shared = {"last_activity": start, "session_id": session}
+    out_chunks, err_chunks = [], []
+    readers = [threading.Thread(target=_drain, args=(proc.stdout, out_chunks, shared, True),
+                                daemon=True),
+               threading.Thread(target=_drain, args=(proc.stderr, err_chunks, shared, False),
+                                daemon=True)]
+    for reader in readers:
+        reader.start()
+    run_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + f"-{os.getpid()}"
+    status_path = status_dir / f"{run_id}.json"
+
+    def refresh_status():
+        write_status(status_path, run_id=run_id, role=role, agent=agent,
+                     agent_pid=os.getpid(), child_pid=proc.pid,
+                     session=shared["session_id"], started_at=start,
+                     last_activity_at=shared["last_activity"])
+
+    refresh_status()
+    outcome, next_beat = None, start + heartbeat_every
+    try:
+        while proc.poll() is None:
+            now = time.time()
+            if now - shared["last_activity"] >= idle_timeout:
+                outcome = "idle"
+                break
+            if now - start >= TIMEOUT_SECONDS:
+                outcome = "wall"
+                break
+            if now >= next_beat:
+                refresh_status()
+                beat = (f"agent.py: {role} still running — {fmt_age(now - start)} "
+                        f"elapsed, last output {fmt_age(now - shared['last_activity'])} ago")
+                if shared["session_id"]:
+                    beat += f" (session {shared['session_id']})"
+                print(beat, file=sys.stderr)
+                next_beat = now + heartbeat_every
+            time.sleep(POLL_SECONDS)
+        if outcome is not None:
+            _kill_proc(proc)
+        for reader in readers:
+            reader.join(timeout=30)
+    except KeyboardInterrupt:
+        # Ctrl-C must not orphan the headless child: the wall cap died with
+        # this wrapper, so kill the whole group here, then exit 130 — the
+        # same code a signal-killed process reports, not 0/1.
+        _kill_proc(proc)
+        print("agent.py: interrupted — killed the child group", file=sys.stderr)
+        sys.exit(130)
+    except BaseException:
+        # A bug above gets the same cleanup, then the original exit proceeds.
+        _kill_proc(proc)
+        raise
+    finally:
+        # A finished run is not a live one: `ps` must stop listing it.
+        try:
+            status_path.unlink()
+        except OSError:
+            pass
+    stdout_text, stderr_text = "".join(out_chunks), "".join(err_chunks)
+    if outcome == "idle":
+        where = f" (session {shared['session_id']})" if shared["session_id"] else ""
+        fail(f"no output for {fmt_age(idle_timeout)} — killed the silent run{where}; "
+             f"`opencode session list` shows where it got to", IDLE_EXIT)
+    if outcome == "wall":
         fail(f"no reply after {TIMEOUT_SECONDS // 60} minutes — "
              f"`opencode session list` shows where it got to")
 
-    texts, errors, session_id = parse_events(out.stdout, session)
+    texts, errors, session_id = parse_events(stdout_text, session)
     if errors:
         fail("opencode reported an error:\n  " + "\n  ".join(errors))
     reply = "\n\n".join(t.strip() for t in texts if t.strip())
     # Headless opencode answers every permission prompt with no, and the agent
     # carries on without whatever it asked for. A reviewer that couldn't open
     # the packet still replies — about something else.
-    refused = [strip_ansi(l) for l in out.stderr.splitlines() if "auto-rejecting" in l]
-    if out.returncode != 0 or not reply:
+    refused = [strip_ansi(l) for l in stderr_text.splitlines() if "auto-rejecting" in l]
+    if proc.returncode != 0 or not reply:
         # An empty reply is not a clean review. Say so rather than print
         # nothing, which the caller would read as "no findings".
-        tail = (out.stderr or out.stdout).strip().splitlines()[-5:]
+        tail = (stderr_text or stdout_text).strip().splitlines()[-5:]
         what = ("with no reply" if not reply
                 else "— its reply was discarded, since a failed run's half-answer "
                      "reads like a whole one")
-        fail(f"opencode exited {out.returncode} {what}"
+        fail(f"opencode exited {proc.returncode} {what}"
              + "".join(f"\n  {strip_ansi(l)}" for l in tail))
     return reply, session_id, refused
 
 
 def main(argv):
+    if argv[:1] == ["ps"]:
+        if len(argv) > 1:
+            print("usage: agent.py ps", file=sys.stderr)
+            return 2
+        return cmd_ps()
+    if argv[:1] == ["stop"]:
+        return cmd_stop(argv[1:])
     role, session, message = parse_args(argv)
     require_opencode_v2()
     agent = agent_for(role)
@@ -388,7 +688,7 @@ def main(argv):
     prompt = message
     if role == "implement" and not session:
         prompt = IMPLEMENT_CONTRACT + message
-    reply, session_id, refused = run_agent(agent, model, variant, session, prompt)
+    reply, session_id, refused = run_agent(role, agent, model, variant, session, prompt)
     print(reply)
     print(f"agent.py: {role} on {model} ({variant}) · session {session_id} · "
           f"round {round_number} of {MAX_ROUNDS}", file=sys.stderr)
