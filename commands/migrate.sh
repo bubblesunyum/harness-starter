@@ -99,7 +99,7 @@ files="$(harness_files_for "$HERE" "$target")" || exit 1
 # counterparts (.claude/settings.json, opencode.json, ...) left template/
 # when installs went by reference, but every copied install still carries them
 # and they still need replacing with the stub.
-MIGRATE_STUBS="AGENTS.md opencode.json .claude/settings.json .codex/hooks.json scripts/hooks/commit-msg"
+MIGRATE_STUBS="AGENTS.md opencode.json .claude/settings.json .codex/hooks.json scripts/hooks/commit-msg scripts/hooks/pre-commit"
 for stub_rel in $MIGRATE_STUBS; do
   printf '%s\n' "$files" | grep -qxF "$stub_rel" || files="$files
 $stub_rel"
@@ -586,6 +586,12 @@ migrate_append_ignore "$target" 'dashboard/state.json' \
   'The dashboard snapshot, rewritten on every poll — machine-local.' || exit 1
 migrate_append_ignore "$target" '.tmp/' \
   'Agent scratch — created here, removed when done, never committed.' || exit 1
+
+# The reference hook wiring: converted trees predate the pre-commit refresh and
+# carry no wiring for it, so --apply wires both hooks the way `add` does.
+# Idempotent — a second --apply only re-reports the wiring and writes
+# nothing, so a clean tree stays clean.
+harness_wire_all "$target"
 
 # Linked last, after every write above: bd init writes through links into the
 # shared checkout, so links must never predate a bd command. This runs none,

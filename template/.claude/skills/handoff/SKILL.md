@@ -16,9 +16,10 @@ and finish the piece first.
 ## The close
 
 Prefer `scripts/h wrap-up` over hand-ordering the steps below — it runs them
-in the one order that stays clean (ledger writes, export, verify, commit,
-push); nothing after the export may move the ledger — a stray `bd` write
-re-dirties the export and needs a fresh export plus a second gate run:
+in the order that stays clean (ledger writes, export, verify, commit, push).
+The pre-commit hook stages a fresh export on every commit, so the order is
+belt and braces; the manual export is the fast path and the gate check the
+backstop:
 
 ```bash
 scripts/h wrap-up -m "lowercase terse message" --bead <id> \

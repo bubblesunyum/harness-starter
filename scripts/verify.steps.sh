@@ -1096,6 +1096,50 @@ probe_step "a stale ledger export fails the gate naming the bead" bash -c '
   echo "$out" | grep -q "ok    ledger export" ||
     { echo "error: the gate still fails after a regen"; echo "$out"; exit 1; }'
 
+# The commit itself keeps the export fresh: a bead filed and closed (plus a
+# memory remembered) after the last regen, committed with no manual export,
+# must land a committed export that names the drift and carries memories —
+# and the worktree file must match it. Runs through the live hooks path
+# (.beads/hooks, where the install appends the refresh after bd's own block),
+# not just the .git/hooks delegation the commit-msg probe covers.
+probe_step "a commit refreshes the ledger export without a manual regen" bash -c '
+  golden_probe || exit 1
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "seed install fixture" >/dev/null 2>&1) ||
+    { echo "error: cannot seed-commit the install fixture"; exit 1; }
+  grep -qF "scripts/hooks/pre-commit" "$probe/.beads/hooks/pre-commit" 2>/dev/null ||
+    { echo "error: add never wired the pre-commit refresh into .beads/hooks"; exit 1; }
+  [ -x "$probe/scripts/hooks/pre-commit" ] ||
+    { echo "error: install produced no pre-commit hook logic"; exit 1; }
+  (cd "$probe" && bd q "probe bead for a hook refresh" >/dev/null 2>&1) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  bid=$(probe_json_field "$probe" id) || exit 1
+  [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
+  await_bead_ready "$probe" "$bid" || exit 1
+  (cd "$probe" && bd close "$bid" --reason "probe" >/dev/null 2>&1) ||
+    { echo "error: cannot close the probe bead"; exit 1; }
+  await_bead_closed "$probe" "$bid" || exit 1
+  (cd "$probe" && bd remember "probe hook refresh knowledge" >/dev/null 2>&1) ||
+    { echo "error: cannot remember a probe memory"; exit 1; }
+  echo "probe" > "$probe/probe-refresh.txt" || { echo "error: cannot dirty a probe file"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1) ||
+    { echo "error: cannot stage the probe work"; exit 1; }
+  hook="core.hooksPath=$probe/.beads/hooks"
+  (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe commit for $bid" >/dev/null 2>&1) ||
+    { echo "error: the commit with a stale export failed"; exit 1; }
+  (cd "$probe" && git show HEAD:.beads/issues.jsonl >"$probe/.probe-committed.jsonl" 2>/dev/null) ||
+    { echo "error: the commit carries no ledger export"; exit 1; }
+  grep -qF "$bid" "$probe/.probe-committed.jsonl" ||
+    { echo "error: the committed export missed the probe bead — pre-commit never refreshed"; exit 1; }
+  grep -q "probe hook refresh knowledge" "$probe/.probe-committed.jsonl" ||
+    { echo "error: the committed export missed the probe memory — refresh dropped --include-memories"; exit 1; }
+  cmp -s "$probe/.probe-committed.jsonl" "$probe/.beads/issues.jsonl" ||
+    { echo "error: the hook left the worktree export dirty"; exit 1; }
+  rm -f "$probe/.probe-committed.jsonl" ||
+    { echo "error: cannot clean the probe comparison file"; exit 1; }
+  out=$(probe_export_check "$probe" 2>&1)
+  echo "$out" | grep -q "ok    ledger export" ||
+    { echo "error: the gate still fails after a hook-refreshed commit"; echo "$out"; exit 1; }'
+
 # The delete half of the drift the export check exists for: a deleted bead
 # still sitting in the committed file fails the gate naming it, and the regen
 # clears it. Opens by pinning the har-67c trap — bare `bd delete` only

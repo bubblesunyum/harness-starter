@@ -1,0 +1,67 @@
+#!/bin/bash
+# The committed ledger export cannot go stale: regenerate it here, in
+# pre-commit, where staging still lands in the commit.
+#
+# A commit-msg hook cannot do this job: git fixes the tree before commit-msg
+# runs (proven on git 2.56), so a refresh there only dirties the working file
+# and the commit lands with the stale export. Pre-commit runs before the
+# tree is written, so `git add` here is inside the commit.
+#
+# Installed by pointing a pre-commit hook at this file. The logic lives in
+# scripts/ rather than in the hook directory itself because that directory is
+# managed by beads and gets rewritten on upgrade.
+#
+# Never blocks a commit: a broken ledger must strand nothing. A refresh that
+# fails says so loudly and the gate's export check keeps the drift visible.
+set -uo pipefail
+
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$top" || exit 0
+git_dir="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+
+# A merge, cherry-pick, revert or bisect owns the tree, and the export is one
+# of the things being merged. Leave it alone; the gate asks for a regen once
+# the operation resolves.
+[ -e "$git_dir/MERGE_HEAD" ] && exit 0
+[ -e "$git_dir/CHERRY_PICK_HEAD" ] && exit 0
+[ -e "$git_dir/REVERT_HEAD" ] && exit 0
+[ -e "$git_dir/BISECT_LOG" ] && exit 0
+
+# No live ledger here — a fresh clone carries the committed export without
+# the gitignored database behind it — or no bd at all: nothing to carry, so
+# nothing to prove, and said out of the way.
+command -v bd >/dev/null 2>&1 || exit 0
+[ -d .beads/embeddeddolt ] || exit 0
+
+# Never the importing commands here: bd config, info and stats auto-import a
+# stale .beads/issues.jsonl when the ledger looks stale to them, resurrecting
+# deleted beads (har-67c), while `bd export` never imports. The overrides pin
+# the same policy the installer persists, so an inherited environment cannot
+# defeat it for this one export.
+export BD_EXPORT_AUTO=false BD_IMPORT_AUTO=false
+tmp="$(mktemp .beads/.harness-precommit-XXXXXX)" || exit 0
+# A kill between the export and the move must never leave a temp file for a
+# later `git add -A` to sweep into a commit.
+trap 'rm -f "$tmp"' EXIT
+if ! bd export --include-memories -o "$tmp" >/dev/null 2>&1; then
+  rm -f "$tmp"
+  echo "  ! ledger export failed — committing without a refresh; scripts/h verify names the drift." >&2
+  exit 0
+fi
+# An empty fresh ledger has nothing to transport. Creating the export here
+# would demand a tracked file before the project has any bead work.
+if [ ! -s "$tmp" ] && [ ! -e .beads/issues.jsonl ]; then
+  rm -f "$tmp"
+  exit 0
+fi
+if [ -e .beads/issues.jsonl ] && cmp -s "$tmp" .beads/issues.jsonl; then
+  rm -f "$tmp"
+  exit 0
+fi
+# Through a temp file and rename only: a failed export must never truncate
+# the last good export.
+mv "$tmp" .beads/issues.jsonl || { rm -f "$tmp"; exit 0; }
+if ! git add -- .beads/issues.jsonl 2>/dev/null; then
+  echo "  ! refreshed .beads/issues.jsonl but cannot stage it — run git add on it and amend." >&2
+fi
+exit 0

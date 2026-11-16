@@ -281,11 +281,14 @@ else
   failcase "apply keeps the own skill" "own skill removed"
 fi
 stub_miss=""
-for stub in AGENTS.md opencode.json .codex/hooks.json scripts/hooks/commit-msg; do
+for stub in AGENTS.md opencode.json .codex/hooks.json scripts/hooks/commit-msg scripts/hooks/pre-commit; do
   cmp -s "$REPO/template/stubs/$stub" "$FIX/$stub" || stub_miss="$stub_miss $stub"
 done
 [ -x "$FIX/scripts/h" ] || stub_miss="$stub_miss scripts/h(not executable)"
 grep -q "scripts/h session" "$FIX/.claude/settings.json" 2>/dev/null || stub_miss="$stub_miss .claude/settings.json(no session hook)"
+if ! grep -qF 'scripts/hooks/pre-commit' "$FIX/.beads/hooks/pre-commit" 2>/dev/null; then
+  stub_miss="$stub_miss .beads/hooks/pre-commit(no pre-commit delegate)"
+fi
 if [ -z "$stub_miss" ]; then
   pass "apply writes the reference stubs"
 else
@@ -320,6 +323,34 @@ if "$FIX/scripts/h" verify >"$TMP/verify.log" 2>&1; then
   pass "h verify passes afterwards"
 else
   failcase "h verify passes afterwards" "non-zero exit: $(grep -m1 -E '^\s*(FAIL|!|✗)' "$TMP/verify.log" 2>/dev/null || tail -1 "$TMP/verify.log" 2>/dev/null)"
+fi
+
+# --- a commit on the converted tree refreshes the export without a regen ---
+# The pre-commit wiring migrate installed is the live path here: the
+# fixture's core.hooksPath points at .beads/hooks, the file migrate appended
+# to. Filing a bead dirties the export past the committed one; the commit
+# itself must carry the fresh export.
+if ! BID2="$(cd "$FIX" && bd create "post-migrate probe" --design "d" --acceptance "a" --silent 2>"$TMP/bead2.err")"; then
+  failcase "a commit refreshes the export on the converted tree" "cannot file a probe bead: $(head -1 "$TMP/bead2.err" 2>/dev/null)"
+else
+  tries=0
+  while ! (cd "$FIX" && bd show "$BID2" >/dev/null 2>&1); do
+    tries=$((tries + 1))
+    [ "$tries" -ge 15 ] && break
+    sleep 2
+  done
+  echo "post-migrate source" > "$FIX/probe-refresh.txt" || { echo "FAIL setup: cannot dirty a probe file"; exit 1; }
+  if ! (cd "$FIX" && git add -A >/dev/null 2>&1 && git -c commit.gpgsign=false commit -m "post-migrate refresh $BID" >/dev/null 2>&1); then
+    failcase "a commit refreshes the export on the converted tree" "commit failed"
+  elif ! (cd "$FIX" && git show HEAD:.beads/issues.jsonl >"$TMP/converted-committed.jsonl" 2>/dev/null); then
+    failcase "a commit refreshes the export on the converted tree" "the commit carries no ledger export"
+  elif ! grep -qF "$BID2" "$TMP/converted-committed.jsonl"; then
+    failcase "a commit refreshes the export on the converted tree" "the committed export missed the probe bead"
+  elif ! cmp -s "$TMP/converted-committed.jsonl" "$FIX/.beads/issues.jsonl"; then
+    failcase "a commit refreshes the export on the converted tree" "the hook left the worktree export dirty"
+  else
+    pass "a commit refreshes the export on the converted tree"
+  fi
 fi
 
 # --- the shared checkout is untouched ---

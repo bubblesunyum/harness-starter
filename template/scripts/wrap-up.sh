@@ -1,13 +1,13 @@
 #!/bin/bash
-# Close out work in the one order that stays clean: ledger writes, export,
-# verify, commit, push. Nothing between the export and the commit may move
-# the ledger — the gate is read-only (`bd list` never imports; every probe
-# writes only its own throwaway repo) — so a stray `bd` write after the
-# export still re-dirties it and needs a fresh export plus a second gate run.
-# The gate's export check is the backstop. The push goes last: it needs the
-# network and the Dolt remote, and a failed push must never block the
-# commit. Every stage announces itself as it starts, so a long run never
-# looks hung.
+# Close out work: ledger writes, export, verify, commit, push. The pre-commit
+# hook regenerates .beads/issues.jsonl with memories and stages it on every
+# commit, so the committed export is fresh whatever moved the ledger since
+# the manual export — the order below is belt and braces. The gate is
+# read-only (`bd list` never imports; every probe writes only its own
+# throwaway repo), and its export check stays as the backstop. The push goes
+# last: it needs the network and the Dolt remote, and a failed push must
+# never block the commit. Every stage announces itself as it starts, so a
+# long run never looks hung.
 #
 #   scripts/h wrap-up -m "lowercase terse message" --bead fol-xxx
 #     [--close fol-yyy --reason "..."] [--note fol-yyy "stands at ..."]

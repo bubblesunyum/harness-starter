@@ -68,7 +68,7 @@ else
   while IFS= read -r rel; do
     case "$rel" in
       .claude/settings.json|.codex/hooks.json) want="" ;;
-      AGENTS.md|opencode.json|scripts/hooks/commit-msg)
+      AGENTS.md|opencode.json|scripts/hooks/commit-msg|scripts/hooks/pre-commit)
         want="$REPO/template/stubs/$rel" ;;
       *) want="$REPO/template/$rel" ;;
     esac
@@ -83,6 +83,7 @@ AGENTS.md
 opencode.json
 .codex/hooks.json
 scripts/hooks/commit-msg
+scripts/hooks/pre-commit
 scripts/h
 harness/seat.md
 AGENTS.local.md
@@ -123,12 +124,13 @@ PYEOF
 scripts/h
 scripts/hooks
 scripts/hooks/commit-msg
+scripts/hooks/pre-commit
 scripts/review.scope.sh
 scripts/verify.steps.sh"
     if [ "$scripts" != "$want_scripts" ]; then
       failcase "reference writes stubs seeds and finder" "scripts/ holds more than h, hooks/ and the seeds"
-    elif [ ! -x "$PROJ/scripts/h" ] || [ ! -x "$PROJ/scripts/hooks/commit-msg" ]; then
-      failcase "reference writes stubs seeds and finder" "h or the shim lost its executable bit"
+    elif [ ! -x "$PROJ/scripts/h" ] || [ ! -x "$PROJ/scripts/hooks/commit-msg" ] || [ ! -x "$PROJ/scripts/hooks/pre-commit" ]; then
+      failcase "reference writes stubs seeds and finder" "h or a shim lost its executable bit"
     elif ! grep -qF '@AGENTS.md' "$PROJ/CLAUDE.md" 2>/dev/null; then
       failcase "reference writes stubs seeds and finder" "CLAUDE.md never imports AGENTS.md"
     else
@@ -194,7 +196,9 @@ fi
 
 # --- 5: the stubs are well-formed ---
 if ! bash -n "$PROJ/scripts/hooks/commit-msg" 2>/dev/null; then
-  failcase "reference stubs are well-formed" "the shim does not parse"
+  failcase "reference stubs are well-formed" "the commit-msg shim does not parse"
+elif ! bash -n "$PROJ/scripts/hooks/pre-commit" 2>/dev/null; then
+  failcase "reference stubs are well-formed" "the pre-commit shim does not parse"
 elif ! python3 -c 'import json,sys; [json.load(open(p)) for p in sys.argv[1:]]' \
     "$PROJ/.claude/settings.json" "$PROJ/.codex/hooks.json" "$PROJ/opencode.json" 2>/dev/null; then
   failcase "reference stubs are well-formed" "a stub json does not parse"
@@ -242,6 +246,41 @@ else
       pass "commit-msg accepts a commit naming a bead"
     else
       failcase "commit-msg accepts a commit naming a bead" "rejected a commit naming $bid"
+    fi
+  fi
+fi
+
+# --- 7b: a commit lands a fresh export without a manual regen ---
+if [ "$hook_supported" -eq 0 ]; then
+  blocked "pre-commit lands a fresh export without a manual regen" "no hook subcommand in template/scripts/h yet"
+else
+  if ! bid2="$(cd "$PROJ" && bd create "second probe work" --design "d" --acceptance "a" --silent 2>"$TMP/bead2.err")"; then
+    failcase "pre-commit lands a fresh export without a manual regen" "cannot file a second probe bead: $(head -1 "$TMP/bead2.err" 2>/dev/null)"
+  else
+    tries=0
+    while ! (cd "$PROJ" && bd show "$bid2" >/dev/null 2>&1); do
+      tries=$((tries + 1))
+      [ "$tries" -ge 15 ] && break
+      sleep 1
+    done
+    if ! (cd "$PROJ" && bd remember "probe precommit knowledge" >/dev/null 2>&1); then
+      failcase "pre-commit lands a fresh export without a manual regen" "cannot remember probe knowledge"
+    else
+      echo "probe source" > "$PROJ/probe-precommit.txt" || { echo "FAIL setup: cannot dirty a probe file"; exit 1; }
+      (cd "$PROJ" && git add -A >/dev/null 2>&1) || { echo "FAIL setup: cannot stage"; exit 1; }
+      if ! (cd "$PROJ" && git -c commit.gpgsign=false commit -m "probe commit for $bid2" >"$TMP/precommit.log" 2>&1); then
+        failcase "pre-commit lands a fresh export without a manual regen" "commit failed: $(head -1 "$TMP/precommit.log" 2>/dev/null)"
+      elif ! (cd "$PROJ" && git show HEAD:.beads/issues.jsonl > "$TMP/precommit-committed.jsonl" 2>/dev/null); then
+        failcase "pre-commit lands a fresh export without a manual regen" "the commit carries no ledger export"
+        elif ! grep -qF "$bid2" "$TMP/precommit-committed.jsonl"; then
+          failcase "pre-commit lands a fresh export without a manual regen" "the committed export missed the probe bead"
+        elif ! grep -q "probe precommit knowledge" "$TMP/precommit-committed.jsonl"; then
+          failcase "pre-commit lands a fresh export without a manual regen" "the committed export missed the probe memory"
+        elif ! cmp -s "$TMP/precommit-committed.jsonl" "$PROJ/.beads/issues.jsonl"; then
+          failcase "pre-commit lands a fresh export without a manual regen" "the hook left the worktree export dirty"
+        else
+          pass "pre-commit lands a fresh export without a manual regen"
+        fi
     fi
   fi
 fi

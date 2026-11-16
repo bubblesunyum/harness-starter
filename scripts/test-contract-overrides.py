@@ -150,14 +150,13 @@ class InstallPolicyTests(unittest.TestCase):
             if call["args"][0] == "export":
                 self.assertIn("--include-memories", call["args"])
                 self.assertEqual(call["import_override"], "false")
-        # Ordinary mutation and bd's pre-commit path now leave the memories
-        # present. The gate/ledger-push export is the explicit refresh boundary.
+        # The pre-commit hook is the refresh boundary now: mutating the ledger
+        # and committing without a manual export still lands a fresh export —
+        # with memories — staged into the commit. The gate's export check is
+        # the backstop, not the mechanism.
         env = {key: value for key, value in self.env.items() if key != "BD_EXPORT_AUTO"}
         before = (ledger / "issues.jsonl").read_bytes()
         subprocess.run([str(self.bd), "mutate"], cwd=self.project, env=env, check=True)
-        hook = self.project / ".git/hooks/pre-commit"
-        hook.write_text('#!/bin/sh\nexec bd precommit\n')
-        hook.chmod(0o755)
         subprocess.run(["git", "add", ".beads/issues.jsonl"], cwd=self.project, check=True)
         commit = subprocess.run(["git", "-c", "user.name=Fixture", "-c",
                                  "user.email=fixture@example.invalid", "commit", "-q", "-m",
@@ -166,8 +165,11 @@ class InstallPolicyTests(unittest.TestCase):
         self.assertEqual(commit.returncode, 0, commit.stdout + commit.stderr)
         committed = subprocess.check_output(["git", "show", "HEAD:.beads/issues.jsonl"],
                                             cwd=self.project)
-        self.assertEqual(committed, before)
-        self.assertEqual((ledger / "issues.jsonl").read_bytes(), before)
+        self.assertNotEqual(committed, before)
+        rows = [json.loads(line) for line in committed.decode().splitlines()]
+        self.assertIn("fix-2", [row.get("id") for row in rows])
+        self.assertIn("memory", [row["_type"] for row in rows])
+        self.assertEqual((ledger / "issues.jsonl").read_bytes(), committed)
         self.add()
         self.assertIn("fix-2", [row.get("id") for row in self.export_rows()])
         self.assertIn("memory", [row["_type"] for row in self.export_rows()])

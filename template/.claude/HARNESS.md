@@ -58,11 +58,11 @@ how the pieces fit together.
   one golden install per run. The gate compares a fresh ledger export against
   the committed `.beads/issues.jsonl`, both directions: bd's auto-export is a
   timer, not a per-write flush, so without this a session commits a file that
-  still lists closed beads and misses new ones. Nothing between the export
-  and the commit may move the ledger — the gate is read-only and every probe
-  writes only its own throwaway repo — so a stray `bd` write after the
-  export still needs a fresh export and a second gate run. The
-  gate's check is the backstop, not the mechanism. The check runs before every other
+  still lists closed beads and misses new ones. The pre-commit hook regenerates
+  the export with memories and stages it on every commit, so the committed
+  file is fresh whatever moved the ledger — that hook is the mechanism; the
+  manual export before verify is the fast path and the gate's check is the
+  backstop. The check runs before every other
   `bd` call in the gate, because several of them auto-import a stale export
   when the ledger looks stale — resurrecting deleted beads — and anything
   earlier would heal the drift under test and report a match on resurrected

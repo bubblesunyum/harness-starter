@@ -503,6 +503,7 @@ AGENTS.md
 opencode.json
 .codex/hooks.json
 scripts/hooks/commit-msg
+scripts/hooks/pre-commit
 scripts/h
 harness/seat.md
 AGENTS.local.md
@@ -804,4 +805,138 @@ harness_reviewers_missing() {
     [ -f "$file" ] || return 0
   done
   return 1
+}
+
+# Best effort, never fatal: a hook that cannot be wired must never veto the
+# install — the ledger, the gitignore lines and the CLAUDE.md import matter
+# more. Every wiring failure funnels through here and says which line to add
+# by hand. $1 is the `!` line, $2 the hook name.
+harness_wire_manual() {
+  local complaint="$1" name="$2"
+  local delegate='exec "$(git rev-parse --show-toplevel)"/scripts/hooks/'"$name"' "$@"'
+  echo "  ! $complaint"
+  echo "      $delegate"
+}
+
+# Wire one hook file to the shared hook logic it delegates to: create it with
+# the delegate when missing, keep it when already wired, and refuse — loudly,
+# never fatally — on anything else. $1 is the hook path, $2 the hook name.
+harness_wire_one() {
+  local hook="$1" name="$2"
+  local delegate='exec "$(git rev-parse --show-toplevel)"/scripts/hooks/'"$name"' "$@"'
+  if ! mkdir -p "$(dirname "$hook")" 2>/dev/null; then
+    harness_wire_manual "cannot write $(dirname "$hook") — add this line to its $name hook yourself:" "$name"
+    return 0
+  fi
+  if [ -e "$hook" ] && grep -qF "$delegate" "$hook"; then
+    echo "  $name hook already wired ($hook)"
+  elif [ ! -e "$hook" ]; then
+    if ! printf '#!/bin/bash\n%s\n' "$delegate" > "$hook" 2>/dev/null; then
+      harness_wire_manual "cannot write $hook — add this line to it yourself:" "$name"
+    else
+      chmod +x "$hook"
+      echo "  wired the $name hook ($hook)"
+    fi
+  else
+    # Someone else's hook. Left alone rather than merged into: it is the one file
+    # here that can block every commit in the repo if it is got wrong.
+    harness_wire_manual "$hook exists — add this line to it yourself:" "$name"
+  fi
+}
+
+# Append our refresh after bd's managed block in its own pre-commit file.
+# Idempotent: a file that already carries the delegate is kept, never
+# appended twice. Only ever called for pre-commit paths bd owns. $1 is the
+# hook path, $2 the hook name.
+harness_wire_append() {
+  local hook="$1" name="$2"
+  local delegate='exec "$(git rev-parse --show-toplevel)"/scripts/hooks/'"$name"' "$@"'
+  if grep -qF "$delegate" "$hook" 2>/dev/null; then
+    echo "  $name hook already wired ($hook)"
+    return 0
+  fi
+  # bd's own file, not someone's custom hook: `bd init` and `bd hooks
+  # install` own .beads/hooks/pre-commit and preserve foreign content on
+  # reinstall, so our refresh appends after bd's managed block rather than
+  # replacing it. After is the order that matters: a plain export of bd's
+  # (when some other checkout re-enables export.auto) lands first and ours
+  # — with memories — wins. Upstream rewrites of this directory only drop
+  # our line; re-running add restores it.
+  if [ -n "$(tail -c 1 "$hook" 2>/dev/null)" ]; then
+    printf '\n' >>"$hook" || {
+      harness_wire_manual "cannot append to $hook — add this line to its $name hook yourself:" "$name"
+      return 0
+    }
+  fi
+  {
+    printf '# Harness ledger export refresh (harness add appends this outside\n'
+    printf '# bd'"'"'s managed block; re-run harness add if a bd upgrade rewrites this file).\n'
+    printf '%s\n' "$delegate"
+  } >>"$hook" || {
+    harness_wire_manual "cannot append to $hook — add this line to its $name hook yourself:" "$name"
+    return 0
+  }
+  chmod +x "$hook"
+  echo "  appended the $name hook ($hook)"
+}
+
+# The pre-commit composer: bd's own file takes the append path, everything
+# else wires like any hook. $1 is the hook path.
+harness_wire_precommit() {
+  local hook="$1"
+  if [ -e "$hook" ] && grep -qF "BEGIN BEADS" "$hook" 2>/dev/null; then
+    harness_wire_append "$hook" pre-commit
+  else
+    harness_wire_one "$hook" pre-commit
+  fi
+}
+
+# Wire the commit-msg and pre-commit hooks for a reference install at $1.
+#
+# The hook logic lives in scripts/ and is pointed at, rather than copied into
+# a hooks directory — beads rewrites .beads/hooks on upgrade and would eat it.
+# Git runs hooks from core.hooksPath when set and ignores .git/hooks entirely,
+# and `bd init` sets it to .beads/hooks. Wiring only .git/hooks would
+# silently stop enforcing the moment the ledger exists.
+harness_wire_all() {
+  local target="$1" hooks_path hooks_dir global_hooks
+  # Local only: a global core.hooksPath belongs to every repo on the machine,
+  # and a delegate pointing at this project's scripts/ would break commits in
+  # all of them.
+  hooks_path="$(git -C "$target" config --local core.hooksPath 2>/dev/null || true)"
+  case "$hooks_path" in
+    "") hooks_dir="$target/.git/hooks" ;;
+    "~"/*) hooks_dir="$HOME/${hooks_path:2}" ;;
+    /*) hooks_dir="$hooks_path" ;;
+    *) hooks_dir="$target/$hooks_path" ;;
+  esac
+  case "$hooks_dir" in
+    "$target"/*)
+      harness_wire_one "$hooks_dir/commit-msg" commit-msg
+      harness_wire_precommit "$hooks_dir/pre-commit"
+      ;;
+    *)
+      # Outside the project: writing there is a liberty an installer should not
+      # take. Say so loudly rather than wiring nothing silently.
+      echo "  ! core.hooksPath points outside this project ($hooks_dir)"
+      echo "    add these lines to $hooks_dir/commit-msg and $hooks_dir/pre-commit yourself:"
+      echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/commit-msg \"\$@\""
+      echo "      exec \"\$(git rev-parse --show-toplevel)\"/scripts/hooks/pre-commit \"\$@\""
+      ;;
+  esac
+  if [ -z "$hooks_path" ]; then
+    global_hooks="$(git config --global core.hooksPath 2>/dev/null || true)"
+    if [ -n "$global_hooks" ]; then
+      echo "  ! global core.hooksPath is set ($global_hooks) — git ignores .git/hooks,"
+      echo "    so the hooks above only take effect once hooks run from this project."
+    fi
+  fi
+  # Cover the other install order too: add ran before `bd hooks install`
+  # leaves .git/hooks wired and .beads/hooks empty, and the later install
+  # silences the first (`bd init` alone already points core.hooksPath at
+  # .beads/hooks). Wiring both when .beads/hooks exists costs small files.
+  if [ -d "$target/.beads/hooks" ] && [ "$target/.beads/hooks" != "$hooks_dir" ]; then
+    harness_wire_one "$target/.beads/hooks/commit-msg" commit-msg
+    harness_wire_precommit "$target/.beads/hooks/pre-commit"
+  fi
 }
