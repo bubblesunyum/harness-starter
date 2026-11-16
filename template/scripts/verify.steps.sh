@@ -3,9 +3,9 @@
 # `LOGS`, and the pass/fail footer around this file, so use those rather than
 # redefining them.
 #
-# This file is yours. The harness installs it once and never compares or
-# overwrites it — `harness update` stays silent about it, and scaffolding fixes
-# still arrive in scripts/verify.sh. Keep every check going through `step
+# This file is yours (a seed): `harness add` installs it once and never touches
+# it again, and shared scaffolding fixes still arrive in the checkout's
+# scripts/verify.sh with the starter. Keep every check going through `step
 # <name> <cmd...>`: it swallows the log and prints one line, which is the whole
 # point of the gate. A check too slow for every few minutes — throwaway-repo
 # probes, heavy suites — goes through `probe_step` instead: same contract,

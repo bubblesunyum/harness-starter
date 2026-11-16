@@ -1,12 +1,15 @@
 #!/bin/bash
-# Shared by `harness add` and `harness update`: everything both need to know
+# Shared by `harness add` and `harness migrate`: everything both need to know
 # about a target project and the template it came from. Sourced, never run.
 #
-# The two commands have to agree on all of it — what the file list is, which files
-# are copied as-is and which carry the project's own answers, which files carry
-# the contract — or `update` reports drift in files `add` never installed, which
-# is a worse lie than saying nothing.
+# The two commands have to agree on all of it — what the file list is, which
+# files are seeds the project owns, which are data never compared, and which
+# carry the shared contract — or `migrate` misclassifies a file `add` wrote,
+# which is a worse lie than saying nothing.
 
+# Seeds vs data vs overlays have one source of truth: the three predicates
+# below. Everything else — the reference file list, the migrate classifier —
+# derives from these, never from a second list.
 # Files the installer copies byte-for-byte and never compares. Three different
 # reasons, all meaning "a difference here is not drift":
 #   dashboard/vendor/*   third-party assets, copied whole, no substitution
@@ -40,9 +43,9 @@ harness_is_seed() {
 # Those differing from the template is the harness working, not failing.
 #
 # Seeds are the one list (harness_is_seed) — never the grep below. Reviewer
-# prompts match by path suffix instead: until har-b5n8.5 migrates their answers
-# into overlays, `harness update --apply` must never overwrite them, fill-in
-# block or not.
+# prompts match by path suffix instead: the shared prompts are the contract
+# and a project's answers live in harness/reviewers/, so a filled-in prompt
+# is never converged over, fill-in block or not.
 #
 # Anything else carrying the block is caught by the grep, matched on the box
 # rule rather than the bare words — prose about the marker, here or in
@@ -54,23 +57,10 @@ harness_is_customised() {
   grep -q "── FILL THIS IN" "$1" 2>/dev/null
 }
 
-# Whether a project file carries bd's managed block. The template never does —
-# add.sh's tidier removes it on the way in — so a block in the project's copy
-# is content the template has no counterpart for, and overwriting the file
-# deletes it. update --apply asks this before writing.
-#
-# Anchored to line start: scripts/context.py counts markers in docs through an
-# inline literal, which an unanchored match reads as a managed block and refuses
-# to converge over — stranding a real contract fix stale. bd writes its markers
-# at line start, so a real block always matches here and stays protected.
-harness_has_beads_block() {
-  grep -q '^[[:space:]]*<!-- BEGIN BEADS' "$1" 2>/dev/null
-}
-
 # Project-owned overlays: the files a project's own answers live in. Installed
 # once like everything else, but never compared and never converged — a
-# difference here is the project, not drift, so `update` stays silent and
-# `--apply` never writes. The base file each overlays stays a byte-identical
+# difference here is the project, not drift, so no command reports them and
+# none writes them. The base file each overlays stays a byte-identical
 # contract file, which is what lets its fixes still arrive.
 #
 #   scripts/verify.steps.sh   the gate's project steps, sourced by verify.sh
@@ -81,6 +71,26 @@ harness_is_overlay() {
     scripts/verify.steps.sh|scripts/review.scope.sh|AGENTS.local.md) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# Whether a target project carries a copied install of the harness: full
+# contract files where a reference install keeps only the finder, the stubs,
+# and the seeds. scripts/brief.sh and scripts/verify.sh never ship in a
+# reference install — the shared copies arrive through scripts/h dispatch —
+# and .claude/HARNESS.md is template-only. Any one of them as a real file
+# (not a link into the shared checkout) means copies, so a re-run would print
+# "already there" for every stub and leave the stale contract looking done.
+# Unless the finder is there: a reference install always has scripts/h, and
+# its own scripts/brief.sh is a deliberate shadow, not a copy.
+harness_is_copy_install() {
+  local target="$1" path
+  [ -f "$target/scripts/h" ] && return 1
+  for path in scripts/brief.sh scripts/verify.sh .claude/HARNESS.md; do
+    if [ -e "$target/$path" ] && [ ! -L "$target/$path" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 # Read only bd's ordinary block/dotted spelling, without invoking bd: an
@@ -147,81 +157,6 @@ harness_set_manual_export_policy() {
   echo "  ledger auto-export off; refreshed .beads/issues.jsonl with memories"
 }
 
-# The overlay file carrying a base script's project-owned block, or failure
-# for any other file.
-harness_overlay_of() {
-  case "$1" in
-    scripts/verify.sh) printf 'scripts/verify.steps.sh\n' ;;
-    scripts/review.sh) printf 'scripts/review.scope.sh\n' ;;
-    *) return 1 ;;
-  esac
-}
-
-# Recover a pre-split project's inline block into its overlay file, on stdout
-# what happened. A project from before the split carries its steps and scope
-# inside scripts/verify.sh / scripts/review.sh, between the same marker boxes
-# the new base files still carry as pointers — converging such a file would
-# delete the project's own answers, which is the silent loss this exists to
-# prevent.
-#
-# Succeeds silently when there is nothing to move: the overlay already exists,
-# the script isn't there, the block is the pointer (then the template's overlay
-# covers it — `add` installs that), or the block carries no answers. Moves the
-# block when the project's file carries a filled one. Fails when the file
-# differs but holds no block to lift — a fully rewritten script, a missing or
-# duplicated marker — which the caller reports loudly instead of converging over.
-harness_extract_overlay() {
-  local here="$1" target="$2" rel="$3" overlay start end block baseblock tmp
-  overlay="$(harness_overlay_of "$rel")" || return 0
-  [ -e "$target/$overlay" ] && return 0
-  [ -f "$target/$rel" ] || return 0
-  case "$rel" in
-    scripts/verify.sh) start="── PROJECT STEPS ──"; end="── END PROJECT STEPS ──" ;;
-    scripts/review.sh) start="── CONFIGURE ──"; end="── END CONFIGURE ──" ;;
-  esac
-  # Exactly one block, in order: a missing end marker would lift to end-of-file,
-  # a duplicated one would merge both copies with markers inside, and a swapped
-  # pair would lift everything after the start line — and the base then
-  # converges and deletes what the lift garbled. Count with -F: the boxes are
-  # literal text, not a pattern.
-  [ "$(grep -cF "$start" "$target/$rel")" -eq 1 ] || return 1
-  [ "$(grep -cF "$end" "$target/$rel")" -eq 1 ] || return 1
-  [ "$(grep -nF "$start" "$target/$rel" | head -1 | cut -d: -f1)" \
-    -lt "$(grep -nF "$end" "$target/$rel" | head -1 | cut -d: -f1)" ] || return 1
-  block="$(sed -n "/$start/,/$end/p" "$target/$rel" | sed '1d;$d')"
-  baseblock="$(sed -n "/$start/,/$end/p" "$here/template/$rel" | sed '1d;$d')"
-  [ "$block" = "$baseblock" ] && return 0
-  # A filled block carries answers — real lines to run, not just comments. A
-  # stale pointer carries none, and lifting it would strand a comment-only
-  # overlay the gate then runs as zero steps and passes vacuously. Code lines
-  # decide, not keywords: a comment mentioning `step "..."` is still a comment,
-  # and steps or scopes spelled any valid way still count.
-  printf '%s' "$block" | grep -qE '^[[:space:]]*[^#[:space:]]' || return 0
-  if [ "$rel" = scripts/review.sh ]; then
-    # The block sat below `_harness_prefix` in review.sh, so "resolved above"
-    # was true there. Lifted into the overlay nothing is above — the resolver
-    # lives in review.sh, which sources this file — so the comment names it
-    # instead. Only the template's own wording is rewritten, on its full line;
-    # a project's own prose lifts verbatim.
-    block="$(printf '%s\n' "$block" | sed "s|^# write its captures to /tmp with this prefix — the ledger's, resolved above\.\$|# write its captures to /tmp with this prefix — the ledger's, from _harness_prefix in scripts/review.sh, which sources this file.|")"
-  fi
-  tmp="$(mktemp "$target/.harness-extract-XXXXXX")" || return 1
-  {
-    printf '# Recovered from %s by the harness: this project'"'"'s own %s,\n' "$rel" \
-      "$( [ "$rel" = scripts/verify.sh ] && printf 'gate steps' || printf 'review scope' )"
-    printf '# moved here so the base file could converge. Edit freely — the harness\n'
-    printf '# installs this file once and never compares or overwrites it.\n\n'
-    printf '%s\n' "$block"
-  } > "$tmp" || { rm -f "$tmp"; return 1; }
-  # Renamed, not copied: the temp file sits beside the overlay, so the move is
-  # a rename on the same filesystem — a half-written overlay (disk full, lost
-  # NFS) would read as moved and block every later recovery, stranding the
-  # steps it truncated.
-  mv "$tmp" "$target/$overlay" || { rm -f "$tmp"; return 1; }
-  printf '%s\n' "$overlay"
-  return 0
-}
-
 # Everything else. These are the harness itself — the contract every agent reads
 # (AGENTS.md, opencode.json), the machinery behind the scripts, the skills. The
 # project has no reason to edit them, so a difference means the install is stale
@@ -233,10 +168,6 @@ harness_is_contract() {
   harness_is_customised "$src" && return 1
   return 0
 }
-
-# How many lines a list holds. grep -c '' rather than wc -l, which counts
-# newlines and calls a list without a trailing one empty.
-harness_tally() { printf '%s' "$1" | grep -c ''; }
 
 # Whether a path is on an acknowledged-forks list. The list, not the project,
 # is the first argument, so both callers read the same way.
@@ -255,9 +186,9 @@ harness_in_diverged_list() {
 # fires on the first real commit either way. The initial branch is main,
 # regardless of the machine's init.defaultBranch. Refused when the target already
 # sits inside another repository's working tree, where a nested repository is a
-# mess nobody asked for — that refusal names the toplevel. A bare check never
-# inits: `harness update` only reports, and a command that only reports must not
-# create repositories as a side effect.
+# mess nobody asked for — that refusal names the toplevel. Without --init,
+# nothing is created as a side effect: a reporting command must not create
+# repositories.
 harness_resolve_target() {
   local init=0
   if [ "${1:-}" = "--init" ]; then init=1; shift; fi
@@ -525,8 +456,8 @@ harness_files_for() {
 # A template file as it lands in a project, on stdout. Byte-for-byte, always:
 # nothing in template/ is substituted anymore. Per-project values — the bead
 # prefix, the /tmp paths, the title — resolve at runtime from the ledger and
-# the checkout, so what ships is what's on disk here. That is what makes
-# `update` a plain comparison and `--apply` a plain copy.
+# the checkout, so what ships is what's on disk here. That is what lets a
+# reference install and a migrate classification compare bytes directly.
 harness_render() {
   cat "$1"
 }
@@ -555,7 +486,7 @@ harness_reference_root() {
     echo "  Replace it with a harness-starter clone, or set HARNESS_HOME." >&2
     return 1
   fi
-  echo "✗ add --reference needs the shared harness and cannot find it." >&2
+  echo "✗ harness add needs the shared harness and cannot find it." >&2
   echo "  Set HARNESS_HOME to a harness-starter clone, or link one at ~/.harness." >&2
   return 1
 }
@@ -662,86 +593,7 @@ sys.stdout.write(text + "\n")
 PYEOF
 }
 
-# harness_same against a template source. The form the copy loop wants, where
-# there is no installed file lying around to compare against — the template is
-# rendered (copied) and compared.
-harness_current() {
-  local rel="$1" src="$2" dst="$3" rendered result
-  rendered="$(mktemp)" || return 1
-  harness_render "$src" > "$rendered"
-  harness_same "$rel" "$rendered" "$dst" && result=0 || result=1
-  rm -f "$rendered"
-  return "$result"
-}
 
-# The shadow state of a target's .opencode/opencode.json, on stdout: absent,
-# ok, shadow, duplicate, or unknown. opencode reads the deeper file instead of
-# the root opencode.json when both exist — and reads only the winner — so a
-# copy carrying a plugin but no instructions silently unloads AGENTS.md, and a
-# copy duplicating either key hides drift the contract check never compares,
-# because it tracks only the root file. The root opencode.json is the single
-# source of truth for both keys. Never writes; `add` merges, `update` reports.
-harness_opencode_shadow() {
-  # Two statements: one `local a=... b=$a...` expands both words before either
-  # is assigned, leaving b built from the old (empty) a.
-  local target="$1"
-  local shadow="$target/.opencode/opencode.json"
-  [ -f "$shadow" ] || { printf 'absent\n'; return 0; }
-  command -v python3 >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
-  python3 - "$target/opencode.json" "$shadow" <<'PYEOF' || printf 'unknown\n'
-import json
-import sys
-
-
-def load(path):
-    try:
-        with open(path) as handle:
-            return json.load(handle)
-    except (OSError, ValueError):
-        return None
-
-
-def same(first, second):
-    # Order and duplication carry no meaning — opencode loads every entry —
-    # so lists compare as sets. Comparing raw (or sorted) lists would warn
-    # forever on exactly the order merge produces (shadow entries first,
-    # missing appended), with merge calling the same file "already carries",
-    # and would never converge on duplicates merge only appends past
-    # (root [A,B] vs [A,A] merges to [A,A,B], still duplicate).
-    if isinstance(first, list) and isinstance(second, list):
-        key = lambda value: json.dumps(value, sort_keys=True)
-        return set(map(key, first)) == set(map(key, second))
-    return first == second
-
-
-root, shadow = load(sys.argv[1]), load(sys.argv[2])
-if not isinstance(shadow, dict):
-    print("unknown")
-elif not shadow.get("instructions"):
-    print("shadow")
-elif not isinstance(root, dict):
-    # No root file to agree with — update already flags the missing contract
-    # file, so a shadow carrying anything of its own is duplication by default.
-    print("duplicate")
-else:
-    wanted = root.get("instructions", [])
-    have = shadow.get("instructions", [])
-    if (isinstance(wanted, list) and isinstance(have, list)
-            and any(entry not in have for entry in wanted)):
-        # A non-empty subset still unloads part of the contract through the
-        # deeper file, and merging restores it — so this is the fail-closed
-        # shadow state, never a warning that exits 0.
-        print("shadow")
-    # Absent keys read as None via .get on both sides, so a shadow missing
-    # the root's plugin disagrees (None vs the entries) instead of passing
-    # silently while dropping the plugin.
-    elif any(not same(shadow.get(key), root.get(key))
-             for key in ("instructions", "plugin")):
-        print("duplicate")
-    else:
-        print("ok")
-PYEOF
-}
 
 # Merge the root instructions into an existing .opencode/opencode.json, on
 # stdout what happened. A plugin-only copy there would silently unload
@@ -789,30 +641,6 @@ else:
 PYEOF
 }
 
-# The plugin state of a target's .opencode/tui.json, on stdout: absent, ok,
-# plugin, or unknown. tui.json carries UI overrides only — plugin configuration lives
-# in the root opencode.json — so a plugin entry there splits the source of
-# truth and hides plugin drift the contract check never compares. Never
-# writes; `update` reports. Unparseable JSON and no python3 read as unknown,
-# like the shadow check: the harness cannot see a plugin it cannot parse,
-# so update fails closed and says to check by hand.
-harness_opencode_tui() {
-  local target="$1"
-  local tui="$target/.opencode/tui.json"
-  [ -f "$tui" ] || { printf 'absent\n'; return 0; }
-  command -v python3 >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
-  python3 - "$tui" <<'PYEOF' || printf 'unknown\n'
-import json
-import sys
-
-try:
-    data = json.load(open(sys.argv[1]))
-except (OSError, ValueError):
-    print("unknown")
-else:
-    print("plugin" if isinstance(data, dict) and data.get("plugin") else "ok")
-PYEOF
-}
 
 # The project's acknowledged forks, one path per line, comments and blanks
 # stripped, on stdout. Fails when the file exists but can't be read: an
@@ -825,22 +653,6 @@ harness_diverged_want() {
   sed -e 's/#.*//' "$list" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true
 }
 
-# missing | invalid | foreign | partial | ok for a target's per-role model
-# roster, read through its own models.py — one parser, not two. Anything but
-# ok suggests running ensure, which writes the opencode pin without prompting.
-# No python3, no models.py, any error: missing, which is the direction that
-# suggests running ensure.
-harness_roster_state() {
-  python3 - "$1" 2>/dev/null <<'PYEOF' || echo missing
-import sys
-sys.path.insert(0, sys.argv[1] + "/scripts")
-try:
-    from models import roster_state
-    print(roster_state())
-except Exception:
-    print("missing")
-PYEOF
-}
 
 # The Dolt remote URL for a git origin. bd speaks its own dialect: a `git+`
 # scheme prefix, and no scp-style shorthand — `bd dolt remote add` rejects

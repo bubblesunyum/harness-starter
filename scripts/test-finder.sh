@@ -102,6 +102,11 @@ printf '#!/bin/bash\necho "PROBE-HOOK $*"\n' > "$CHECKOUT/template/scripts/hooks
 chmod +x "$CHECKOUT/template/scripts/hooks/probe-hook" || { echo "FAIL setup: chmod hook"; exit 1; }
 mkdir -p "$CHECKOUT/template/.opencode/agent" || { echo "FAIL setup: opencode fixture"; exit 1; }
 printf 'probe agent\n' > "$CHECKOUT/template/.opencode/agent/probe-agent.md" || { echo "FAIL setup: opencode file"; exit 1; }
+# Probe stack guidance, so the stacks half of `h link` has stable names
+# whatever the starter ships: probe (listed) and probe-extra (unlisted).
+mkdir -p "$CHECKOUT/template/harness/stacks" || { echo "FAIL setup: stacks fixture"; exit 1; }
+printf '# probe stack\n' > "$CHECKOUT/template/harness/stacks/probe.md" || { echo "FAIL setup: stacks file"; exit 1; }
+printf '# probe extra stack\n' > "$CHECKOUT/template/harness/stacks/probe-extra.md" || { echo "FAIL setup: stacks extra"; exit 1; }
 (cd "$CHECKOUT" && git init -q .) >/dev/null || { echo "FAIL setup: git init"; exit 1; }
 (cd "$CHECKOUT" && git add -A) >/dev/null || { echo "FAIL setup: git add"; exit 1; }
 (cd "$CHECKOUT" && git -c user.email=probe@t -c user.name=probe -c commit.gpgsign=false commit -qm probe) >/dev/null || { echo "FAIL setup: git commit"; exit 1; }
@@ -600,6 +605,98 @@ else
   failcase "unreadable contract stays loud JSON and zero" "non-zero exit"
 fi
 chmod 644 "$TMP/badcontract/template/AGENTS.md" || { echo "FAIL setup: restore badcontract"; exit 1; }
+
+# --- 23: link links listed stacks, keeps project files, warns loud on unknown ---
+newproj p23 || { echo "FAIL setup: p23"; exit 1; }
+mkdir -p "$PROJ/harness/stacks" || { echo "FAIL setup: p23 stacks dir"; exit 1; }
+printf 'mine\n' > "$PROJ/harness/stacks/mine.md" || { echo "FAIL setup: p23 own file"; exit 1; }
+printf '# the stacks this project uses\nprobe\n\nno-such-stack\n' > "$PROJ/harness/stacks.txt" || { echo "FAIL setup: p23 list"; exit 1; }
+before23=$FAILS
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" link >"$TMP/got" 2>"$TMP/err"; then
+  if [ -L "$PROJ/harness/stacks/probe.md" ]; then
+    readlink "$PROJ/harness/stacks/probe.md" > "$TMP/gotlink" || { echo "FAIL setup: readlink"; exit 1; }
+    printf '%s\n' "$CHECKOUT/template/harness/stacks/probe.md" > "$TMP/want"
+    if ! cmp -s "$TMP/want" "$TMP/gotlink"; then
+      failcase "link links listed stacks" "probe.md points elsewhere"
+    fi
+  else
+    failcase "link links listed stacks" "probe.md is not a symlink"
+  fi
+  if ! grep -qxF "harness/stacks/probe.md" "$PROJ/.gitignore" 2>/dev/null; then
+    failcase "link links listed stacks" "probe.md missing from .gitignore"
+  fi
+  if [ -L "$PROJ/harness/stacks/mine.md" ]; then
+    failcase "link links listed stacks" "project-owned mine.md replaced by a link"
+  elif [ ! -f "$PROJ/harness/stacks/mine.md" ]; then
+    failcase "link links listed stacks" "project-owned mine.md lost"
+  fi
+  if grep -q "no-such-stack" "$TMP/err" && grep -q "harness/stacks.txt" "$TMP/err"; then
+    :
+  else
+    failcase "link links listed stacks" "unknown stack never named loudly on stderr"
+  fi
+  if grep -q "known:" "$TMP/err"; then
+    :
+  else
+    failcase "link links listed stacks" "stderr never names the known stacks"
+  fi
+else
+  failcase "link links listed stacks" "non-zero exit on an unknown stack"
+fi
+if [ "$FAILS" -eq "$before23" ]; then
+  pass "link links listed stacks"
+fi
+
+# --- 24: link prunes unlisted and dangling shared stack links ---
+newproj p24 || { echo "FAIL setup: p24"; exit 1; }
+mkdir -p "$PROJ/harness/stacks" || { echo "FAIL setup: p24 stacks dir"; exit 1; }
+printf 'probe\ndangling-listed\n' > "$PROJ/harness/stacks.txt" || { echo "FAIL setup: p24 list"; exit 1; }
+ln -s "$CHECKOUT/template/harness/stacks/probe-extra.md" "$PROJ/harness/stacks/probe-extra.md" || { echo "FAIL setup: p24 extra link"; exit 1; }
+ln -s "$CHECKOUT/template/harness/stacks/no-such.md" "$PROJ/harness/stacks/stale.md" || { echo "FAIL setup: p24 dangling"; exit 1; }
+ln -s "$CHECKOUT/template/harness/stacks/no-such.md" "$PROJ/harness/stacks/dangling-listed.md" || { echo "FAIL setup: p24 listed dangling"; exit 1; }
+ln -s "$TMP/definitely-not-here" "$PROJ/harness/stacks/stray.md" || { echo "FAIL setup: p24 stray"; exit 1; }
+before24=$FAILS
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" link >"$TMP/got" 2>"$TMP/err"; then
+  if [ ! -L "$PROJ/harness/stacks/probe.md" ]; then
+    failcase "link prunes unlisted stack links" "listed probe.md not linked"
+  fi
+  if [ -e "$PROJ/harness/stacks/probe-extra.md" ] || [ -L "$PROJ/harness/stacks/probe-extra.md" ]; then
+    failcase "link prunes unlisted stack links" "unlisted probe-extra.md not pruned"
+  fi
+  if [ -e "$PROJ/harness/stacks/stale.md" ] || [ -L "$PROJ/harness/stacks/stale.md" ]; then
+    failcase "link prunes unlisted stack links" "dangling stale.md not pruned"
+  fi
+  if [ -e "$PROJ/harness/stacks/dangling-listed.md" ] || [ -L "$PROJ/harness/stacks/dangling-listed.md" ]; then
+    failcase "link prunes unlisted stack links" "dangling listed link not pruned"
+  fi
+  if grep -q "dangling-listed" "$TMP/err"; then
+    :
+  else
+    failcase "link prunes unlisted stack links" "missing shared guidance never named loudly"
+  fi
+  if [ ! -L "$PROJ/harness/stacks/stray.md" ]; then
+    failcase "link prunes unlisted stack links" "project stray link removed"
+  fi
+else
+  failcase "link prunes unlisted stack links" "non-zero exit"
+fi
+if [ "$FAILS" -eq "$before24" ]; then
+  pass "link prunes unlisted stack links"
+fi
+
+# --- 25: link without a stacks.txt stays quiet and zero ---
+newproj p25 || { echo "FAIL setup: p25"; exit 1; }
+before25=$FAILS
+if HARNESS_HOME="$CHECKOUT" HARNESS_URL="$URL" "$PROJ/scripts/h" link >"$TMP/got" 2>"$TMP/err"; then
+  if [ -e "$PROJ/harness/stacks" ] || [ -L "$PROJ/harness/stacks" ]; then
+    failcase "link without stacks.txt stays quiet" "harness/stacks appeared with no list"
+  fi
+else
+  failcase "link without stacks.txt stays quiet" "non-zero exit"
+fi
+if [ "$FAILS" -eq "$before25" ]; then
+  pass "link without stacks.txt stays quiet"
+fi
 
 if [ "$FAILS" -eq 0 ]; then
   exit 0

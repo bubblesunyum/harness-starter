@@ -1507,9 +1507,9 @@ def close_bead(payload):
 
 
 # The loops a human still triggers by hand. They live in dashboard.toml beside
-# this file — project-owned, installed once, never touched by
-# `harness update dashboard` — so adding a button is a TOML edit, not a code
-# edit, and this file stays byte-identical everywhere.
+# the project — the one dashboard piece a project keeps, read by the starter's
+# board when it views that project — so adding a button is a TOML edit, not a
+# code edit.
 #
 # The build tool's verdict pattern lives in the same file, under [verdict].
 #

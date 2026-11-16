@@ -172,8 +172,9 @@ fi
 
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────
 # Your project's build, test, and smoke steps live in scripts/verify.steps.sh,
-# sourced just below. That file is yours — installed once, never compared or
-# overwritten — so scaffolding fixes here still arrive with `harness update`.
+# sourced just below. That file is the project's own — installed once by
+# `harness add` and never touched again — so shared scaffolding fixes here
+# still arrive with the starter.
 # Project-only, never the harness copy: the template's placeholder standing in
 # for a missing file would hide the loud failure below.
 if [ -f "$ROOT/scripts/verify.steps.sh" ]; then
@@ -182,7 +183,7 @@ else
   # A gate with no project steps would pass vacuously — the green suite that
   # ran nothing — so a missing steps file fails loudly instead. `harness add`
   # installs it; a project from before the split recovers its steps from its
-  # old verify.sh on `harness update --apply`.
+  # old verify.sh by hand.
   failed=1
   echo "  ! no scripts/verify.steps.sh — the gate has no project steps to run."
 fi

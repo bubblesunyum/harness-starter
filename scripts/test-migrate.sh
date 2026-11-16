@@ -36,27 +36,37 @@ shared_hash() {
 }
 SHARED_BEFORE="$(shared_hash)"
 
-# --- fixture: a copy install, the way plain `harness add` leaves one ---
+# --- fixture: a copy install, the way a plain `harness add` used to leave one ---
+# Built by hand: `harness add` is reference-only now and writes no copies.
+# Every template file a copy install carried — no stubs, no generated agents,
+# no guidance for unlisted stacks — modes preserved. bd inits before the copy
+# lands, the way `add` ordered it: bd writes through links into the shared
+# checkout, so links never predate a bd command.
 FIX="$TMP/fix"
 mkdir -p "$FIX" || { echo "FAIL setup: cannot make the fixture project"; exit 1; }
-if ! "$REPO/bin/harness" add "$FIX" >"$TMP/add.log" 2>&1; then
-  failcase "copy install writes the whole harness" "harness add exited non-zero"
+git init -q "$FIX" || { echo "FAIL setup: git init failed"; exit 1; }
+(cd "$FIX" && bd init --prefix fix >/dev/null 2>&1) || { echo "FAIL setup: bd init failed"; exit 1; }
+while IFS= read -r rel; do
+  case "$rel" in stubs/*|.opencode/*|harness/stacks/*) continue ;; esac
+  mkdir -p "$FIX/$(dirname "$rel")" || { echo "FAIL setup: cannot make $(dirname "$rel")"; exit 1; }
+  cp -p "$REPO/template/$rel" "$FIX/$rel" || { echo "FAIL setup: cannot copy $rel"; exit 1; }
+done <<< "$(git -C "$REPO" ls-files --cached -- template | sed 's|^template/||' | sort)"
+# Normalized the way `add` left them: no doc bd init may have planted that the
+# copy doesn't overwrite, and no copied beads skill beside the shared ones.
+rm -f "$FIX/CLAUDE.md"
+rm -rf "$FIX/.agents/skills/beads"
+if [ -f "$FIX/scripts/verify.sh" ] && [ -f "$FIX/.claude/agents/reviewer-taste.md" ]; then
+  pass "fixture carries the whole harness"
 else
-  if [ -f "$FIX/scripts/verify.sh" ] && [ -f "$FIX/.claude/agents/reviewer-taste.md" ]; then
-    pass "copy install writes the whole harness"
-  else
-    failcase "copy install writes the whole harness" "contract files missing after add"
-  fi
+  failcase "fixture carries the whole harness" "contract files missing from the copy"
 fi
 
 # One customised reviewer prompt.
 printf '\n## Project checks\n\n- No foobar in this repo.\n' >> "$FIX/.claude/agents/reviewer-taste.md" || { echo "FAIL setup: cannot customise the reviewer prompt"; exit 1; }
-# One diverged dashboard file, acknowledged the supported way.
+# One diverged dashboard file, acknowledged the supported way (`diverge` is
+# retired; the list is a plain project file now).
 printf '\n<!-- project chip -->\n' >> "$FIX/dashboard/index.html" || { echo "FAIL setup: cannot edit the dashboard file"; exit 1; }
-if ! (cd "$FIX" && "$REPO/bin/harness" diverge dashboard/index.html >"$TMP/diverge.log" 2>&1); then
-  echo "FAIL setup: harness diverge failed: $(head -1 "$TMP/diverge.log" 2>/dev/null)"
-  exit 1
-fi
+printf 'dashboard/index.html\n' >> "$FIX/harness/diverged.txt" || { echo "FAIL setup: cannot acknowledge the fork"; exit 1; }
 # One unacknowledged edited script.
 printf '\n# project VERDICT tuning\n' >> "$FIX/scripts/dashboard.py" || { echo "FAIL setup: cannot edit the script"; exit 1; }
 # One own skill, beside the shared ones.
@@ -169,6 +179,26 @@ if [ -z "$(git -C "$FIX" status --porcelain)" ]; then
 else
   failcase "dry run changes nothing" "the tree is dirty after a dry run"
 fi
+
+# --- a diverged entry acknowledging nothing fails before writing ---
+printf 'scripts/dashbord.py\nREADME.md\ndashboard.toml\n' >> "$FIX/harness/diverged.txt" || { echo "FAIL setup: cannot plant bogus diverged entries"; exit 1; }
+if "$REPO/bin/harness" migrate "$FIX" >"$TMP/bogus.log" 2>&1; then
+  failcase "bogus diverged entries fail the dry run" "exit 0 with entries acknowledging nothing"
+else
+  before_bogus=$FAILS
+  grep -qF "scripts/dashbord.py (no such template file)" "$TMP/bogus.log" 2>/dev/null ||
+    failcase "bogus diverged entries fail the dry run" "never flagged the typo entry"
+  grep -qF "README.md (no such template file)" "$TMP/bogus.log" 2>/dev/null ||
+    failcase "bogus diverged entries fail the dry run" "never flagged the non-template entry"
+  grep -qF "dashboard.toml (already quiet" "$TMP/bogus.log" 2>/dev/null ||
+    failcase "bogus diverged entries fail the dry run" "never flagged the already-quiet entry"
+  grep -q "acknowledge nothing" "$TMP/bogus.log" 2>/dev/null ||
+    failcase "bogus diverged entries fail the dry run" "never said acknowledge nothing"
+  if [ "$FAILS" -eq "$before_bogus" ]; then
+    pass "bogus diverged entries fail the dry run"
+  fi
+fi
+git -C "$FIX" checkout -- harness/diverged.txt >/dev/null 2>&1 || { echo "FAIL setup: cannot restore diverged.txt"; exit 1; }
 
 # --- a dirty tree refuses the write ---
 printf '\n# dirty\n' >> "$FIX/dashboard.toml" || { echo "FAIL setup: cannot dirty the tree"; exit 1; }

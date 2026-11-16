@@ -20,7 +20,11 @@ install picks it up, no reinstall step.
 That's the whole invocation. The project's name and its bead prefix are inferred
 from the directory, and a project that already has a ledger keeps the prefix it
 already has. Pass a path as the one optional argument to install somewhere other
-than the current directory.
+than the current directory. The install is by reference: the contract stays in
+this checkout, and the project gets the stubs, the seeds, and `scripts/h` —
+nothing else. It needs `HARNESS_HOME` or `~/.harness` pointing at a
+harness-starter checkout; `--reference` is accepted but does nothing, reference
+is the only install.
 
 Requires `bash`, `python3`, `git`, and [beads](https://github.com/steveyegge/beads)
 (`bd`) on PATH, and a git repository to install into. The installer never
@@ -111,47 +115,32 @@ Read it before rearranging them.
 `harness add` runs inside this repo too — that's how the harness gets worked on
 with the harness: a ledger, the review packet, the gate, the dashboard.
 
-**One trap comes with it.** What `add` writes to `scripts/` is a *copy* of
-`template/scripts/`, with the placeholders filled in. They are separate files
+**One trap comes with it.** The root `scripts/` still carries *copies* of
+`template/scripts/` from before reference installs. They are separate files
 from that moment on. Edit `template/scripts/brief.sh` and the `scripts/brief.sh`
 that actually runs here does not change; fix a bug in the running copy and the
 template still ships it.
 
 So: **`template/` is the product, and the root is a working install of it.** Make
-every real change in `template/`, and re-copy into the root when you want to run
-what you just wrote. Nothing automates that yet — deleting the root copy and
-re-running `harness add` picks up the new version, but it will not touch a file
-that already exists, which is the whole reason it's safe everywhere else.
+every real change in `template/`, and carry a fix across to the root copy by
+hand when you want to run what you just wrote. `harness add` installs by
+reference now and no longer refreshes these copies.
 
-`harness update` names the files this has already happened to:
+A copied install — one from before reference installs — converts with
+`harness migrate`:
 
 ```bash
-harness update            # which files here differ from template/
-harness update --diff     # and how
-harness update --apply    # write the template over stale contract files,
-                        # and install the missing contract ones
+harness migrate            # dry run: every carried file with its fate, nothing written
+harness migrate --apply    # convert on a clean tree, then link the shared skills
 ```
 
-It reports and never writes — unless asked with `--apply`, which writes the
-rendered template over stale contract files and installs the missing contract
-ones, never customised ones, and names
-each file it changed. A file carrying a beads block is left for a hand merge.
-Files carrying the contract — `AGENTS.md`,
-`opencode.json`, the skills, the scripts behind them — make it exit non-zero,
-because the project has no reason to edit them and a difference means a fix
-never arrived. Files with a `FILL THIS IN` block are meant to diverge, so those
-are listed quietly. When reviewer sources are among the flagged files it also
-prints the follow-ups the merge still owes — rebuilding the generated agent
-copies, re-blessing, verifying. `harness add` runs the same check on what it
-skips, so a re-run says which of those skips were the install failing.
+`harness update` is retired: a reference install is always current, so there is no drift to check.
+`harness diverge` is retired: a same-path project file is a shadow; reviewer answers go in `harness/reviewers/<role>.md`.
 
-Dashboard fixes ship without the guided merge: `harness update dashboard`
-re-copies `dashboard/` and `scripts/dashboard.py` over the project, never
-re-copying `dashboard.toml`. That file is where the project owns its answers —
-run buttons, the build tool's verdict pattern, the display name — so there is
-nothing to merge and the shipped files stay byte-identical everywhere. A
-`VERDICT` answer still living inside `dashboard.py` from before the move is
-lifted into the toml first; `harness update` names that move when it sees one.
+Dashboard fixes ship from the starter now: there is one dashboard, run from
+this checkout, and it switches across projects. A project keeps only its
+`dashboard.toml` — run buttons, the verdict pattern, the display name — so
+nothing else about it is installed per project.
 
 ## Adding a command
 

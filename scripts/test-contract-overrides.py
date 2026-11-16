@@ -76,6 +76,8 @@ class InstallPolicyTests(unittest.TestCase):
                     "FIXTURE_LOG": str(self.log)}
         # An inherited override must not defeat the installer policy.
         self.env["BD_EXPORT_AUTO"] = "true"
+        # Reference installs resolve the shared harness, never the network.
+        self.env["HARNESS_HOME"] = str(ROOT)
 
     def command(self, name, *args, expected=0, env=None):
         result = subprocess.run(["bash", str(ROOT / "commands" / (name + ".sh")),
@@ -99,22 +101,38 @@ class InstallPolicyTests(unittest.TestCase):
                                str(ROOT / "commands/lib/install.sh"), str(self.project)],
                               capture_output=True, text=True)
 
-    def test_project_guidance_survives_repeat_and_contract_update(self):
+    def test_project_guidance_and_stubs_survive_repeat(self):
         self.add()
         guidance = self.project / "AGENTS.local.md"
         guidance.write_text("Before release, run --full: it includes the browser e2e suite.\n")
         original = guidance.read_bytes()
         agents = self.project / "AGENTS.md"
         self.assertIn("AGENTS.local.md", agents.read_text())
-        self.assertIn("scripts/verify.steps.sh", agents.read_text())
-        agents.write_text(agents.read_text().replace("Start every session", "Old contract"))
+        agents.write_text(agents.read_text().replace("First action every session", "Old contract"))
+        edited = agents.read_bytes()
         out = self.add()
-        self.assertNotIn("AGENTS.local.md exists and differs", out)
+        self.assertNotIn("differs", out)
         self.assertEqual(guidance.read_bytes(), original)
-        self.command("update", "--apply")
-        self.assertEqual(guidance.read_bytes(), original)
-        self.assertEqual(agents.read_bytes(), (ROOT / "template/AGENTS.md").read_bytes())
-        self.command("update")
+        # Stubs are never compared or overwritten: the edit survives a re-add.
+        self.assertEqual(agents.read_bytes(), edited)
+
+    def test_copy_install_refuses_and_points_at_migrate(self):
+        for marker in ("scripts/brief.sh", "scripts/verify.sh", ".claude/HARNESS.md"):
+            with self.subTest(marker=marker):
+                target = self.root / ("copy-%s" % marker.replace("/", "_"))
+                target.mkdir()
+                subprocess.run(["git", "init", "-q", str(target)], check=True)
+                path = target / marker
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("copied contract\n")
+                result = subprocess.run(["bash", str(ROOT / "commands/add.sh"), str(target)],
+                                        env=self.env, cwd=target,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("copied install", result.stdout + result.stderr)
+                self.assertIn("harness migrate", result.stdout + result.stderr)
+                self.assertFalse((target / "AGENTS.md").exists())
+                self.assertFalse((target / "scripts/h").exists())
 
     def test_fresh_and_existing_install_preserve_memories(self):
         self.add()
@@ -150,11 +168,11 @@ class InstallPolicyTests(unittest.TestCase):
                                             cwd=self.project)
         self.assertEqual(committed, before)
         self.assertEqual((ledger / "issues.jsonl").read_bytes(), before)
-        self.command("update", "--apply")
+        self.add()
         self.assertIn("fix-2", [row.get("id") for row in self.export_rows()])
         self.assertIn("memory", [row["_type"] for row in self.export_rows()])
 
-    def test_report_only_is_read_only_and_apply_repairs_policy(self):
+    def test_readd_repairs_policy_and_preserves_memories(self):
         self.add()
         ledger = self.project / ".beads"
         config = ledger / "config.yaml"
@@ -162,13 +180,9 @@ class InstallPolicyTests(unittest.TestCase):
         state = json.loads((ledger / "fixture.json").read_text())
         state["auto"] = True
         (ledger / "fixture.json").write_text(json.dumps(state))
-        before = {path: path.read_bytes() for path in ledger.iterdir() if path.is_file()}
-        log = self.log.read_bytes()
-        self.assertIn("auto-export", self.command("update", expected=1))
-        self.assertEqual(self.log.read_bytes(), log)
-        self.assertEqual(before, {path: path.read_bytes() for path in ledger.iterdir() if path.is_file()})
-        self.command("update", "--apply")
-        self.command("update")
+        self.assertEqual(self.shell('harness_manual_export_policy "$2"').returncode, 1)
+        self.add()
+        self.assertEqual(self.shell('harness_manual_export_policy "$2"').returncode, 0)
         self.assertIn("memory", [row["_type"] for row in self.export_rows()])
 
     def test_policy_accepts_bd_spelling_and_rejects_local_override(self):
@@ -181,17 +195,17 @@ class InstallPolicyTests(unittest.TestCase):
         local.write_text("export:\n  auto: true\n")
         self.assertEqual(self.shell('harness_manual_export_policy "$2"').returncode, 1)
         export = (ledger / "issues.jsonl").read_bytes()
-        self.assertIn("config.local.yaml", self.command("update", "--apply", expected=1))
+        self.assertIn("config.local.yaml", self.command("add", expected=1))
         self.assertEqual((ledger / "issues.jsonl").read_bytes(), export)
         local.write_text("export.auto: false\n")
-        self.command("update", "--apply")
+        self.add()
 
     def test_failed_policy_or_export_keeps_previous_memories(self):
         self.add()
         export = self.project / ".beads/issues.jsonl"
         before = export.read_bytes()
         for failure in ("FIXTURE_CONFIG_FAIL", "FIXTURE_EXPORT_FAIL"):
-            out = self.command("update", "--apply", expected=1,
+            out = self.command("add", expected=1,
                                env={**self.env, failure: "1"})
             self.assertIn("could not", out)
             self.assertEqual(export.read_bytes(), before)

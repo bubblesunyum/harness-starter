@@ -26,7 +26,7 @@ hand-written. A roster carrying a foreign model or variant is rewritten by
 `ensure`, which names what it replaced; every other reader refuses it.
 Checkouts from before the roster was tracked have no file at all, and that
 stays passing: every reader treats a missing roster or entry as the pin
-applying anyway — `harness update --apply` backfills it.
+applying anyway — `scripts/models.py ensure` backfills it.
 
 A role's packet budget is its explicit "context", else the limit opencode's
 cached models.dev catalog lists for the pinned model, else OPENCODE_CONTEXT —

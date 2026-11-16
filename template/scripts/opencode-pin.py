@@ -12,6 +12,10 @@ nothing else. This holds every place a model could be chosen to that:
   ~/.config/opencode/agent{,s}/, ~/.opencode/agent{,s}/   same — a machine-wide
                          agent can still name another, so user dirs fail too
   opencode.json          pins the session model; no agent or mode names another
+  .opencode/opencode.json shadows the root file: it must carry the root
+                         instructions, or AGENTS.md never loads
+  .opencode/tui.json     UI overrides only — no plugin key (plugin lives in
+                         the root opencode.json)
   scripts/               no opencode -m built from anything but OPENCODE_MODEL_ARG
   skills and docs        no `opencode ... -m <id>` example naming another model
 
@@ -88,8 +92,8 @@ def roster_problems(root):
     roster = root / "harness/models.json"
     if not roster.exists():
         # Absent stays passing: checkouts from before the roster was tracked
-        # have no file, and the pin applies without one. `harness update
-        # --apply` backfills it; the gate must not fail first.
+        # have no file, and the pin applies without one. `scripts/models.py
+        # ensure` backfills it; the gate must not fail first.
         return []
     try:
         data = json.loads(roster.read_text())
@@ -246,6 +250,67 @@ def config_problems(root):
     return problems
 
 
+def shadow_problems(root):
+    """The .opencode/opencode.json shadow must carry the root instructions.
+
+    opencode reads the deeper file instead of opencode.json when both exist,
+    so a shadow without the root instructions list silently unloads AGENTS.md
+    (and the linked .harness-contract.md). A shadow's own entries stay
+    untouched — this only requires the root entries to be present, the same
+    merge `harness add` performs."""
+    problems = []
+    shadow = root / ".opencode/opencode.json"
+    if not shadow.exists():
+        return problems
+    try:
+        root_tree = read_jsonc(root / "opencode.json")
+    except (OSError, ValueError):
+        root_tree = None
+    wanted = None
+    if isinstance(root_tree, dict) and isinstance(root_tree.get("instructions"), list):
+        wanted = [entry for entry in root_tree["instructions"]
+                  if isinstance(entry, str)]
+    try:
+        tree = read_jsonc(shadow)
+    except (OSError, ValueError):
+        return problems  # config_problems already reports the unreadable file
+    if not isinstance(tree, dict):
+        return problems  # config_problems already reports the wrong shape
+    have = tree.get("instructions")
+    if not isinstance(have, list):
+        problems.append(".opencode/opencode.json: no instructions list — opencode "
+                        "reads this file instead of opencode.json, so AGENTS.md never "
+                        "loads; copy the instructions list from opencode.json")
+    elif wanted is not None:
+        missing = [entry for entry in wanted if entry not in have]
+        if missing:
+            problems.append(f".opencode/opencode.json: missing instructions "
+                            f"({', '.join(missing)}) — opencode reads this file instead "
+                            f"of opencode.json; copy the missing entries from opencode.json")
+    return problems
+
+
+def tui_problems(root):
+    """`.opencode/tui.json` holds UI overrides only: a plugin key there splits
+    the plugin configuration away from the root opencode.json, the single
+    source of truth, where drift goes uncompared."""
+    problems = []
+    path = root / ".opencode/tui.json"
+    if not path.exists():
+        return problems
+    try:
+        tree = read_jsonc(path)
+    except (OSError, ValueError) as exc:
+        return [f".opencode/tui.json: unreadable ({exc})"]
+    if not isinstance(tree, dict):
+        return [".opencode/tui.json: not a JSON object"]
+    if "plugin" in tree:
+        problems.append(".opencode/tui.json: carries a plugin key — plugin "
+                        "configuration lives in the root opencode.json; move it "
+                        "there and remove it here")
+    return problems
+
+
 def script_problems(root):
     """opencode model flags in the harness scripts. Python may pass -m only
     with OPENCODE_MODEL_ARG on the same line; shell may not pass one at all,
@@ -296,7 +361,8 @@ def doc_problems(root):
 
 def check(root):
     problems = (roster_problems(root) + agent_file_problems(root)
-                + config_problems(root) + script_problems(root) + doc_problems(root))
+                + config_problems(root) + shadow_problems(root) + tui_problems(root)
+                + script_problems(root) + doc_problems(root))
     for problem in problems:
         print(f"  PIN   {problem}")
     if problems:

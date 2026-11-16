@@ -264,6 +264,35 @@ migrate_historic_sha() {
   printf '%s\n' "$line"
 }
 
+# An acknowledged fork the migrate honors, on stdin, as project-relative
+# paths: nothing else may claim a diverged entry. Kept beside the read above
+# because both callers read the same way.
+#
+# A diverged entry that acknowledges nothing: not a template file the migrate
+# classifies (typo, removed file, or a path outside template/), or one
+# already quiet (data, overlay, or FILL THIS IN, nothing to acknowledge).
+# Either way the acknowledgment does nothing, so the list is broken and says
+# so loudly before anything is written — a typo silently un-acknowledging the
+# fork it meant is the failure this prevents.
+migrate_validate_diverged() {
+  local files="$1" want bad=""
+  while IFS= read -r want; do
+    [ -n "$want" ] || continue
+    if ! printf '%s\n' "$files" | grep -qxF "$want"; then
+      bad="$bad  $want (no such template file)"$'\n'
+    elif ! harness_is_contract "$want" "$TEMPLATE/$want"; then
+      bad="$bad  $want (already quiet — data, overlay, or FILL THIS IN, nothing to acknowledge)"$'\n'
+    fi
+  done <<< "$2"
+  if [ -n "$bad" ]; then
+    echo "✗ $(printf '%s' "$bad" | grep -c . || true) diverged entry(s) acknowledge nothing — typo, removed file, or a file already quiet:" >&2
+    printf '%s' "$bad" >&2
+    echo "  Fix harness/diverged.txt and re-run." >&2
+    return 1
+  fi
+  return 0
+}
+
 # Append one gitignore line with its comment, like `add` does. Silent when
 # already there; one tidy line when added.
 migrate_append_ignore() {

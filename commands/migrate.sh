@@ -92,6 +92,9 @@ if [ -e "$target/harness/stacks.txt" ] && ! harness_stacks_want "$target" >/dev/
   exit 1
 fi
 files="$(harness_files_for "$HERE" "$target")" || exit 1
+# A broken diverged list fails before anything is written — in the dry run as
+# well as --apply — or a typo silently un-acknowledges the fork it meant.
+migrate_validate_diverged "$files" "$diverged_want" || exit 1
 
 if [ "$apply" -eq 1 ]; then
   # Clean tree, or nothing is written: a migrate deletes files, and deleting

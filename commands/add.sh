@@ -1,5 +1,5 @@
 #!/bin/bash
-# install the harness into a project
+# install the harness into a project, by reference
 #
 #   harness add              into the current directory
 #   harness add <path>       into that project instead
@@ -9,14 +9,14 @@
 # thing no script can infer is who the seat is — that's the agent's to choose,
 # and it's the first thing the closing instructions ask for.
 #
+# A reference install keeps the contract in the shared checkout: this writes
+# the stubs in template/stubs/, the seeds, CLAUDE.md and scripts/h — and no
+# other contract file — then runs `<target>/scripts/h link` so the shared
+# skills exist before the first session. The shared skills, agents and scripts
+# stay in the checkout and arrive through `scripts/h link` and dispatch.
+#
 # Never overwrites a file that already exists in the target, and prints what it
-# skipped, so a re-run is a safe way to pick up pieces added since. The one place
-# it refuses to be quiet is a file carrying the harness contract that exists and
-# differs — there, a skip means the fix never arrived — unless the project
-# acknowledged the fork in harness/diverged.txt, which this honors the same way
-# `harness update` does: shown for the record, never warned about as stale.
-# `harness update` is the same check on its own, for a project that isn't
-# being re-added to.
+# skipped, so a re-run is a safe way to pick up pieces added since.
 set -euo pipefail
 
 # Derived from this file's own location, never from the environment. The
@@ -26,7 +26,7 @@ set -euo pipefail
 # error and no sign that it had happened.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TEMPLATE="$HERE/template"
-# Everything `add` and `update` have to agree on lives here.
+# Everything `add` and `migrate` have to agree on lives here.
 # shellcheck source=lib/install.sh
 . "$HERE/commands/lib/install.sh"
 
@@ -34,50 +34,45 @@ TEMPLATE="$HERE/template"
 # `\?`, so the version that did that shipped the leading `#` of every line.
 usage() {
   cat <<EOF
-Installs the agentic development harness into a project.
+Installs the agentic development harness into a project, by reference.
 
   harness add              into the current directory
   harness add <path>       into that project instead
-  harness add --reference [path]
-                           link the shared harness instead of copying it
 
 The project's name and its bead prefix are inferred from the directory, and a
 project that already has a ledger keeps the prefix it already has. Needs beads
-(bd) on PATH; a missing git repository is created.
+(bd) on PATH; a missing git repository is created. Needs HARNESS_HOME or
+~/.harness pointing at a harness-starter checkout; without one this fails
+before writing anything. A copied install converts with 'harness migrate'.
 
-A reference install keeps the contract in the shared checkout: with
---reference, add writes the stubs in template/stubs/, the seeds, CLAUDE.md
-and scripts/h — and no other contract file — then runs
-'<target>/scripts/h link' so the shared skills exist before the first
-session. Needs HARNESS_HOME or ~/.harness pointing at a harness-starter
-checkout; without one it fails before writing anything.
+A reference install keeps the contract in the shared checkout: add writes the
+stubs in template/stubs/, the seeds, CLAUDE.md and scripts/h — and no other
+contract file — then runs '<target>/scripts/h link' so the shared skills exist
+before the first session.
 
 Never overwrites a file that already exists, so re-running is a safe way to
-pick up pieces added to the starter since. Files carrying the harness contract
-are warned about loudly when they exist but differ from the template — that is
-the one case where skipping quietly would hide a failed install — unless the
-file is acknowledged in harness/diverged.txt, which is shown for the record
-instead. See 'harness update' for the same check without installing anything.
+pick up pieces added to the starter since.
+
+harness update and harness diverge are retired: a reference install is always
+current, and a same-path project file is a shadow.
 EOF
 }
 
 # --reference may lead or trail the path; anything else positional is the
 # target, as today — an unknown flag reads as a path and fails as one.
-reference=""
 pos=""
 for arg in ${1+"$@"}; do
   case "$arg" in
-    --reference) reference=1 ;;
+    # No-op: reference is the only install, kept so old invocations keep working.
+    --reference) ;;
     -h|--help) usage; exit 0 ;;
     *) [ -n "$pos" ] || pos="$arg" ;;
   esac
 done
 
-if [ -n "$reference" ]; then
-  # Before the target is even resolved: resolving inits a git repository,
-  # and a harness that cannot be found must leave the target untouched.
-  ref_root="$(harness_reference_root)" || exit 1
-fi
+# Before the target is even resolved: resolving inits a git repository,
+# and a harness that cannot be found must leave the target untouched.
+ref_root="$(harness_reference_root)" || exit 1
 
 # Whether the target already is a repository, read off the raw path before
 # resolving it: --init creates one when it isn't, and the install says so below
@@ -87,6 +82,16 @@ fi
 had_git=0
 [ -e "${pos:-$PWD}/.git" ] && had_git=1
 target="$(harness_resolve_target --init "${pos:-$PWD}")"
+# A copied install is a conversion, not an install: every stub path already
+# holds a full copy-install file, so continuing would print "already there"
+# for each and exit 0 with the stale contract in place. Refuse before anything
+# is written, naming the conversion. The starter itself is exempt — working on
+# the harness means installing into a tree that carries the contract by design.
+if [ "$target" != "$HERE" ] && harness_is_copy_install "$target"; then
+  echo "✗ this is a copied install — convert it with 'harness migrate' (dry run first)." >&2
+  echo "  A reference install keeps only stubs and the finder; this tree carries full contract files." >&2
+  exit 1
+fi
 # Protect even the first prefix lookup from bd's memory-less auto-flush. The
 # project setting is persisted once its live ledger has been verified below.
 export BD_EXPORT_AUTO=false
@@ -119,9 +124,7 @@ echo "installing the harness into $target"
 [ "$had_git" -eq 0 ] && echo "  initialised a git repository"
 echo "  project: $name"
 echo "  prefix:  $prefix-"
-if [ -n "$reference" ]; then
-  echo "  harness: $ref_root (reference — shared files stay there)"
-fi
+echo "  harness: $ref_root (reference — shared files stay there)"
 
 # Written once, before the file list is read, because the list depends on it.
 # An existing stacks.txt is the project's call and is never re-detected over.
@@ -143,95 +146,33 @@ if [ -n "$unknown" ]; then
 fi
 echo
 
-if [ -n "$reference" ]; then
-  files="$(harness_reference_files)"
-  # Every source present before a single write: a missing stub would otherwise
-  # leave a 0-byte file behind, and the never-overwrite guard would then read
-  # that as already installed on every re-run.
-  missing=""
-  while IFS= read -r rel; do
-    # Readable, not just present: an unreadable stub would otherwise truncate
-    # the destination to 0 bytes below, and the never-overwrite guard would
-    # then read that as already installed on every re-run.
-    src_check="$TEMPLATE/$(harness_reference_src "$rel")"
-    [ -f "$src_check" ] && [ -r "$src_check" ] || missing="$missing  $rel"$'\n'
-  done <<< "$files"
-  if [ -n "$missing" ]; then
-    echo "✗ the starter is missing reference sources for:" >&2
-    printf '%s' "$missing" >&2
-    echo "  restore them (git checkout -- template/stubs) and re-run." >&2
-    exit 1
-  fi
-else
-  files="$(harness_files_for "$HERE" "$target")"
-fi
-
-# Acknowledged local forks. A contract file listed in the project's
-# harness/diverged.txt differs on purpose, so a re-add shows it for the record
-# instead of warning that the install is stale — the same acknowledgment
-# `harness update` honors, read through the same helper. An unreadable list
-# warns and reads as empty rather than failing the install: every difference
-# then warns as stale, which is the loud direction, and `update` still fails
-# on the list itself.
-diverged_want=""
-if [ -f "$target/harness/diverged.txt" ]; then
-  diverged_want="$(harness_diverged_want "$target")" || {
-    echo "  ! harness/diverged.txt exists but is not readable — acknowledged forks can't be honored; every difference warns as stale." >&2
-    diverged_want=""
-  }
-fi
-
-# Pre-split projects carry their gate steps and review scope inline in
-# scripts/verify.sh / scripts/review.sh. This runs before the copy loop so the
-# project's own answers win over the template's placeholders: a re-add never
-# overwrites, so without this the overlay would arrive with placeholder content
-# beside the project's real answers — and the next `update --apply` would
-# converge the base and strand them.
-# A reference install writes no base script, so there is no split to recover.
-if [ -z "$reference" ]; then
-moved_all=""
-for rel in scripts/verify.sh scripts/review.sh; do
-  overlay="$(harness_overlay_of "$rel")" || continue
-  [ -e "$target/$overlay" ] && continue
-  [ -f "$target/$rel" ] || continue
-  if moved="$(harness_extract_overlay "$HERE" "$target" "$rel")"; then
-    [ -n "$moved" ] && moved_all="$moved_all  moved this project's block to $moved"$'\n'
-  else
-    moved_all="$moved_all  ! $rel predates the base/overlay split and holds no block to lift —"$'\n'
-    moved_all="$moved_all    move its steps or scope by hand into $overlay, then re-run."$'\n'
-  fi
-done
-[ -n "$moved_all" ] && { printf '%s' "$moved_all"; echo; }
-fi
-
-copied=0; skipped=0; stale=0; diverged=0
+files="$(harness_reference_files)"
+# Every source present before a single write: a missing stub would otherwise
+# leave a 0-byte file behind, and the never-overwrite guard would then read
+# that as already installed on every re-run.
+missing=""
 while IFS= read -r rel; do
-  if [ -n "$reference" ]; then
-    src="$TEMPLATE/$(harness_reference_src "$rel")"
-  else
-    src="$TEMPLATE/$rel"
-  fi
+  # Readable, not just present: an unreadable stub would otherwise truncate
+  # the destination to 0 bytes below, and the never-overwrite guard would
+  # then read that as already installed on every re-run.
+  src_check="$TEMPLATE/$(harness_reference_src "$rel")"
+  [ -f "$src_check" ] && [ -r "$src_check" ] || missing="$missing  $rel"$'\n'
+done <<< "$files"
+if [ -n "$missing" ]; then
+  echo "✗ the starter is missing reference sources for:" >&2
+  printf '%s' "$missing" >&2
+  echo "  restore them (git checkout -- template/stubs) and re-run." >&2
+  exit 1
+fi
+
+copied=0; skipped=0
+while IFS= read -r rel; do
+  src="$TEMPLATE/$(harness_reference_src "$rel")"
   dst="$target/$rel"
   if [ -e "$dst" ]; then
-    # Never overwritten — that is what makes a re-run safe. But for the files
-    # carrying the harness contract, silence here is the install failing: the
-    # project keeps a stale AGENTS.md, the skip line scrolls past among thirty
-    # others, and nothing ever says the fix didn't arrive. Acknowledged forks
-    # are the exception: those differ on purpose, so they are shown for the
-    # record instead of counted as stale.
-    # A reference install owns no contract file to compare against: the stubs
-    # are the source, an existing file is the project's, and it stays.
-    if [ -z "$reference" ] && harness_is_contract "$rel" "$src" && ! harness_current "$rel" "$src" "$dst"; then
-      if harness_in_diverged_list "$diverged_want" "$rel"; then
-        echo "  diverged  $rel (acknowledged in harness/diverged.txt)"
-        diverged=$((diverged + 1))
-      else
-        echo "  ⚠ $rel exists and differs from the template"
-        stale=$((stale + 1))
-      fi
-    else
-      echo "  skip  $rel (already there)"
-    fi
+    # Never overwritten — that is what makes a re-run safe. An existing file
+    # is the project's and stays.
+    echo "  skip  $rel (already there)"
     skipped=$((skipped + 1))
     continue
   fi
@@ -242,7 +183,7 @@ while IFS= read -r rel; do
   tmp_dst="$(mktemp "$target/.harness-add-XXXXXX")" || exit 1
   if harness_render "$src" > "$tmp_dst"; then
     # mktemp makes 0600; installed files are 0644 (0755 below when the source
-    # is executable), which dashboard-update.sh's mode restore assumes.
+    # is executable).
     chmod 644 "$tmp_dst"
     mv "$tmp_dst" "$dst"
   else
@@ -257,18 +198,6 @@ done <<< "$files"
 
 echo
 echo "  $copied added, $skipped skipped"
-if [ "$stale" -gt 0 ]; then
-  echo
-  echo "  ⚠ $stale contract file(s) above are stale — the harness contract is not"
-  echo "    fully installed here. Merging is yours, because this never overwrites."
-  echo "    What changed:"
-  echo "      harness update --diff $target"
-fi
-if [ "$diverged" -gt 0 ]; then
-  echo
-  echo "  $diverged diverged file(s) above differ — acknowledged in harness/diverged.txt,"
-  echo "    shown for the record. This never overwrites them; delete the line to un-acknowledge."
-fi
 # The hook logic lives in scripts/ and is pointed at, rather than copied into
 # a hooks directory — beads rewrites .beads/hooks on upgrade and would eat it.
 # Git runs hooks from core.hooksPath when set and ignores .git/hooks entirely,
@@ -355,12 +284,10 @@ append_ignore 'dashboard/state.json' \
   'The dashboard snapshot, rewritten on every poll — machine-local.'
 append_ignore '.tmp/' \
   'Agent scratch — created here, removed when done, never committed.'
-if [ -n "$reference" ]; then
-  # Derived, not committed: the shared prompts are the source of truth, and
-  # `scripts/h link` regenerates these from them on every session.
-  append_ignore '.codex/agents/' \
-    'Codex agents generated from the shared prompts — scripts/h link regenerates them.'
-fi
+# Derived, not committed: the shared prompts are the source of truth, and
+# `scripts/h link` regenerates these from them on every session.
+append_ignore '.codex/agents/' \
+  'Codex agents generated from the shared prompts — scripts/h link regenerates them.'
 
 # Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
 # AGENTS.md. The import is what makes the contract always-loaded in both, rather
@@ -524,7 +451,7 @@ fi
 # already says, in worse words, and every re-run would re-append it over a
 # deliberate removal. The template supplies the project brief hook for Codex.
 if command -v bd >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-  if python3 - "$target" "${reference:-0}" <<'PYEOF'
+  if python3 - "$target" <<'PYEOF'
 import json
 import re
 import sys
@@ -534,9 +461,6 @@ from pathlib import Path
 # is left alone rather than truncated from that line to the end.
 BLOCK = re.compile(r"<!-- BEGIN BEADS.*?<!-- END BEADS[^>]*-->\n*", re.S)
 target = Path(sys.argv[1])
-# A reference install points its hooks at the finder, not at installed
-# scripts: the Codex brief entry below must name scripts/h, never brief.sh.
-ref = len(sys.argv) > 2 and sys.argv[2] == "1"
 did = []
 
 
@@ -575,12 +499,10 @@ if codex.exists():
         else:
             hooks.pop(event)
     starts = hooks.setdefault("SessionStart", [])
-    if ref:
-        want_pat = r"scripts/h(?![\w/-])"
-        want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/h" session --hook'
-    else:
-        want_pat = r"scripts/brief\.sh(?![\w/-])"
-        want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/brief.sh" --hook'
+    # A reference install points its hooks at the finder, never at installed
+    # scripts: the Codex brief entry names scripts/h.
+    want_pat = r"scripts/h(?![\w/-])"
+    want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/h" session --hook'
     added = not any(re.search(want_pat, h.get("command", ""))
                     for g in starts for h in g.get("hooks", []))
     if added:
@@ -622,34 +544,6 @@ else
   echo "    beads blocks, and .claude/settings.json a bd prime hook."
 fi
 
-# The generated opencode agents are built from the installed agent files, so this
-# runs after the copy loop — with the project's own agent files in place. A
-# reference install has no agent files of its own: the reviewers arrive
-# through `scripts/h link` from the shared checkout, already generated there.
-if [ -z "$reference" ]; then
-if agents_out="$(cd "$target" && ./scripts/opencode-agents.py 2>&1)"; then
-  echo "$agents_out"
-else
-  echo "$agents_out" >&2
-  echo "  ! couldn't generate .opencode/agent/ — fix the above and run" >&2
-  echo "    scripts/opencode-agents.py. opencode has no reviewers until you do." >&2
-  leftover_agents=1
-fi
-fi
-
-# The per-role roster pins every opencode role to the one model and variant
-# this install runs on. Quiet on success; never failing the install. A
-# reference install keeps no local roster: the stub opencode.json already pins
-# the session model, and an absent roster passes the pin check.
-if [ -z "$reference" ]; then
-if models_out="$(cd "$target" && python3 scripts/models.py ensure 2>&1)"; then
-  :
-else
-  [ -n "$models_out" ] && printf '%s\n' "$models_out" >&2
-  echo "  ! couldn't write harness/models.json — run 'scripts/models.py ensure' yourself."
-fi
-fi
-
 # A .opencode/opencode.json shadows the root one — opencode reads only the
 # deeper file — so a plugin-only copy there would silently unload AGENTS.md.
 # The root instructions are merged in; the shadow's own entries stay.
@@ -661,12 +555,6 @@ else
   echo "    Copy the instructions list from opencode.json by hand." >&2
 fi
 
-# A reference install keeps no local doc hashes: the shared docs are checked
-# from the harness checkout, not from the project.
-if [ -z "$reference" ]; then
-(cd "$target" && ./scripts/context.py bless >/dev/null 2>&1) && echo "  blessed the doc hashes" || true
-fi
-
 # Leftover problems and post-install setup survive only as beads: install
 # stdout scrolls away, `bd ready` doesn't. Each files only when its condition
 # still holds and no open bead already carries the title, so re-add files no
@@ -676,7 +564,6 @@ if [ -n "${ledger:-}" ]; then
   [ -n "${leftover_origin:-}" ] && file_any=1
   [ -n "${leftover_dolt:-}" ] && file_any=1
   [ -n "${unknown:-}" ] && file_any=1
-  [ -n "${leftover_agents:-}" ] && file_any=1
   if harness_seat_blank "$target"; then seat_todo=1; file_any=1; else seat_todo=0; fi
   if harness_claude_stock "$target"; then claude_todo=1; file_any=1; else claude_todo=0; fi
   if harness_verify_steps_placeholder "$target"; then steps_todo=1; file_any=1; else steps_todo=0; fi
@@ -701,15 +588,9 @@ if [ -n "${ledger:-}" ]; then
       "harness/stacks.txt names only stacks the starter guides, and harness add prints no unknown-stack warning." \
       "" || true
   fi
-  if [ -n "${leftover_agents:-}" ]; then
-    harness_file_bead "$target" "fix opencode reviewer generation (scripts/opencode-agents.py)" \
-      "scripts/opencode-agents.py fails in this project; run it, read the error, and fix the cause so .opencode/agent/ reviewers exist. Until then opencode has no reviewers." \
-      "scripts/opencode-agents.py exits 0 and .opencode/agent/ holds the reviewers." \
-      "" || true
-  fi
   if [ "$seat_todo" -eq 1 ]; then
     harness_file_bead "$target" "name the seat in harness/seat.md" \
-      "Choose a name you would want to be called and write two or three paragraphs on what this seat is for, about this project specifically, replacing the FILL THIS IN block. Fill in the Name field or the brief greets you as 'unnamed'." \
+      "Choose a name you would want to be called and write two or three paragraphs on what this seat is for, about this project specifically, replacing the FILL THIS IN block. Fill in the Name field or the brief greets the seat as 'unnamed'." \
       "harness/seat.md carries a filled Name field and no FILL THIS IN block; the brief greets the seat by name." \
       "" || true
   fi
@@ -741,9 +622,6 @@ if [ -n "${ledger:-}" ]; then
   if [ -e "$target/.beads/issues.jsonl" ] && ! git -C "$target" add .beads/issues.jsonl 2>/dev/null; then
     echo "  ! couldn't stage .beads/issues.jsonl — the gate will say untracked until it is staged."
   fi
-  if [ -e "$target/harness/models.json" ] && ! git -C "$target" add -f harness/models.json 2>/dev/null; then
-    echo "  ! couldn't stage harness/models.json — the gate will say untracked until it is staged."
-  fi
 fi
 
 cat <<'EOF'
@@ -767,19 +645,19 @@ Do these now, in this order. They are the parts no script can infer.
    harness contract and CLAUDE.md imports it, so don't repeat any of it here.
 
 3. scripts/verify.steps.sh — this project's real build and test commands, going
-   through `step`. scripts/verify.sh around it works as-is.
+   through `step`. scripts/h verify runs the gate from the shared checkout.
 
 4. harness/reviewers/{taste,correctness,design}.md — this project's own
    reviewer checks: the language, framework, and actual recurring bugs.
-   The generic checks already live in .claude/agents/reviewer-*.md, which
-   read these files as overlays — so put the specific ones here, they are
-   worth ten of the generic ones. Checks for the project's language and
-   platform come from harness/stacks/ — check that harness/stacks.txt
-   named the right stacks above.
+   The shared reviewers read these files as overlays over their generic
+   checks — so put the specific ones here, they are worth ten of the generic
+   ones. Checks for the project's language and platform come from
+   harness/stacks/ — check that harness/stacks.txt named the right stacks
+   above.
 
-Then run scripts/verify.sh, and open the dashboard it points you at — in
-Claude Code's browser pane (preview_start harness-dashboard), not a system
-browser.
+Then run scripts/h doctor and scripts/h session, and open the starter's
+dashboard — the starter's dashboard shows this project, and nothing is
+installed here for it.
 Read .claude/HARNESS.md before rearranging any of it.
 EOF
 
@@ -794,23 +672,16 @@ fi
 # present at launch. And linked only now, after bd init and the cleanup above:
 # bd init writes .agents/skills/beads/SKILL.md, and with the links already in
 # place that write lands through them in the SHARED checkout's beads skill.
-if [ -n "$reference" ]; then
-  echo "  linking the shared skills"
-  "$target/scripts/h" link || {
-    echo "✗ scripts/h link failed in $target — run it yourself and read the error." >&2
-    exit 1
-  }
-fi
+echo "  linking the shared skills"
+"$target/scripts/h" link || {
+  echo "✗ scripts/h link failed in $target — run it yourself and read the error." >&2
+  exit 1
+}
 
-# Shared sources are installed (or linked) before Codex discovery links are
-# generated. A reference install runs the shared generator through the finder:
-# its .codex/agents and .agents/skills are per-project output either way.
-if [ -n "$reference" ]; then
-  codex_write=(scripts/h codex-support write)
-else
-  codex_write=(python3 scripts/codex-support.py write)
-fi
-if ! (cd "$target" && "${codex_write[@]}"); then
+# Shared sources are linked before Codex discovery links are generated: a
+# reference install runs the shared generator through the finder — its
+# .codex/agents and .agents/skills are per-project output either way.
+if ! (cd "$target" && ./scripts/h codex-support write); then
   echo "  ! Codex setup needs reconciliation; shared sources were preserved." >&2
   exit 1
 fi

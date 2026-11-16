@@ -133,15 +133,8 @@ inside that directory (`{"css": ["brand.css"]}`), fetched at
 paths the table never listed answer 404. Assets are static bytes only and are
 never executed server-side.
 
-The installer creates `dashboard.toml` once and later dashboard updates leave
-it project-owned. To refresh the page and dashboard server from the starter, run:
-
-```bash
-harness update dashboard
-```
-
-That command re-copies `dashboard/` and `scripts/dashboard.py`, preserves the
-generated `dashboard/state.json`, and leaves `dashboard.toml` alone. After a
-successful update those shipped page and server files match the starter byte
-for byte. The regular harness update path handles other contract files,
-including `scripts/dashboard-persist.sh`.
+The installer creates `dashboard.toml` once and never touches it again — it is
+the project's file, carrying its display name, run buttons, and verdict
+pattern. There is one dashboard now, run from the starter: it switches across
+projects and reads each one's `dashboard.toml`, so nothing here ever needs
+refreshing. To pick up dashboard fixes, update the starter checkout itself.

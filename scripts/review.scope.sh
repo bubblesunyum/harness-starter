@@ -1,9 +1,8 @@
 # What a review is allowed to see. Sourced by scripts/review.sh, which defines
 # `_harness_prefix` above this point, so CAPTURES can use it.
 #
-# This file is yours. The harness installs it once and never compares or
-# overwrites it — `harness update` stays silent about it, and packet fixes
-# still arrive in scripts/review.sh.
+# This file is the starter's own (a seed): shared packet fixes still arrive in
+# the checkout's scripts/review.sh.
 
 # What a review is allowed to see: the app's source, and the harness that builds
 # it. Include the harness — it grows enough code of its own to have bugs, and a

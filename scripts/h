@@ -7,7 +7,7 @@
 #
 #   scripts/h root                       print the resolved root, nothing else
 #   scripts/h doctor                     project, root, source, shadows
-#   scripts/h link                       symlink shared skills/agents here
+#   scripts/h link                       symlink shared skills/agents/stacks here
 #   scripts/h session [--hook]           link, then the contract plus the brief
 #   scripts/h hook <name> [args]         run the shared hook for this project
 #   scripts/h brief|verify|review|...    run the shared script for this project
@@ -123,7 +123,7 @@ usage() {
 usage: h [-h|--help] <command> [args]
   root        print the resolved harness root
   doctor      show project, root, source, revision, and shadows
-  link        symlink shared skills/agents into this project
+  link        symlink shared skills/agents/stacks into this project
   session     link, then the contract plus the brief [--hook for SessionStart JSON]
   hook        run the shared hook for this project
   brief       session brief
@@ -257,8 +257,89 @@ cmd_link() {
     link_context=""
     prune_dead_links "$dst" "$p"
   done
+  link_stacks
   link_contract
   link_codex
+}
+
+# A name in harness/stacks.txt with no shared guidance: loud, never fatal.
+# Names the list, the wanted file, and the stacks that do exist — a link must
+# not break the session that called it over a typo.
+unknown_stack() {
+  printf 'harness: harness/stacks.txt names %s — no shared harness/stacks/%s.md in %s (known: %s) — fix the name or remove it; reviewers get no platform checks for it\n' "'$1'" "$1" "$ROOT" "$2" >&2
+}
+
+# Stack guidance for this project's stacks: each name in harness/stacks.txt
+# links PROJECT/harness/stacks/<name>.md at the shared
+# ROOT/harness/stacks/<name>.md, so the reviewers read current guidance
+# without the project copying it. Per-entry links, gitignored per entry like
+# the skills: a real file there is the project's own and stays, while a shared
+# link that dangles or is no longer listed is pruned. Unknown names stay loud
+# but never fatal, and so does everything else here — link runs inside
+# session, which must survive it.
+link_stacks() {
+  srcdir="$ROOT/harness/stacks"
+  dstdir="$PROJECT/harness/stacks"
+  list="$PROJECT/harness/stacks.txt"
+  known=""
+  if [ -d "$srcdir" ]; then
+    known="$(ls "$srcdir" 2>/dev/null | sed -e 's/\.md$//' | tr '\n' ' ')"
+  fi
+  [ -n "$known" ] || known="none"
+  want=""
+  if [ -e "$list" ] || [ -L "$list" ]; then
+    # An unreadable list reading as "no stacks" would quietly drop every
+    # reviewer's platform checks, so say so instead — still without failing.
+    if [ ! -r "$list" ]; then
+      printf 'harness: harness/stacks.txt unreadable — fix permissions so reviewers get stack guidance\n' >&2
+      return 0
+    fi
+    want="$(sed -e 's/#.*//' "$list" | sed -e 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' || true)"
+  fi
+  if [ -n "$want" ]; then
+    mkdir -p "$dstdir" || {
+      printf 'harness: cannot make harness/stacks in %s — check permissions there\n' "$PROJECT" >&2
+      return 0
+    }
+  fi
+  # Command substitution runs the EXIT trap in its own subshell, so the
+  # wanted set travels through a loop over a herestring, never a $(...).
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    # A stack name is one path segment; anything else is a typo or worse, and
+    # must never become a link outside harness/stacks/.
+    if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9_-][A-Za-z0-9._-]*$'; then
+      unknown_stack "$name" "$known"
+      continue
+    fi
+    if [ -e "$srcdir/$name.md" ] || [ -L "$srcdir/$name.md" ]; then
+      link_entry "$srcdir/$name.md" "$dstdir" "harness/stacks/$name.md"
+    else
+      unknown_stack "$name" "$known"
+    fi
+  done <<< "$want"
+  # Prune shared links that dangle or are no longer listed: anything pointing
+  # into a harness checkout's stacks. Anything else broken is the project's
+  # own, hands off — and a real file is the project's own guidance, left alone.
+  if [ -d "$dstdir" ]; then
+    for target in "$dstdir"/*.md; do
+      [ -L "$target" ] || continue
+      case "$(readlink "$target")" in
+        *"/template/harness/stacks/"*) ;;
+        *) continue ;;
+      esac
+      base="${target##*/}"
+      base="${base%.md}"
+      if [ ! -e "$target" ]; then
+        rm -f "$target"  # dangling shared entry: gone upstream
+      elif printf '%s\n' "$want" | grep -qxF "$base"; then
+        :
+      else
+        rm -f "$target"  # no longer listed
+      fi
+    done
+  fi
+  return 0
 }
 
 # The opencode-readable copy of the shared contract: a single link, not a

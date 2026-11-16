@@ -80,16 +80,16 @@ fi
 
 # ── CONFIGURE ─────────────────────────────────────────────────────────────
 # What a review is allowed to see lives in scripts/review.scope.sh, sourced
-# just below. That file is yours — installed once, never compared or
-# overwritten — so scope edits there are safe and packet fixes here still
-# arrive with `harness update`.
+# just below. That file is the project's own — installed once by `harness add`
+# and never touched again — so scope edits there are safe and shared packet
+# fixes here still arrive with the starter.
 # Project-only, like verify.steps.sh: a scope is the project's answer.
 if [ -f "$ROOT/scripts/review.scope.sh" ]; then
   . "$ROOT/scripts/review.scope.sh"
 else
   echo "  ! no scripts/review.scope.sh — the packet has no scope to review." >&2
   echo "    'harness add' installs it; a project from before the split recovers" >&2
-  echo "    its scope from its old review.sh on 'harness update --apply'." >&2
+  echo "    its scope from its old review.sh by hand." >&2
   exit 1
 fi
 # ── END CONFIGURE ─────────────────────────────────────────────────────────

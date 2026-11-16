@@ -141,6 +141,48 @@ class PinCheckTests(unittest.TestCase):
             json.dumps({"model": "opencode-go/cheap-bulk"}))
         self.assert_fails_naming(".opencode/opencode.json")
 
+    def test_a_shadow_without_instructions_fails_naming_the_fix(self):
+        # A plugin-only shadow reads instead of the root file and silently
+        # unloads AGENTS.md; the failure must name the list to copy over.
+        (self.root / ".opencode/opencode.json").write_text(
+            json.dumps({"plugin": ["file:./plugin"]}))
+        self.assert_fails_naming(".opencode/opencode.json", "instructions",
+                                 "opencode.json")
+
+    def test_a_shadow_with_a_string_instructions_fails(self):
+        (self.root / ".opencode/opencode.json").write_text(
+            json.dumps({"instructions": "AGENTS.md"}))
+        self.assert_fails_naming(".opencode/opencode.json", "instructions")
+
+    def test_a_shadow_with_partial_instructions_fails_naming_the_missing(self):
+        full = json.loads((self.root / "opencode.json").read_text())["instructions"]
+        self.assertTrue(len(full) >= 2, "root opencode.json needs 2+ instructions")
+        (self.root / ".opencode/opencode.json").write_text(
+            json.dumps({"instructions": full[:-1]}))
+        self.assert_fails_naming(".opencode/opencode.json", full[-1])
+
+    def test_a_shadow_carrying_the_root_instructions_passes(self):
+        # The shadow's own entries stay untouched — only the root entries must
+        # be present, the same merge `harness add` performs.
+        full = json.loads((self.root / "opencode.json").read_text())["instructions"]
+        (self.root / ".opencode/opencode.json").write_text(
+            json.dumps({"instructions": ["project-local.md"] + full,
+                        "plugin": ["file:./plugin"]}))
+        out = self.check()
+        self.assertEqual(out.returncode, 0, out.stdout)
+
+    def test_a_tui_plugin_fails_naming_the_fix(self):
+        (self.root / ".opencode/tui.json").write_text(
+            json.dumps({"plugin": ["file:./plugin"]}))
+        self.assert_fails_naming(".opencode/tui.json", "plugin",
+                                 "root opencode.json")
+
+    def test_a_tui_without_plugin_passes(self):
+        (self.root / ".opencode/tui.json").write_text(
+            json.dumps({"theme": "x"}))
+        out = self.check()
+        self.assertEqual(out.returncode, 0, out.stdout)
+
     def test_jsonc_comments_and_trailing_commas_parse(self):
         (self.root / ".opencode/opencode.jsonc").write_text(
             '{\n  // local plugin\n  "plugin": ["https://x.test/p"], // trailing\n'

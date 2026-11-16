@@ -42,7 +42,9 @@ elif sys.argv[1] == 'init':
         'Stop':[{'hooks':[{'type':'command','command':'echo local-stop'}]}]}}))
 ''')
             bd.chmod(0o755)
-            env = {**os.environ, 'PATH': str(binaries) + os.pathsep + os.environ['PATH']}
+            # A reference install resolves the shared harness, never the network.
+            env = {**os.environ, 'PATH': str(binaries) + os.pathsep + os.environ['PATH'],
+                   'HARNESS_HOME': str(ROOT)}
             def install():
                 subprocess.run(['bash', str(ROOT / 'commands/add.sh'), str(project)],
                                env=env, check=True, capture_output=True, text=True)
@@ -53,11 +55,15 @@ elif sys.argv[1] == 'init':
             self.assertFalse(any('bd codex-hook' in c or 'bd prime' in c for c in commands))
             self.assertIn('echo local-start', commands)
             self.assertIn('echo local-stop', commands)
-            brief = [c for c in commands if 'scripts/brief.sh' in c]
+            # A reference install points its hooks at the finder, never at
+            # installed scripts: the Codex brief entry names scripts/h.
+            brief = [c for c in commands if 'scripts/h' in c]
             self.assertEqual(len(brief), 1)
             self.assertNotIn('BEGIN BEADS', (project / 'AGENTS.md').read_text())
-            self.assertIn('harness/codex.md', (project / 'AGENTS.md').read_text())
-            self.assertIn('local commits without another user request', (project / 'harness/codex.md').read_text())
+            # The stub points at the finder; the contract lives in the shared
+            # checkout, not in a project copy.
+            self.assertIn('scripts/h session', (project / 'AGENTS.md').read_text())
+            self.assertFalse((project / 'harness/codex.md').exists())
             beads = (project / '.claude/skills/beads/SKILL.md').read_text()
             self.assertNotIn('\nbd prime\n', beads)
             self.assertNotIn('or mutate tasks', beads)
@@ -74,7 +80,9 @@ elif sys.argv[1] == 'init':
             custom_commands = [h['command'] for groups in custom_hooks.values()
                                for g in groups for h in g['hooks']]
             self.assertIn('echo custom-only', custom_commands)
-            self.assertEqual(sum('scripts/brief.sh' in c for c in custom_commands), 1)
+            self.assertEqual(sum('scripts/h' in c for c in custom_commands), 1)
+            # A project copy shadows the shared brief: the finder prefers it,
+            # so a shadowing brief.sh answers the hook.
             (project / 'scripts/brief.sh').write_text('test "$1" = --hook && echo fixture-brief\n')
             nested = project / 'nested directory'
             nested.mkdir()
