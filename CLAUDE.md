@@ -3,12 +3,14 @@
 # CLAUDE.md
 
 harness-starter is the agentic development harness itself, packaged so it can be
-installed into any project. `template/` is the product; the root is a working
-install of it, put there by `harness add`.
+installed into any project. `template/` is the product AND what the starter
+runs: the root carries a reference install whose finder resolves this
+checkout's own `template/` first, so there are no root copies and nothing to
+carry across.
 
-**Every real change goes in `template/`.** The root `scripts/` are substituted
-copies made at install time — editing one does not change the other, and the
-running harness here is the copy. See "Working on the starter" in README.md.
+**Every real change goes in `template/`.** It is live everywhere at once —
+the starter runs it directly, every project on its next command. See "Working
+on the starter" in README.md.
 
 ## Taste
 

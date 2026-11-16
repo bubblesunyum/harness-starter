@@ -27,10 +27,41 @@ probe_step "contract split" bash scripts/test-contract-split.sh
 probe_step "reference install" bash scripts/test-reference-add.sh
 probe_step "migrate a copied install" bash scripts/test-migrate.sh
 
+# The starter runs by reference: its finder resolves to its own template/
+# first, so editing a template file takes effect in the next `scripts/h`
+# command with no copy step. Proved with a probe-only marker in a scratch
+# starter checkout — isolated, so the gate never dirties its own template —
+# resolved with no HARNESS_HOME, so only the starter-first path can find it.
+probe_step "editing template takes effect immediately" bash -c '
+  scratch="$(mktemp -d)" || { echo "error: mktemp failed"; exit 1; }
+  trap "rm -rf \"$scratch\"" EXIT
+  mkdir -p "$scratch/template/scripts" "$scratch/scripts" ||
+    { echo "error: cannot make scratch"; exit 1; }
+  cp "$PWD/template/.harness-root" "$scratch/template/.harness-root" ||
+    { echo "error: cannot copy marker"; exit 1; }
+  cp "$PWD/template/scripts/models.py" "$scratch/template/scripts/models.py" ||
+    { echo "error: cannot copy models"; exit 1; }
+  cp "$PWD/scripts/h" "$scratch/scripts/h" ||
+    { echo "error: cannot copy finder"; exit 1; }
+  chmod +x "$scratch/scripts/h" || { echo "error: cannot chmod finder"; exit 1; }
+  python3 - "$scratch/template/scripts/models.py" <<PYEOF ||
+import sys
+p = sys.argv[1]
+t = open(p).read()
+t = t.replace("usage: scripts/models.py ensure [--again] | get <role> | budget <role>", "usage: probe-marker-12345")
+open(p, "w").write(t)
+PYEOF
+    { echo "error: cannot plant marker"; exit 1; }
+  # models with no args prints usage and exits 2 — expected, so || true keeps
+  # the output for the grep below rather than failing here.
+  out="$(env -u HARNESS_HOME HOME="$scratch/no-home" HARNESS_URL="file:///nonexistent-probe" "$scratch/scripts/h" models 2>&1 || true)"
+  echo "$out" | grep -q "probe-marker-12345" ||
+    { echo "error: edited template did not take effect"; echo "$out"; exit 1; }'
+
 step "shell parses" bash -c '
   set -e
   for f in bin/harness commands/*.sh commands/lib/*.sh scripts/*.sh scripts/hooks/* \
-           scripts/lib/*.sh scripts/h template/scripts/*.sh template/scripts/hooks/* \
+           scripts/h template/scripts/*.sh template/scripts/hooks/* \
            template/scripts/lib/*.sh template/scripts/h template/stubs/scripts/hooks/*; do
     [ -f "$f" ] || continue
     bash -n "$f" || { echo "error: $f"; exit 1; }
@@ -923,36 +954,6 @@ probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
     { echo "error: the hook accepted a source rename into handoffs"; echo "$out"; exit 1; }
   echo "$out" | grep -q "names no bead" ||
     { echo "error: rename refusal never said why"; echo "$out"; exit 1; }'
-
-# The starter eats its own dogfood: its working tree reads as current against
-# its own template. A stale copy here means the split already slipped — a base
-# edited in the root instead of the template. Compared directly, file by file:
-# the retired update command no longer answers this.
-step "the starter reads as current" bash -c '
-  bad=""
-  while IFS= read -r f; do
-    case "$f" in
-      scripts/verify.steps.sh|scripts/review.scope.sh) continue ;;
-    esac
-    rel="${f#scripts/}"
-    [ -f "template/scripts/$rel" ] || continue
-    cmp -s "template/scripts/$rel" "$f" || bad="$bad
-  $f"
-  done <<< "$(git ls-files scripts)"
-  [ -z "$bad" ] || { echo "error: root copies differ from the template:$bad"; exit 1; }'
-
-# The split sticks only while the base files stay identical. This is the
-# enforcement: a base edited in the root copy instead of the template fails the
-# gate, rather than drifting quietly while every install keeps running the fix.
-step "contract scripts match the template byte for byte" bash -c '
-  cmp -s template/scripts/verify.sh scripts/verify.sh ||
-    { echo "error: scripts/verify.sh differs from its template — change the template, not the copy"; exit 1; }
-  cmp -s template/scripts/ledger-export-check.sh scripts/ledger-export-check.sh ||
-    { echo "error: ledger-export-check.sh differs from its template — change the template, not the copy"; exit 1; }
-  cmp -s template/scripts/review.sh scripts/review.sh ||
-    { echo "error: scripts/review.sh differs from its template — change the template, not the copy"; exit 1; }
-  cmp -s template/scripts/wrap-up.sh scripts/wrap-up.sh ||
-    { echo "error: scripts/wrap-up.sh differs from its template — change the template, not the copy"; exit 1; }'
 
 # Overlay files are the project's to edit, so doctor reports an edited one as
 # an overlay, never a shadow — a warning nobody can clear is the one that stops

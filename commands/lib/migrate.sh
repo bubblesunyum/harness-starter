@@ -86,6 +86,12 @@ PYEOF
 # the way `add --reference` does — never clone the network as a side effect.
 migrate_reference_root() {
   local target="$1"
+  # A starter checkout migrates against its own template/ first, like the
+  # finder, so converting the starter needs no machine setup.
+  if [ -f "$target/template/.harness-root" ]; then
+    (cd "$target/template" && pwd -P)
+    return 0
+  fi
   if [ -n "${HARNESS_HOME:-}" ]; then
     if [ -f "$HARNESS_HOME/template/.harness-root" ]; then
       (cd "$HARNESS_HOME/template" && pwd -P)

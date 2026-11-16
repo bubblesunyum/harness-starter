@@ -61,64 +61,76 @@ how the pieces fit together.
   also prints the alias, matched on the launch directory too so a stale map
   can't name the board after someone else's server.
 
-## Delivering fixes to installs that already exist
+## How a project reaches the harness
 
-`harness add` never overwrites. That is what makes re-running it safe, and it is
-also how a fix stops travelling: a project that already has `AGENTS.md` gets
-`skip (already there)`, the line scrolls past among thirty other skips, and the
-broken copy stays. The failure is silent, and silence on a broken install is the
-worst outcome this starter has.
+A project keeps no copy of the harness. It commits one small finder —
+`scripts/h`, a copy of `template/scripts/h` — and reaches everything else
+through it. The finder resolves the harness root — the `template/` tree
+holding `.harness-root` — in order: the starter checkout's own `template/`
+when run inside it, `$HARNESS_HOME`, `~/.harness`, then a fetched copy it
+clones into a gitignored `.harness/`. Resolution itself is silent; every
+failure is one line on stderr naming the fix.
 
-So the skip is split three ways. **Seeds** — the files `harness add` writes
-once and the project then owns (`harness/seat.md`, `AGENTS.local.md`,
-`scripts/verify.steps.sh`, `scripts/review.scope.sh`, `dashboard.toml`) —
-skip quietly, because them differing is the harness working. Only seeds may
-carry a fill-in block. **Overlays** (`harness/reviewers/<role>.md`, one per
-reviewer) are never compared at all: the project's own answers live there
-while the shared reviewer prompts stay byte-identical. Everything else is
-a **contract file**: `AGENTS.md`, `opencode.json`, the skills, the scripts behind
-them. Shared files are never edited in a project, so a difference means a starter
-fix never arrived, and `add` says so by name instead of skipping. `harness
-update` is the same check standing alone, with `--diff` for what actually
-changed, `--apply` for the asked-for overwrite, and follow-ups when reviewer
-sources are among the flagged files.
+`scripts/h` dispatches the shared scripts with `HARNESS_PROJECT` and
+`HARNESS_ROOT` set, so a project never names a path outside itself. `scripts/h
+link` symlinks the shared skills, agents, stacks guidance and contract into
+the project, one link per shared entry, each gitignored: a real file or dir
+at the same path wins silently. That is how a project keeps its own skills
+beside the shared ones, and how a same-name entry shadows the shared one
+(same for `.claude/agents/` and `.agents/skills/`).
 
-Shared skills and agents are linked per entry, so a project's own skills sit
-beside them as real directories: `.claude/skills/` holds a link per shared
-skill, and a project entry with a shared name shadows the shared one (same
-for `.claude/agents/` and `.agents/skills/`).
+The stubs in `template/stubs/` are what `harness add` writes in place of the
+shared files — `AGENTS.md`, `opencode.json`, the hook configs, the
+commit-msg hook — plus `scripts/h` itself and the seeds. No shared scripts,
+no skills, no agents: those stay in the checkout and arrive through the
+finder instead.
 
-Seeds are one list (`harness_is_seed` in `commands/lib/install.sh`): the files
-above, and the only ones that may carry a fill-in block. Reviewer prompts are
-protected the same way until their answers migrate into overlays.
+So the split is by ownership, not by freshness. **Seeds** — the files
+`harness add` writes once and the project then owns (`harness/seat.md`,
+`AGENTS.local.md`, `scripts/verify.steps.sh`, `scripts/review.scope.sh`,
+`dashboard.toml`) — are never touched again. **Overlays**
+(`harness/reviewers/<role>.md`, one per reviewer) are never compared at
+all: the project's own answers live there while the shared reviewer prompts
+stay byte-identical. Everything else is the starter's, reached by link or
+dispatch. A same-path project file that differs is a **shadow**: it wins
+over the shared one, `scripts/h doctor` lists it, and nothing ever
+converges it — a project-specific change to a shared script stays as a
+shadow; anything else moves into `AGENTS.local.md` or upstream to the
+starter.
 
-Nothing is overwritten unless asked. Half these files have local edits in
-them by design, so merging is a judgment call — and an overwrite-by-default
-would be a command nobody could afford to run. `harness update --apply` is the
-asked-for exception: it writes the rendered template over stale contract files
-— never seeds, and never reviewer prompts until their answers migrate — and
-names every file it changed. A file carrying a beads
-block is left for a hand merge, and reviewer sources come with follow-ups — the
-generated agent copies, the hashes, the gate — because the merge is half the
-job.
+Seeds are one list, and only seeds may carry a fill-in block. Reviewer
+prompts are never converged either: a filled-in prompt's answers belong in
+its overlay, which is where `harness migrate` puts them.
+
+Links are cheap and writes travel: a tool writing into a linked path edits
+the shared harness for every project. `bd init` did exactly this — it wrote
+its beads skill into `.agents/skills/beads`, which was already a link into
+the checkout. So `harness add` links only after every `bd` command has run,
+and the migrate-time link runs last for the same reason. Add links only
+after bd.
 
 Some drift is a fork, not a missed fix: a dashboard chip, a widened review
-scope, a generator with project hooks. That stays stale forever under the
-check above, and a warning nobody can clear is one that stops being read.
+scope, a generator with project hooks. That stays a shadow forever, and a
+warning nobody can clear is one that stops being read.
 `harness/diverged.txt` is the acknowledgment — one path per line, committed,
-with the reason after `#`. `harness update` shows acknowledged files for the
-record but no longer fails on them, and `--apply` never writes them;
-`harness diverge <file>` appends with validation (a real, differing contract
-file only). An entry that matches no template file fails loudly instead, so a
-typo can't silently un-acknowledge the fork it meant. Delete the line to
-un-acknowledge.
+with the reason after `#`. Migrate keeps acknowledged files in place whatever
+they look like, and a broken entry fails loudly instead, so a typo can't
+silently un-acknowledge the fork it meant. There is no command that appends
+to it; delete the line to un-acknowledge. An entry that matches the template
+again is dead weight — drop it.
 
-The comparison has to allow for the installer's own post-copy edits, or every
-fresh install reads as stale: `bd init` leaves managed blocks in `AGENTS.md`,
-and the tidier rewrites `.claude/settings.json` through `json.dumps`, reordering
-every key. Both are normalised away on both sides. The gate has a step that
-installs into a throwaway repo and asserts the result reads as current, because
-that particular false alarm is invisible in the diff that causes it.
+The comparison behind all of this has to allow for the installer's own
+post-copy edits, or every fresh install reads as changed: `bd init` leaves
+managed blocks in `AGENTS.md`, and the tidier rewrites `.claude/settings.json`
+through `json.dumps`, reordering every key. Both are normalised away on both
+sides.
+
+A copied install — one from before reference installs — converts with
+`harness migrate`, dry run first: every carried file with its fate, nothing
+written. `--apply` runs on a clean tree only. Unedited copies go, at any
+starter revision; customised reviewer prompts lift their lines into
+`harness/reviewers/`; a file that differs is left in place and named. Its
+template must match the finder's root, or it refuses.
 
 ## Stack guidance ships only where the stack is
 
@@ -133,8 +145,9 @@ lists.
 `harness add` detects the stacks once, from markers that can't mean anything
 else, and writes the list. From then on the list belongs to the project. A
 wrong guess is fixed by editing it, and `add` never detects over it again,
-so a correction stays put. The stack files are contract files: they come from
-the starter, `update` keeps them current, and a project's own recurring bugs
+so a correction stays put. The stack files live in the starter and arrive
+through per-entry links, so they are always current, and a project's own
+recurring bugs
 go in `harness/reviewers/<role>.md` instead. A new stack is one file in
 `template/harness/stacks/` plus a marker in `harness_detect_stacks`.
 
@@ -159,7 +172,7 @@ Claude and OpenCode keep their existing startup configuration.
 The gate and ledger-only probes share `scripts/ledger-export-check.sh`, so a
 probe proves export integrity without running unrelated checks. Project gate
 lanes live in `scripts/verify.steps.sh`; additive guidance in `AGENTS.local.md`
-survives contract updates. Installation disables memory-less auto-export and
+is never touched after install. Installation disables memory-less auto-export and
 refreshes the ledger with memories explicitly. Work commits still need a bead;
 session-only handoff and laurel commits use a narrow path-based exception.
 
@@ -315,10 +328,9 @@ The root `opencode.json` is the single source of truth for both keys —
 `instructions` and any `plugin` entries. A `.opencode/opencode.json` shadows
 it: opencode reads only the deeper file when both exist, so a copy carrying a
 plugin but no `instructions` silently unloads `AGENTS.md`, and a copy
-duplicating either key hides drift the contract check never compares, because
-it tracks only the root file. `harness update` fails the check on both — a missing
-`instructions` list, or a copy duplicating either key — and `harness add` merges the root
-instructions into an existing shadow. `.opencode/tui.json` carries UI
+duplicating either key silently wins. `harness add` merges the root
+instructions into an existing shadow, keeping the shadow's own entries;
+afterwards the shadow is the project's to keep correct. `.opencode/tui.json` carries UI
 overrides only and must not hold plugin entries; plugin configuration lives in
 the root file.
 

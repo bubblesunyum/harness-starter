@@ -41,10 +41,10 @@
     "\u2026": ""
   },
   "AGENTS.md": {
-    "doc": "357d1a8966bd7196",
-    "scripts/brief.sh": "3b330498a0661c68",
-    "scripts/review.sh": "238dc1fcdffb203a",
-    "scripts/verify.sh": "299aad04d9d045a1",
-    "scripts/wrap-up.sh": "f754f9265e72d993"
+    "doc": "01a12207b49216d4",
+    "scripts/brief.sh": "d8dade8b488b0241",
+    "scripts/review.sh": "b2cc0c48c2a84fc5",
+    "scripts/verify.sh": "e7e964273634e80f",
+    "scripts/wrap-up.sh": "f738ed1087a9c965"
   }
 }

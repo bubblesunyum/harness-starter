@@ -2,7 +2,8 @@
 # scripts/h — find the harness root, then run it for this project.
 #
 # A project commits this file as scripts/h. It resolves the harness root —
-# the template/ tree holding .harness-root — in order: $HARNESS_HOME,
+# the template/ tree holding .harness-root — in order: its own template/
+# when the project IS a starter checkout, then $HARNESS_HOME,
 # ~/.harness, a fetched copy in .harness/. Then:
 #
 #   scripts/h root                       print the resolved root, nothing else
@@ -84,9 +85,15 @@ fetch() {
 }
 
 resolve() {
-  # $HARNESS_HOME names a starter checkout; a bad one fails outright, so a
-  # typo never silently resolves somewhere else.
-  if [ -n "${HARNESS_HOME:-}" ]; then
+  # A starter checkout resolves to its own template/ first, ahead of
+  # HARNESS_HOME and ~/.harness, so editing template/ takes effect in the
+  # starter immediately with no machine setup.
+  if [ -f "$PROJECT/template/$MARKER" ]; then
+    ROOT="$PROJECT/template"
+    SOURCE="starter"
+  elif [ -n "${HARNESS_HOME:-}" ]; then
+    # A bad HARNESS_HOME fails outright, so a typo never silently resolves
+    # somewhere else.
     if [ -f "$HARNESS_HOME/template/$MARKER" ]; then
       ROOT="$HARNESS_HOME/template"
       SOURCE="HARNESS_HOME"

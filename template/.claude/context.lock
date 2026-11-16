@@ -5,37 +5,37 @@
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
     ".claude/skills/workflow/SKILL.md": "80b9c8919a77c91b",
-    "doc": "79803dc21ea1674a",
-    "scripts/agent.py": "854ca6b8c2ff736b",
-    "scripts/brief.sh": "0f6d7ee32b0dbc94",
-    "scripts/context.py": "10db11d6a85383b3",
-    "scripts/opencode-agents.py": "7588f0485b0ea8a9",
-    "scripts/review.sh": "48887e218135bce9",
-    "scripts/verify.sh": "3a06d3e7b00d2952"
+    "doc": "8db5c8a47894996f",
+    "scripts/agent.py": "455d5b85e6c46e2a",
+    "scripts/brief.sh": "d8dade8b488b0241",
+    "scripts/context.py": "72272e32b893ab72",
+    "scripts/opencode-agents.py": "647f748a70a06169",
+    "scripts/review.sh": "b2cc0c48c2a84fc5",
+    "scripts/verify.sh": "e7e964273634e80f"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "cf91eab68e2f843f",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
     "doc": "1a6612e1a5dcf8c2",
-    "scripts/agent.py": "854ca6b8c2ff736b",
-    "scripts/review.sh": "48887e218135bce9"
+    "scripts/agent.py": "455d5b85e6c46e2a",
+    "scripts/review.sh": "b2cc0c48c2a84fc5"
   },
   ".claude/skills/delegate/SKILL.md": {
     "doc": "208b3ae213483692",
-    "scripts/agent.py": "854ca6b8c2ff736b"
+    "scripts/agent.py": "455d5b85e6c46e2a"
   },
   ".claude/skills/handoff/SKILL.md": {
     "doc": "8e5d79253e67b6af",
-    "scripts/brief.sh": "0f6d7ee32b0dbc94",
-    "scripts/wrap-up.sh": "a454df5a76b804c7"
+    "scripts/brief.sh": "d8dade8b488b0241",
+    "scripts/wrap-up.sh": "f738ed1087a9c965"
   },
   ".claude/skills/orchestrate/SKILL.md": {
     "doc": "77089f69ce8d06d7",
-    "scripts/agent.py": "854ca6b8c2ff736b",
-    "scripts/brief.sh": "0f6d7ee32b0dbc94",
-    "scripts/review.sh": "48887e218135bce9",
-    "scripts/verify.sh": "3a06d3e7b00d2952"
+    "scripts/agent.py": "455d5b85e6c46e2a",
+    "scripts/brief.sh": "d8dade8b488b0241",
+    "scripts/review.sh": "b2cc0c48c2a84fc5",
+    "scripts/verify.sh": "e7e964273634e80f"
   },
   ".claude/skills/workflow/SKILL.md": {
     "doc": "80b9c8919a77c91b",

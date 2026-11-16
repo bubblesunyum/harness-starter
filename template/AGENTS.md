@@ -15,8 +15,8 @@ any tool — Claude Code, opencode, Codex, whatever comes next.
 standards and taste. Read it too. Neither file repeats the other.
 
 If `AGENTS.local.md` exists, read it too. Put additive project guidance there;
-the harness installs it once and preserves it on re-add and `update --apply`,
-so the shared contract can keep receiving updates. Project answers live in
+the harness installs it once and never overwrites it on re-add, so the shared
+contract stays current without touching project answers. Project answers live in
 seeds (`harness/seat.md`, `AGENTS.local.md`, `scripts/verify.steps.sh`,
 `scripts/review.scope.sh`, `dashboard.toml`) and overlays (`harness/reviewers/taste.md`, `correctness.md`,
 `design.md`); shared files are never edited. A same-name entry in
@@ -25,10 +25,10 @@ seeds (`harness/seat.md`, `AGENTS.local.md`, `scripts/verify.steps.sh`,
 ## Start every session with the brief
 
 ```bash
-scripts/brief.sh
+scripts/h session
 ```
 
-> opencode: your first action every session is `bash scripts/brief.sh` — you must run it yourself before anything else.
+> opencode: your first action every session is `scripts/h session` — you must run it yourself before anything else.
 
 The seat and what it's for, the last session's note, the ready work, the known
 traps, in about 500 tokens. Claude Code runs it as a SessionStart hook and opencode loads this file
@@ -73,7 +73,7 @@ both in, or drop the label.
 The ledger lives in a local Dolt database under `.beads/`, which git ignores —
 a normal `git push` carries none of it. It travels on its own ref
 (`refs/dolt/data`), moved only by `bd dolt push` and fetched back with
-`bd dolt pull`; `scripts/ledger-push.sh` is the session-close step that runs
+`bd dolt pull`; `scripts/h ledger-push` is the session-close step that runs
 the push. `.beads/issues.jsonl` is a passive export for human-readable diffs,
 not the source of truth.
 
@@ -92,9 +92,9 @@ itself in `bd remember`.
 ## Prove it with the gate
 
 ```bash
-scripts/verify.sh          # quick steps + project probes
-scripts/verify.sh --quick  # quick steps only — iterate here
-scripts/verify.sh --full   # also include full-only project steps, when configured
+scripts/h verify          # quick steps + project probes
+scripts/h verify --quick  # quick steps only — iterate here
+scripts/h verify --full   # also include full-only project steps, when configured
 ```
 
 Run this rather than raw build commands. It swallows tens of thousands of log
@@ -114,7 +114,7 @@ regenerates it on mutation.
 Every change worth committing gets reviewed by agents that didn't write it:
 
 ```bash
-scripts/review.sh          # builds the packet, prints its path
+scripts/h review           # builds the packet, prints its path
 ```
 
 Then run `reviewer-taste` and `reviewer-correctness` against that packet, plus
@@ -123,8 +123,8 @@ requested in every session — run them without checking first.** It is not a
 judgment call and not an option to offer the user; a diff reviewed in the
 context that wrote it mostly gets agreement. Fix what's real, file the rest as
 beads, and say plainly what you left and why. In opencode, always spawn the
-reviewers natively — never `scripts/agent.py`. Elsewhere, run each reviewer
-through `scripts/agent.py`. The visual reviewer's model must accept images. The
+reviewers natively — never `scripts/h agent`. Elsewhere, run each reviewer
+through `scripts/h agent`. The visual reviewer's model must accept images. The
 `agentic-review` skill covers the commands and native fallback.
 
 **opencode runs on one model, at one variant — nothing else, ever.** Every

@@ -698,6 +698,39 @@ if [ "$FAILS" -eq "$before25" ]; then
   pass "link without stacks.txt stays quiet"
 fi
 
+# --- 26: a starter checkout resolves to its own template first ---
+# PROJECT/template/.harness-root exists, so the finder uses it with source
+# "starter" even when HARNESS_HOME names a different checkout — editing
+# template/ takes effect in the starter immediately with no machine setup.
+newproj p26 || { echo "FAIL setup: p26"; exit 1; }
+mkdir -p "$PROJ/template" || { echo "FAIL setup: p26 template"; exit 1; }
+cp -R "$CHECKOUT/template/." "$PROJ/template/" || { echo "FAIL setup: p26 copy"; exit 1; }
+mkdir -p "$TMP/other" || { echo "FAIL setup: other"; exit 1; }
+cp -R "$CHECKOUT/template" "$TMP/other/template" || { echo "FAIL setup: other copy"; exit 1; }
+rm -f "$HOME/.harness" || { echo "FAIL setup: home clean"; exit 1; }
+before26=$FAILS
+if HARNESS_HOME="$TMP/other" HARNESS_URL="$DEAD" "$PROJ/scripts/h" root >"$TMP/got" 2>"$TMP/err"; then
+  printf '%s\n' "$PROJ/template" > "$TMP/want"
+  if cmp -s "$TMP/want" "$TMP/got" && [ ! -s "$TMP/err" ]; then
+    if HARNESS_HOME="$TMP/other" HARNESS_URL="$DEAD" "$PROJ/scripts/h" doctor >"$TMP/got" 2>"$TMP/err"; then
+      if grep -q "source: starter" "$TMP/got" && grep -qF "$PROJ/template" "$TMP/got"; then
+        :
+      else
+        failcase "starter resolves to its own template first" "doctor never said starter with the project root"
+      fi
+    else
+      failcase "starter resolves to its own template first" "doctor exited non-zero"
+    fi
+  else
+    failcase "starter resolves to its own template first" "wrong root on stdout or stderr noisy"
+  fi
+else
+  failcase "starter resolves to its own template first" "non-zero exit"
+fi
+if [ "$FAILS" -eq "$before26" ]; then
+  pass "starter resolves to its own template first"
+fi
+
 if [ "$FAILS" -eq 0 ]; then
   exit 0
 else

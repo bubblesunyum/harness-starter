@@ -72,9 +72,10 @@ done
 
 target="$(harness_resolve_target "${target:-$PWD}")"
 harness_require_python3 || exit 1
-# Migrating the checkout this command runs from would stub the source it
-# compares against. It runs there, on other projects.
-if [ "$target" = "$HERE" ]; then
+# A starter checkout converts itself to reference: its root files against its
+# own template/, which migrate never writes under, so the source stays intact.
+# Any other target equalling this checkout is a mistake, so it still refuses.
+if [ "$target" = "$HERE" ] && [ ! -f "$target/template/.harness-root" ]; then
   echo "✗ cannot migrate the starter checkout itself ($HERE)." >&2
   echo "  Migrate a project that installed it instead." >&2
   exit 1
