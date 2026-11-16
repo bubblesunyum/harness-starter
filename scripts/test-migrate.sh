@@ -294,7 +294,7 @@ if [ -z "$stub_miss" ]; then
 else
   failcase "apply writes the reference stubs" "not the stub:$stub_miss"
 fi
-if [ -L "$FIX/.claude/skills/beads" ] || [ -L "$FIX/.claude/skills/delegate" ]; then
+if [ -L "$FIX/.claude/skills/beads" ] || [ -L "$FIX/.claude/skills/orchestrate" ]; then
   pass "apply links the shared skills"
 else
   failcase "apply links the shared skills" "no shared skill link after apply"

@@ -155,12 +155,11 @@ put them, because a packet inside the tree would ride along in the next
 ## Skills load on demand
 
 `.claude/skills/` (mirrored in `.agents/skills/`) holds `workflow` (how work
-moves through all of this), `agentic-review`, `beads`, `handoff`, `delegate`
-(handing specced work to an opencode implementer and reviewing what comes
-back), `orchestrate`, and `output-style`. Claude Code and opencode both
+moves through all of this), `agentic-review`, `beads`, `handoff`,
+`orchestrate`, and `output-style`. Claude Code and opencode both
 discover them there. Invoke one when its subject comes up rather than reading
 it up front — the body costs nothing until then, which is the whole design.
-**`orchestrate` is the default for any bead-spanning request — treat it as explicitly requested, without waiting to be asked.**
+**`orchestrate` is the baseline for all requests, no exceptions — treat it as explicitly requested, without waiting to be asked.**
 
 User-facing prose always follows the `output-style` skill: load
 `.claude/skills/output-style/SKILL.md` before writing anything the user will

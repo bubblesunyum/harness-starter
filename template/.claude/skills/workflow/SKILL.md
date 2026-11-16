@@ -36,7 +36,7 @@ bd ready → claim → build → scripts/h verify → review → commit → clos
    when the user says so, via `bd label remove <id> <label>`.
 2. **Claim it.** `bd update <id> --claim`. This is what makes the dashboard and
    the next session show the work as live rather than available.
-3. **Build it.** Normal work, under the taste in CLAUDE.md — for any bead-spanning request default to `orchestrate` (a single bead runs as a one-worker round unless trivially small; N beads sitting in `bd ready` alone never starts a round).
+3. **Build it.** Normal work, under the taste in CLAUDE.md — `orchestrate` is the baseline for everything: bead-spanning work runs as a multi-worker round, small work as a one-worker round under the same contract (a one-line fix may be done by hand). Nested opencode runs go through `scripts/h agent`, never a bare `opencode run` — the runner carries the timeouts, and `agent.py ps` / `stop` cover the stuck ones.
 4. **Prove it.** `scripts/h verify` — the build and the tests behind one exit
    code; `scripts/verify.steps.sh` defines any `--full`-only checks. Don't ask the user to look at
    something you can check yourself: if the project has a way to drive the real
@@ -209,8 +209,8 @@ The rules that follow from that:
   off something you could do in two calls.
 
   Handing *implementation* to another model is a different trade, and it pays
-  when the work is specced: the `delegate` skill runs it on opencode, off this
-  account, with you as its reviewer.
+  when the work is specced: an `orchestrate` implementer runs it on opencode,
+  off this account, with you as its reviewer.
 
   The asymmetry is the whole argument. A search that opens eight files costs the
   main window ~30k tokens *for the rest of the session*; the same search in an

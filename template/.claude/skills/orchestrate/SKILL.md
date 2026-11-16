@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Default for any bead-spanning request — run the implementation round as PM: select and partition beads, spawn implementers, gate once, review, and land follow-ups. The trigger is the request, not the ready count; single-bead requests also orchestrate as a one-worker round unless trivially small.
+description: The baseline for all requests, no exceptions — run the implementation round as PM: select and partition beads, spawn implementers, gate once, review, land follow-ups. Small work runs as a one-worker round under this same contract; a one-line fix may be done by hand.
 ---
 
 # Orchestrating an implementation round
@@ -15,14 +15,20 @@ Proven shape: N beads, N background implementers, one gate run, one
 review packet round, per-bead commits. Provenance for a specific round
 lives in its beads and commits, not here.
 
-## When to use — standing default
+## When to use — the baseline, no exceptions
 
-`orchestrate` is the default for any bead-spanning request — treat it as
-explicitly requested, without waiting to be asked. The trigger is the
-request, not the ready count: N beads sitting in `bd ready` does not
-start a round. Single-bead requests also run as a one-worker round under
-this same contract unless trivially small; `delegate` is the trivial
-single-file fast path only.
+`orchestrate` is how every request is worked — treat it as explicitly
+requested, without waiting to be asked. The trigger is the request, not
+the ready count: N beads sitting in `bd ready` does not start a round.
+Small work runs as a one-worker round under this same contract; there is
+no separate trivial path. A one-line fix may be done by hand.
+
+Requests that name two or more bead ids, or say rollout, migration,
+fan-out, "these beads", "across …", "in parallel", or hand over a list of
+bead briefs are multi-worker rounds under this same contract — bead count
+and rollout language decide the shape, never whether to orchestrate.
+Do not implement beads yourself one by one outside a round; brief and
+spawn.
 
 ## Inputs
 
@@ -86,6 +92,13 @@ instead. The parallel same-tree contract below travels in every brief
 regardless of tool; pass it through in the brief as-is — do not duplicate
 the contract here — this skill *is* it.
 
+Every nested tool run goes through `scripts/h agent` (which carries the wall
+cap, the idle watchdog, heartbeats and `ps`/`stop`) or carries an explicit
+timeout — never a bare `opencode run` with no bound. A worker silent past
+the idle limit is killed with exit 5; check a quiet round with
+`scripts/h agent ps` (live runs and their age) rather than waiting blind,
+and end a stuck one with `scripts/h agent stop <run-id>`.
+
 **Parallel same-tree contract** (in every brief, no exceptions):
 
 - edit only OWNED paths; read anything, touch nothing else;
@@ -107,6 +120,9 @@ the contract here — this skill *is* it.
    as drift that isn't there).
 3. Fix gate failures directly only when super small (a lint line, an
    import); anything larger goes back out as a revision brief.
+
+Leeway: the orchestrator may run subagents without the full gate+verify
+as long as it verifies the result itself afterwards.
 
 ## Phase 5 — Review
 
@@ -174,7 +190,7 @@ that never existed.
 | Question | Answer |
 |---|---|
 | Who owns ledger, commits, gate, reviews? | Orchestrator, always. |
-| One implementer per tree (`delegate`) vs round? | `delegate` is the trivial single-file fast path only; anything bead-spanning — including single-bead work unless trivially small — runs under this skill. |
+| One-line fix by hand or round? | By hand only when describing it costs more than doing it; everything else runs as a round, however small. |
 | Fix or file mid-task? | Fix, unless significant enough for its own bead. |
 | Who fixes review findings? | Re-spawned implementers; orchestrator only when super small. |
 | Batched or per-bead commits? | Per-bead by default; batched only when super tightly coupled. |

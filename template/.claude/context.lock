@@ -4,21 +4,21 @@
     ".claude/agents/reviewer-correctness.md": "65fb284553b04f42",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
-    ".claude/skills/workflow/SKILL.md": "2095431648b7bf74",
-    "doc": "d85a90d4f308831b",
-    "scripts/agent.py": "c5991a16467704a4",
-    "scripts/brief.sh": "d9a9091a6ff70a76",
+    ".claude/skills/workflow/SKILL.md": "9a875e3cb4bef45c",
+    "doc": "dad2b720c03b3625",
+    "scripts/agent.py": "02a95c9c8ac9c672",
+    "scripts/brief.sh": "530bab9ec7b334d7",
     "scripts/context.py": "11897bcdc1e78f08",
     "scripts/opencode-agents.py": "bc83af1af2d898e8",
     "scripts/review.sh": "f45f70fd2fe228b5",
-    "scripts/verify.sh": "0d3a3205a9c9727f"
+    "scripts/verify.sh": "2a5f741765e485ee"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "65fb284553b04f42",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
-    "doc": "c32a1c2998872572",
-    "scripts/agent.py": "c5991a16467704a4",
+    "doc": "17de0fc53521ae4e",
+    "scripts/agent.py": "02a95c9c8ac9c672",
     "scripts/review.sh": "f45f70fd2fe228b5"
   },
   ".claude/skills/delegate/SKILL.md": {
@@ -26,19 +26,19 @@
     "scripts/agent.py": "c5991a16467704a4"
   },
   ".claude/skills/handoff/SKILL.md": {
-    "doc": "0bd493dc77425dc4",
-    "scripts/brief.sh": "d9a9091a6ff70a76",
-    "scripts/wrap-up.sh": "21cbca050ea4028e"
+    "doc": "f1b9853a921a68d8",
+    "scripts/brief.sh": "530bab9ec7b334d7",
+    "scripts/wrap-up.sh": "906e8be2a8e2cff7"
   },
   ".claude/skills/orchestrate/SKILL.md": {
-    "doc": "9a6fdb1bf76cf09c",
-    "scripts/agent.py": "c5991a16467704a4",
-    "scripts/brief.sh": "d9a9091a6ff70a76",
+    "doc": "151b0369088d9943",
+    "scripts/agent.py": "02a95c9c8ac9c672",
+    "scripts/brief.sh": "530bab9ec7b334d7",
     "scripts/review.sh": "f45f70fd2fe228b5",
-    "scripts/verify.sh": "0d3a3205a9c9727f"
+    "scripts/verify.sh": "2a5f741765e485ee"
   },
   ".claude/skills/workflow/SKILL.md": {
-    "doc": "2095431648b7bf74",
+    "doc": "9a875e3cb4bef45c",
     "\u2026": ""
   }
 }

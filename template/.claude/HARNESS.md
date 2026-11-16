@@ -321,13 +321,12 @@ reviewers; the pin names everything opencode runs. Codex inherits the host's.
 **`scripts/h agent` is how every tool except opencode reaches opencode.**
 
 It runs one role through `opencode run` — so Claude Code can put its
-reviewers, and delegated implementation, on another provider's bill without
+reviewers, and orchestrated implementation, on another provider's bill without
 the packet ever entering its own context. Inside opencode itself, reviewers
 always run as native subagents on the pinned model — no reviewer is
-ever routed through `agent.py` from an opencode session. (Delegated
-implementation is the exception: the `delegate` skill sends it through
-`agent.py` from any tool.) Three behaviours of `opencode run` shaped it, all
-found by running it:
+ever routed through `agent.py` from an opencode session. (Orchestrated
+implementation runs through `agent.py` from any tool.) Three behaviours of
+`opencode run` shaped it, all found by running it:
 
 - `--agent` given a `mode: subagent` agent prints a warning and falls back to
   the default agent, so the reviewer runs without its prompt. The script
@@ -343,7 +342,7 @@ found by running it:
   models.dev catalog (v2 dropped the flag). Unknown or text-only models fail,
   leaving the visual pass to the native reviewer instead of accepting a blind reply.
 
-The revision cap lives in the script rather than in the `delegate` skill's prose
+The revision cap lives in the script rather than in a skill's prose
 because guidance is what a long thread erodes first. It counts the session's
 messages back out of `opencode session export`, so there is no counter file to lose.
 
