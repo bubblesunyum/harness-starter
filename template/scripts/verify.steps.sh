@@ -1,7 +1,7 @@
 # Your project's gate steps: build, test, smoke — whatever proves the work.
-# Sourced by scripts/verify.sh, which defines `step`, `probe_step`, `mode`,
-# `LOGS`, and the pass/fail footer around this file, so use those rather than
-# redefining them.
+# Sourced by scripts/verify.sh, which defines `step`, `probe_step`,
+# `drain_probes`, `mode`, `LOGS`, and the pass/fail footer around this file,
+# so use those rather than redefining them.
 #
 # This file is yours (a seed): `harness add` installs it once and never touches
 # it again, and shared scaffolding fixes still arrive in the checkout's
@@ -24,7 +24,14 @@ probe_step "tests" false # e.g. cargo test / npm test / pytest -q — skipped in
 # Test counts are the one detail worth surfacing on success — "ok" alone
 # can't distinguish a green suite from a suite that ran nothing. Point this
 # grep at whatever your runner prints.
-if [ -f "$LOGS/tests.log" ]; then
+# Probe bodies run in the background, so their logs are only valid after a
+# drain — without one this grep reads the previous run's log (or a torn
+# empty one). A serial `step` also drains, so any later serial step is an
+# equivalent barrier.
+drain_probes
+# In the --quick lane probe_step writes no log (skips print as skips above),
+# so there is no count to print there.
+if [ "$mode" != "--quick" ] && [ -f "$LOGS/tests.log" ]; then
   grep -oE "[0-9]+ (passed|tests?)[^.]*" "$LOGS/tests.log" | tail -1 | sed -e 's/^/        /'
 fi
 

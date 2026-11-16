@@ -2,11 +2,33 @@
 # The gate: build, test, and smoke the app behind a single exit code, so an
 # agent can prove its own work without a human reading a screen.
 #
-#   scripts/h verify           # build + tests
-#   scripts/h verify --full    # project-defined full lane; see verify.steps.sh
+#   scripts/h verify           # the changed paths pick the lane (see below)
+#   scripts/h verify --full    # everything, whatever changed
 #   scripts/h verify --quick   # fast lane only: no throwaway-repo probes
 #
-# Two lanes, one contract. The probe steps below each build a throwaway repo
+# Diff-scoped lanes. The default run looks at what moved: only ledger paths
+# (.beads/, harness/handoffs/, harness/laurels.jsonl) mean a bead close or a
+# note, which no throwaway-repo probe can observe — so the ledger lane runs
+# the export check plus every serial step (the local-ok spec check reads the
+# live ledger, which a beads-only diff does move) and skips only the probes,
+# loudly, finishing in seconds. Anything else runs everything the default
+# lane runs, including the throwaway-repo probes; an explicit --full does
+# too, whatever changed. When the scope cannot be determined — not a git
+# checkout, git itself failing — the gate runs everything and says so: a
+# wrongly narrow gate is the silent failure this project exists to avoid, and
+# the same goes for a clean tree, which has nothing to narrow from.
+#
+# Parallel probes. probe_step runs its body in the background instead of
+# inline — at most PROBE_MAX at once (the CPU count, clamped 2..8) — and
+# every step drains whatever is still flying before it runs, so the
+# one-line-per-step output keeps source order: quick checks print while
+# probes run, each probe's line lands at the next serial step, and the
+# stragglers print at the final drain below. A probe body must stay
+# self-contained the way it always had to be for `bash -c`: the background
+# subshell starts trap-free, so a fixture-reaping EXIT trap set while
+# sourcing the project steps can never fire inside it.
+#
+# Scoped lanes, one contract. The probe steps below each build a throwaway repo
 # and cost seconds apiece, which prices a full run in minutes — too slow for
 # the edit-and-check loop. --quick runs only the steps that prove the tree as
 # it stands (parses, staleness, contract match, unit checks) and skips the
@@ -68,6 +90,25 @@ rm -f "$LOGS/timings"
 mode="${1:---default}"
 failed=0
 started=$SECONDS
+probes_run=0
+probe_pids=()
+probe_bases=()
+
+# How many probes fly at once: the machine's CPUs, clamped 2..8. Probes are
+# subprocess-bound (bd, git, python in throwaway repos), so core count is the
+# right bound and 8 keeps a big machine from fork-bombing itself.
+_probe_cpus() {
+  local n=""
+  n="$(sysctl -n hw.ncpu 2>/dev/null)" || n=""
+  if [ -z "$n" ]; then
+    n="$(getconf _NPROCESSORS_ONLN 2>/dev/null)" || n=""
+  fi
+  printf '%s' "$n"
+}
+PROBE_MAX="$(_probe_cpus)"
+case "$PROBE_MAX" in ''|*[!0-9]*) PROBE_MAX=4;; esac
+if [ "$PROBE_MAX" -lt 2 ]; then PROBE_MAX=2; fi
+if [ "$PROBE_MAX" -gt 8 ]; then PROBE_MAX=8; fi
 
 # Everything interesting in a build log is on a line saying "error:" — the rest
 # is compile invocations. Keep the first few, deduplicated, and say where the
@@ -84,7 +125,48 @@ report() {
   fi
 }
 
+# Wait out every probe still flying and print their one-liners in the order
+# they were enqueued — never in completion order, so the log reads the same
+# every run. Statuses come from each step's .status file rather than from
+# wait, because the printed report is what names the failure. Length-guarded
+# rather than the ${arr[@]+...} idiom: the arrays below are always set, and
+# an empty expansion under `set -u` is the failure being avoided.
+drain_probes() {
+  if [ "${#probe_pids[@]}" -gt 0 ]; then
+    local pid
+    for pid in "${probe_pids[@]}"; do
+      wait "$pid" 2>/dev/null || true
+    done
+    probe_pids=()
+  fi
+  if [ "${#probe_bases[@]}" -gt 0 ]; then
+    local base st
+    for base in "${probe_bases[@]}"; do
+      if [ -f "$LOGS/$base.report" ]; then
+        cat "$LOGS/$base.report"
+        rm -f "$LOGS/$base.report"
+      fi
+      st=""
+      if [ -f "$LOGS/$base.log.status" ]; then
+        st="$(cat "$LOGS/$base.log.status")"
+      fi
+      if [ "$st" != "0" ]; then
+        failed=1
+      fi
+      probes_run=$((probes_run + 1))
+    done
+    probe_bases=()
+  fi
+}
+
 step() {
+  # A serial step is a barrier: whatever is still flying prints first, so the
+  # output keeps source order even though probes finish out of order. Skipped
+  # inside a probe's own subshell (PROBE_CHILD), which holds a copy of queues
+  # it must neither wait on nor print.
+  if [ -z "${PROBE_CHILD:-}" ]; then
+    drain_probes
+  fi
   local name="$1"; shift
   local log="$LOGS/${name// /-}.log"
   local t0=$SECONDS
@@ -99,23 +181,112 @@ step() {
 
 # A step too slow for the --quick lane: throwaway-repo probes and heavy
 # suites. Skipped there, loudly: a green suite that silently ran nothing is
-# the failure the steps file warns about, so skips print as skips. Everything
-# else about the step is unchanged.
+# the failure the steps file warns about, so skips print as skips. Otherwise
+# the body runs in the background (bounded above) and its line prints at the
+# next drain, in enqueue order — same contract, just not inline. The ledger
+# lane skips the same way: a beads-only diff moves nothing a throwaway-repo
+# probe can observe, while every serial step still runs — the local-ok check
+# reads the live ledger, which that diff does move. Composable: a
+# ledger-scoped --quick run skips on the first check above.
 probe_step() {
   if [ "$mode" = "--quick" ]; then
     echo "  skip  $1 (--quick lane)"
     return 0
   fi
-  step "$@"
+  if [ "$scope" = "ledger" ]; then
+    echo "  skip  $1 (ledger lane)"
+    return 0
+  fi
+  local name="$1"; shift
+  # Bound the flight without wait -n (bash 3.2 has none): each new probe
+  # waits out the oldest, so at most PROBE_MAX run at once.
+  if [ "${#probe_pids[@]}" -ge "$PROBE_MAX" ]; then
+    wait "${probe_pids[0]}" 2>/dev/null || true
+    probe_pids=("${probe_pids[@]:1}")
+  fi
+  local base="${name// /-}"
+  ( trap - EXIT; PROBE_CHILD=1; step "$name" "$@" >"$LOGS/$base.report" 2>&1 ) &
+  probe_pids+=("$!")
+  probe_bases+=("$base")
+}
+
+# A path the ledger lane owns: the live export plus the capture locations a
+# bead close or a handoff note moves. Everything else widens the scope.
+is_ledger_path() {
+  case "$1" in
+    .beads|.beads/*|harness/handoffs|harness/handoffs/*|harness/laurels.jsonl) return 0;;
+    *) return 1;;
+  esac
+}
+
+# Which lane this run takes, from the changed paths. Prints scope|reason: the
+# scope selects what runs below, the reason is the line the session reads.
+pick_scope() {
+  if [ "$mode" = "--full" ]; then
+    printf 'full|explicit --full runs everything\n'
+    return 0
+  fi
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'full|not a git checkout, so there is nothing to scope from — running everything\n'
+    return 0
+  fi
+  local st
+  st="$(git status --porcelain 2>/dev/null)" || {
+    printf 'full|git status failed, so the scope is undeterminable — running everything\n'
+    return 0
+  }
+  if [ -z "$st" ]; then
+    printf 'full|clean tree, so there is nothing to narrow from — running everything\n'
+    return 0
+  fi
+  local line p old new side ledger_only=1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    p="${line#???}"
+    case "$p" in
+      *" -> "*)
+        # Renames carry both sides, and either side outside the ledger
+        # widens the scope: a move into the ledger still deletes a source
+        # the export check cannot observe, and a move out still adds one.
+        old="${p%% -> *}"; new="${p##* -> }"
+        for side in "$old" "$new"; do
+          case "$side" in
+            \"*\") side="${side#\"}"; side="${side%\"}";; # quotes are git's, not the name's
+          esac
+          is_ledger_path "$side" || { ledger_only=0; break 2; }
+        done
+        continue;;
+    esac
+    case "$p" in
+      \"*\") p="${p#\"}"; p="${p%\"}";; # quotes are git's, not the name's
+    esac
+    is_ledger_path "$p" || { ledger_only=0; break; }
+  done <<EOF
+$st
+EOF
+  if [ "$ledger_only" = 1 ]; then
+    printf 'ledger|only ledger paths changed — serial steps plus the export check, probes skip\n'
+  else
+    printf 'full|changes outside the ledger paths — running everything\n'
+  fi
 }
 
 echo "verify: $ROOT"
+scope_line="$(pick_scope)"
+scope="${scope_line%%|*}"
+scope_reason="${scope_line#*|}"
+echo "verify: scope=$scope ($scope_reason)"
 # This runs before every other bd call in the gate — the context check's brief
 # included. `bd config`, `bd info`, `bd stats` and friends auto-import a stale
 # .beads/issues.jsonl when the ledger looks stale to them, resurrecting deleted
 # beads (har-67c); anything that ran first would heal the drift this check
 # exists to catch. The only bd call before this point is the prefix lookup up
 # top, which reads `bd list` — a command that never imports.
+#
+# Ledger lane, one contract: when the scope above came back ledger, the probe
+# steps below skip loudly (same contract as the --quick lane) while every
+# serial step still runs — a beads-only diff moves the live ledger the
+# local-ok check reads, but nothing any probe observes.
 if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
   echo "$export_out"
 else
@@ -188,6 +359,13 @@ else
   echo "  ! no scripts/verify.steps.sh — the gate has no project steps to run."
 fi
 # ── END PROJECT STEPS ─────────────────────────────────────────────────────
+
+# Whatever is still flying lands here, in enqueue order; only then is the
+# fixture (built by the project steps above, if they built one) safe to reap.
+drain_probes
+if [ "$probes_run" -gt 0 ]; then
+  echo "verify: $probes_run probe(s) in parallel (at most $PROBE_MAX at once)"
+fi
 
 # The golden probe fixture pays one install per run and every probe copies it
 # instead of installing — but probe bodies reset the EXIT trap, so the fixture

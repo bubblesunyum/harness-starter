@@ -1,19 +1,24 @@
 #!/bin/bash
-# Close out work in the one order that stays clean: ledger writes, push,
-# export, verify, commit. `bd close` after the export re-dirties it and the
-# gate runs twice; a commit without the export leaves clones stale.
+# Close out work in the one order that stays clean: ledger writes, export,
+# verify, commit, push. Nothing between the export and the commit may move
+# the ledger — the gate is read-only (`bd list` never imports; every probe
+# writes only its own throwaway repo) — so a stray `bd` write after the
+# export still re-dirties it and needs a fresh export plus a second gate run.
+# The gate's export check is the backstop. The push goes last: it needs the
+# network and the Dolt remote, and a failed push must never block the
+# commit. Every stage announces itself as it starts, so a long run never
+# looks hung.
 #
 #   scripts/h wrap-up -m "lowercase terse message" --bead fol-xxx
 #     [--close fol-yyy --reason "..."] [--note fol-yyy "stands at ..."]
 #     [--remember "..."] [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 #
 # Lane default is the full gate (default verify lane); --quick while
-# iterating, --full for the browser suite. Everything ledger-shaped happens
-# first (closes, notes, memories), because every one of them invalidates the
-# export. The push goes next: it runs `bd dolt commit` and its own export
-# regen, so it is also a ledger write and must precede the final export.
-# After the export only reads run (verify), then the commit carries the
-# fresh export with it.
+# iterating, --full for the browser suite. Every ledger-shaped thing happens
+# first (closes, notes, memories), because every one of them moves the ledger
+# the export carries. After the export only reads run (verify), then
+# `git add -A` stages the fresh export with the work and the commit carries
+# both — and the push follows, best-effort.
 #
 # Failures: a failed push warns and continues (best-effort — the local ledger
 # plus the committed export preserve everything but machine-loss redundancy,
@@ -100,10 +105,12 @@ if [ -n "$NOTE_FILE" ]; then
   esac
 fi
 
-# ── 1. Ledger writes. Nothing after this point may move the ledger until the
-# commit lands, or the export below is stale before the ink dries.
+# ── 1. Ledger writes. Nothing after this point may move the ledger before
+# the export — a stray `bd` write here still needs a fresh export, and the
+# gate's export check says so.
 # Empty-array-safe under `set -u` even on old bash: the ${arr[@]+...} form
 # expands to nothing when unset-or-empty instead of erroring.
+echo "wrap-up: settling the ledger (${#ACTIONS[@]} action(s))..."
 for e in ${ACTIONS[@]+"${ACTIONS[@]}"}; do
   kind="${e%%"$SEP"*}"; rest="${e#*"$SEP"}"
   a="${rest%%"$SEP"*}"; b="${rest#*"$SEP"}"
@@ -119,27 +126,23 @@ if [ "$in_progress_count" != "0" ]; then
   echo "wrap-up: warning: $in_progress_count bead(s) still in_progress — close them with --close or leave them deliberately" >&2
 fi
 
-# ── 2. Push. Best-effort by design (AGENTS.local.md): needs the network and
-# the Dolt remote, and a failed push must never block the commit.
-if [ "$PUSH" = 1 ]; then
-  if ! "$(harness_script ledger-push.sh)"; then
-    echo "wrap-up: warning: ledger push failed — committing anyway; --check will keep nagging" >&2
-  fi
-fi
-
-# ── 3. Export. The last ledger read; only reads run between here and commit.
+# ── 2. Export. The last ledger read before the commit; only reads run
+# between here and the commit.
+echo "wrap-up: exporting the ledger..."
 bd export --include-memories -o .beads/issues.jsonl
 
-# ── 4. Verify. Aborts before any commit on failure.
+# ── 3. Verify. Aborts before any commit on failure.
+echo "wrap-up: verifying${LANE:+ ($LANE lane)}..."
 if [ -z "$LANE" ]; then
   "$(harness_script verify.sh)"
 else
   "$(harness_script verify.sh)" "$LANE"
 fi
 
-# ── 5. Commit the work with the fresh export inside it. A pending note file
+# ── 4. Commit the work with the fresh export inside it. A pending note file
 # stays out via pathspec exclusion so it lands in its own capture commit below
 # instead of riding the bead commit.
+echo "wrap-up: committing..."
 if [ -n "$(git status --porcelain)" ]; then
   if [ -n "$NOTE_FILE" ]; then
     git add -A -- . ":!$NOTE_FILE"
@@ -155,11 +158,23 @@ else
   echo "wrap-up: nothing to commit — tree already clean"
 fi
 
-# ── 6. Handoff note as its own capture commit (path already allowlisted).
+# ── 5. Handoff note as its own capture commit (path already allowlisted).
 if [ -n "$NOTE_FILE" ]; then
+  echo "wrap-up: recording the handoff note..."
   git add "$NOTE_FILE"
   if [ -n "$(git status --porcelain)" ]; then
     git commit -m "record session handoff"
+  fi
+fi
+
+# ── 6. Push. Best-effort by design (AGENTS.local.md): needs the network and
+# the Dolt remote, and a failed push must never block the commit — which is
+# why it goes after, not before. Its own export regen rewrites the working
+# file with identical content, so the clean check below still passes.
+if [ "$PUSH" = 1 ]; then
+  echo "wrap-up: pushing the ledger (best-effort)..."
+  if ! "$(harness_script ledger-push.sh)"; then
+    echo "wrap-up: warning: ledger push failed — committed anyway; --check will keep nagging" >&2
   fi
 fi
 

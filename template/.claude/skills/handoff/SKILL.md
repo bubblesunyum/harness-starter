@@ -16,9 +16,9 @@ and finish the piece first.
 ## The close
 
 Prefer `scripts/h wrap-up` over hand-ordering the steps below — it runs them
-in the one order that stays clean (ledger writes, push, export, verify,
-commit); every `bd` write after the export re-dirties it and forces a second
-full gate run:
+in the one order that stays clean (ledger writes, export, verify, commit,
+push); nothing after the export may move the ledger — a stray `bd` write
+re-dirties the export and needs a fresh export plus a second gate run:
 
 ```bash
 scripts/h wrap-up -m "lowercase terse message" --bead <id> \
@@ -35,7 +35,8 @@ doesn't fit.
    `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
    Anything that surprised you written with `bd remember`.
 2. **Prove the tree.** `scripts/h verify` passes and the work is committed.
-3. **Push the ledger.** `scripts/h ledger-push`. The beads are not in the commit
+3. **Push the ledger, after the commit.** `scripts/h ledger-push`, best-effort:
+   a failed push warns and the commit stands. The beads are not in the commit
    you just made — they ride their own git ref, and nothing moves it for you. A
    session that skips this leaves the whole ledger on one disk.
 4. **Write the note.** Below.

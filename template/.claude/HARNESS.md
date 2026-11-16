@@ -49,16 +49,25 @@ how the pieces fit together.
   `scripts/h opencode-agents`. See below — two of the obvious moves here are
   traps.
 - **Gate:** `scripts/h verify` — build, tests, optional smoke, plus doc
-  staleness. Tiny output on purpose. The gate also compares a fresh ledger
-  export against the committed `.beads/issues.jsonl`, both directions: bd's
-  auto-export is a timer, not a per-write flush, so without this a session
-  commits a file that still lists closed beads and misses new ones. Checked
-  rather than regenerated — a gate that rewrote the file would still need the
-  session to commit it, so it says the command instead. The check runs before
-  every other `bd` call in the gate, because several of them auto-import a
-  stale export when the ledger looks stale — resurrecting deleted beads — and
-  anything earlier would heal the drift under test and report a match on
-  resurrected state.
+  staleness. Tiny output on purpose. The default lane is diff-scoped: only
+  ledger paths changed (`.beads/`, `harness/handoffs/`,
+  `harness/laurels.jsonl`) runs just the ledger export check and finishes in
+  seconds, printing the scope it chose and why; anything else — or `--full`,
+  or a scope it cannot determine — runs everything, loudly. Probes run in
+  parallel, bounded by CPU count, each in its own throwaway repo copied from
+  one golden install per run. The gate compares a fresh ledger export against
+  the committed `.beads/issues.jsonl`, both directions: bd's auto-export is a
+  timer, not a per-write flush, so without this a session commits a file that
+  still lists closed beads and misses new ones. Nothing between the export
+  and the commit may move the ledger — the gate is read-only and every probe
+  writes only its own throwaway repo — so a stray `bd` write after the
+  export still needs a fresh export and a second gate run. The
+  gate's check is the backstop, not the mechanism. The check runs before every other
+  `bd` call in the gate, because several of them auto-import a stale export
+  when the ledger looks stale — resurrecting deleted beads — and anything
+  earlier would heal the drift under test and report a match on resurrected
+  state. The close runs ledger writes, export, verify, commit, push: the push
+  goes last, best-effort, never blocking the commit.
 - **Dashboard:** `scripts/h dashboard` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in
