@@ -5,17 +5,18 @@
     ".claude/agents/reviewer-correctness.md": "3c1250aa822d14fd",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
-    ".claude/skills/workflow/SKILL.md": "557581bc826a09cd",
-    "doc": "e1d58f48f7b52e1c",
+    ".claude/skills/workflow/SKILL.md": "45d097281222f913",
+    "doc": "618da6e880a9e9c2",
     "scripts/agent.py": "e997f8d6e09da122",
     "scripts/brief.sh": "e8b8bedc3f791f91",
     "scripts/build-wiki.sh": "9abded546f400429",
     "scripts/context.py": "b13ab9080a00e38a",
+    "scripts/eval.sh": "e7a29284e9b5a92d",
     "scripts/lib/journal.sh": "8e344aa9a971805f",
-    "scripts/opencode-agents.py": "93110656147263ba",
+    "scripts/opencode-agents.py": "b857d6ca8e163421",
     "scripts/reflect.sh": "75262c4a3a0860cd",
     "scripts/review.sh": "292618fa5324f976",
-    "scripts/verify.sh": "8aa612394c63fdc0"
+    "scripts/verify.sh": "df6163d10bbc0a9b"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "3c1250aa822d14fd",
@@ -40,10 +41,10 @@
     "scripts/agent.py": "e997f8d6e09da122",
     "scripts/brief.sh": "e8b8bedc3f791f91",
     "scripts/review.sh": "292618fa5324f976",
-    "scripts/verify.sh": "8aa612394c63fdc0"
+    "scripts/verify.sh": "df6163d10bbc0a9b"
   },
   ".claude/skills/workflow/SKILL.md": {
-    "doc": "557581bc826a09cd",
+    "doc": "45d097281222f913",
     "\u2026": ""
   }
 }

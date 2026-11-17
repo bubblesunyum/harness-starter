@@ -18,6 +18,9 @@
 #   *.gitkeep            empty by definition
 #   harness/laurels.jsonl  a log the project appends to; the template ships it empty
 #   harness/learning.jsonl a log the project appends to; the template ships it with a schema comment
+#   harness/evals/*        example eval cases the project seeds from; the template ships two,
+#                          the project owns them and adds its own, results.jsonl is runtime
+#                          data eval.sh creates and never ships
 #   harness/.last-consolidation  runtime state the sessions rewrite; never compared
 #   harness/diverged.txt   the acknowledged-fork list; the project edits it,
 #                          the template ships it empty
@@ -29,7 +32,7 @@ harness_is_data() {
   # what this matches.
   harness_is_seed "$1" && return 1
   case "$1" in
-    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/learning.jsonl|harness/.last-consolidation|harness/diverged.txt|.claude/context.lock) return 0 ;;
+    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/learning.jsonl|harness/evals/*|harness/.last-consolidation|harness/diverged.txt|.claude/context.lock) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -525,6 +528,12 @@ scripts/verify.steps.sh
 scripts/review.scope.sh
 dashboard.toml
 harness/diverged.txt
+harness/evals/commit-bead/base
+harness/evals/commit-bead/check.sh
+harness/evals/commit-bead/task.md
+harness/evals/verify-gate/base
+harness/evals/verify-gate/check.sh
+harness/evals/verify-gate/task.md
 harness/laurels.jsonl
 harness/learning.jsonl
 harness/handoffs/.gitkeep

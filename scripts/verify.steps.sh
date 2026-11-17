@@ -2336,6 +2336,1051 @@ probe_step "a clone with no live ledger skips the export check" bash -c '
   echo "$out" | grep -q "no live ledger, skipping" ||
     { echo "error: the skip never said itself"; echo "$out"; exit 1; }'
 
+# A fresh install carries the eval cases: the two example behaviours with
+# their task, base and check, executable checks, and no results file — rows
+# are runtime data the first run creates, like wiki pages, never shipped.
+probe_step "a fresh install carries the eval cases" bash -c '
+  fresh_probe || exit 1
+  out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
+  for f in harness/evals/commit-bead/task.md harness/evals/commit-bead/base harness/evals/commit-bead/check.sh harness/evals/verify-gate/task.md harness/evals/verify-gate/base harness/evals/verify-gate/check.sh; do
+    [ -f "$probe/$f" ] || { echo "error: fresh install missed $f"; exit 1; }
+  done
+  [ -x "$probe/harness/evals/commit-bead/check.sh" ] ||
+    { echo "error: commit-bead check.sh lost its executable bit"; exit 1; }
+  [ -x "$probe/harness/evals/verify-gate/check.sh" ] ||
+    { echo "error: verify-gate check.sh lost its executable bit"; exit 1; }
+  [ ! -e "$probe/harness/evals/results.jsonl" ] ||
+    { echo "error: results.jsonl shipped — it is runtime data, created by the first run"; exit 1; }
+  modroot="$(probe_shared_root "$probe")" || exit 1
+  [ -f "$modroot/scripts/eval.sh" ] ||
+    { echo "error: the shared checkout has no scripts/eval.sh"; exit 1; }'
+
+# The static lane is diff-scoped: an unrelated diff skips it out loud, and a
+# knowledge-layer diff fires it and passes clean.
+probe_step "knowledge static fires on a knowledge diff, silent otherwise" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  echo "probe" > "$probe/probe-unrelated.txt" ||
+    { echo "error: cannot dirty an unrelated file"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
+    { echo "error: the gate failed on an unrelated diff"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "no knowledge-layer change" ||
+    { echo "error: static never skipped on an unrelated diff"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "FAIL  knowledge static"; then
+    echo "error: static failed on an unrelated diff"; echo "$out"; exit 1;
+  fi
+  printf "%s\n" "# probe knowledge line" >> "$probe/AGENTS.md" ||
+    { echo "error: cannot dirty AGENTS.md"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
+    { echo "error: the gate failed on a clean knowledge diff"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "knowledge static: .*AGENTS.md" ||
+    { echo "error: static never fired on a knowledge diff"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "  ok    knowledge static" ||
+    { echo "error: static never passed a clean knowledge diff"; echo "$out"; exit 1; }'
+
+# A fact said twice across the layer fails the static lane, naming itself.
+probe_step "duplicate facts fail the static lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  mkdir -p "$probe/.claude/skills/probe-skill" ||
+    { echo "error: cannot make the probe skill"; exit 1; }
+  printf "%s\n" "---" "description: probe skill for the duplicate check" "---" "" "The probe duplicate fact about harness layers is intentionally repeated here verbatim for the static lane." > "$probe/.claude/skills/probe-skill/SKILL.md" ||
+    { echo "error: cannot plant the probe skill"; exit 1; }
+  printf "%s\n" "# probe knowledge line" "The probe duplicate fact about harness layers is intentionally repeated here verbatim for the static lane." >> "$probe/AGENTS.md" ||
+    { echo "error: cannot dirty AGENTS.md"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
+    { echo "error: the gate passed a duplicate fact"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge static" ||
+    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "duplicate facts" ||
+    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }'
+
+# A duplication the diff introduces fails the static lane naming the sentence,
+# while a settled duplicate the diff never added stays the librarian's job: a
+# handoff SKILL sentence copied into AGENTS.local.md fails, but the
+# fixture's own long-settled duplicates never block it.
+probe_step "introduced duplication fails the static lane naming the sentence" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  line=$(awk "NF>=10 && length(\$0)>=60 && !/[.;!?]/ {print; exit}" "$probe/.claude/skills/handoff/SKILL.md") ||
+    { echo "error: cannot read the probe skill"; exit 1; }
+  [ -n "$line" ] ||
+    { echo "error: no long sentence in the probe skill"; exit 1; }
+  printf "%s\n" "$line" >> "$probe/AGENTS.local.md" ||
+    { echo "error: cannot copy the skill sentence"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
+    { echo "error: the gate passed an introduced duplicate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge static" ||
+    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "duplicate facts" ||
+    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
+  frag=$(printf "%s" "$line" | tr "A-Z" "a-z" | tr -cs "a-z0-9 " " " | cut -c1-30) ||
+    { echo "error: cannot shape the sentence fragment"; exit 1; }
+  echo "$out" | grep -q "$frag" ||
+    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
+
+# A memory-only change — one remembered memory, no file diff at all — runs no
+# behavioural eval: the tree is clean so the scope is full, the lane runs its
+# detection, and skips before the runner is even called. The proof is the
+# side effect: eval.sh creates results.jsonl on every run, so its absence
+# afterwards means no eval ran. (The lanes skip line stays in the step log —
+# probe steps only print their one line.) The export is regened and committed
+# first, because a remembered-but-unexported memory is ledger drift and would
+# fail the gate on the export step instead.
+probe_step "a memory-only change runs no behavioural eval" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  (cd "$probe" && bd remember "probe memory trap for the behavioural lane" --key "probe-memory-trap" >/dev/null 2>&1) ||
+    { echo "error: cannot remember a probe memory"; exit 1; }
+  tries=0
+  while ! (cd "$probe" && bd recall probe-memory-trap >/dev/null 2>&1); do
+    tries=$((tries + 1))
+    [ "$tries" -ge 60 ] && { echo "error: probe memory never landed"; exit 1; }
+    sleep 0.5
+  done
+  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
+    { echo "error: cannot regen the probe export"; exit 1; }
+  (cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe memory export" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the probe export"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
+    { echo "error: the gate failed on a memory-only change"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "FAIL  knowledge behavioural"; then
+    echo "error: behavioural failed on a memory-only change"; echo "$out"; exit 1;
+  fi
+  [ ! -e "$probe/harness/evals/results.jsonl" ] ||
+    { echo "error: an eval ran on a memory-only change — results.jsonl exists"; exit 1; }'
+
+# eval.sh on a clean layer, through the fake opencode the reflect probes use
+# (same argv shape agent.py builds, canned JSON-line reply): one ok line per
+# case, the worktree count unchanged after, and a second run appending rows
+# without touching the first ones.
+probe_step "eval.sh prints one line per case, leaves nothing behind, appends only" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  before=$(git -C "$probe" worktree list 2>/dev/null | wc -l | tr -d " ") ||
+    { echo "error: cannot list worktrees"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed on a clean layer"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "2" ] ||
+    { echo "error: want one ok line per case, got $n"; echo "$out"; exit 1; }
+  after=$(git -C "$probe" worktree list 2>/dev/null | wc -l | tr -d " ") ||
+    { echo "error: cannot relist worktrees"; exit 1; }
+  [ "$after" = "$before" ] ||
+    { echo "error: eval left a worktree behind"; git -C "$probe" worktree list; echo "$out"; exit 1; }
+  rows=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  [ "$rows" = "2" ] ||
+    { echo "error: want 2 result rows, got $rows"; echo "$out"; exit 1; }
+  cp "$probe/harness/evals/results.jsonl" "$probe/results-backup.jsonl" ||
+    { echo "error: cannot back up results"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: second eval failed"; echo "$out"; exit 1; }
+  rows=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  [ "$rows" = "4" ] ||
+    { echo "error: second run never appended, rows=$rows"; echo "$out"; exit 1; }
+  n=$(wc -l < "$probe/results-backup.jsonl" | tr -d " ") ||
+    { echo "error: cannot count backup lines"; exit 1; }
+  head -n "$n" "$probe/harness/evals/results.jsonl" > "$probe/results-head.jsonl" ||
+    { echo "error: cannot slice the rerun"; exit 1; }
+  cmp -s "$probe/results-backup.jsonl" "$probe/results-head.jsonl" ||
+    { echo "error: second run rewrote earlier rows"; exit 1; }
+  rm -f "$probe/results-backup.jsonl" "$probe/results-head.jsonl" ||
+    { echo "error: cannot clean the comparison files"; exit 1; }'
+
+# The verdict reads its baseline at the pinned rev, never live HEAD: a fake
+# git on PATH logs every show ref, and the stamp on every row matches the
+# HEAD the run started at.
+probe_step "eval.sh pins its baseline rev instead of reading HEAD live" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  rev="$(cd "$probe" && git rev-parse HEAD)" ||
+    { echo "error: cannot read the probe HEAD"; exit 1; }
+  mkdir -p "$probe/gitlog" ||
+    { echo "error: cannot make the git log dir"; exit 1; }
+  realgit="$(command -v git)" ||
+    { echo "error: cannot locate git"; exit 1; }
+  printf "%s\n" "#!/bin/bash" "printf \"%s\\n\" \"git \$*\" >> \"$probe/gitlog/calls\"" "exec \"$realgit\" \"\$@\"" > "$probe/gitlog/git" ||
+    { echo "error: cannot plant fake git"; exit 1; }
+  chmod +x "$probe/gitlog/git" || { echo "error: cannot chmod the fake git"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe/gitlog:$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed on a clean layer"; echo "$out"; exit 1; }
+  grep -q "show $rev:" "$probe/gitlog/calls" ||
+    { echo "error: the verdict never read its baseline at the pinned rev"; cat "$probe/gitlog/calls"; exit 1; }
+  if grep -q "show HEAD:" "$probe/gitlog/calls"; then
+    echo "error: the verdict read its baseline at live HEAD"; cat "$probe/gitlog/calls"; exit 1;
+  fi
+  python3 - "$probe/harness/evals/results.jsonl" "$rev" <<PYEOF ||
+import json
+import sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+assert rows, "no rows stamped"
+assert all(row.get("harness_rev") == sys.argv[2] for row in rows), rows
+PYEOF
+    { echo "error: the stamped rev is not the pinned HEAD"; exit 1; }'
+
+# The behavioural lane end to end: a baseline eval committed green, a CLAUDE.md
+# change breaking a passing case failing the gate on the lane, and a benign
+# CLAUDE.md change going through. The fake keys on a BREAK marker in the
+# overlaid candidate layer — the same worktree the real agent would read.
+probe_step "a breaking CLAUDE.md change fails the behavioural lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    bad=False" "    try:" "        bad=\"BREAK\" in open(\"CLAUDE.md\").read()" "    except OSError:" "        bad=False" "    if bad:" "        open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    else:" "        open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^ok eval commit-bead" ||
+    { echo "error: baseline never passed commit-bead"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^ok eval verify-gate" ||
+    { echo "error: baseline never passed verify-gate"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  printf "%s\n" "BREAK the always-loaded layer for the probe" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot break CLAUDE.md"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) &&
+    { echo "error: the gate passed a breaking CLAUDE.md change"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge behavioural" ||
+    { echo "error: the failure never named the behavioural lane"; echo "$out"; exit 1; }
+  grep -v "BREAK the always-loaded layer" "$probe/CLAUDE.md" > "$probe/CLAUDE.md.tmp" ||
+    { echo "error: cannot strip BREAK"; exit 1; }
+  mv "$probe/CLAUDE.md.tmp" "$probe/CLAUDE.md" ||
+    { echo "error: cannot restore CLAUDE.md"; exit 1; }
+  printf "%s\n" "A benign probe line about nothing in particular." >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot plant the benign line"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
+    { echo "error: the gate failed a non-breaking change"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "FAIL  knowledge behavioural"; then
+    echo "error: behavioural failed a non-breaking change"; echo "$out"; exit 1;
+  fi
+  echo "$out" | grep -q "  ok    knowledge behavioural" ||
+    { echo "error: behavioural never passed the benign change"; echo "$out"; exit 1; }'
+
+# The behavioural error names the broken cases, never the totals line: a
+# breaking change failing every committed-green case prints a totals line
+# beside the case lines, and only the case lines reach the error summary.
+probe_step "the behavioural error names cases, never the totals line" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant bad fake opencode"; exit 1; }
+  printf "%s\n" "BREAK the always-loaded layer for the probe" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot break CLAUDE.md"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) &&
+    { echo "error: the gate passed a breaking layer"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge behavioural" ||
+    { echo "error: the failure never named the behavioural lane"; echo "$out"; exit 1; }
+  err=$(echo "$out" | grep "error: eval regression" || true)
+  [ -n "$err" ] ||
+    { echo "error: no eval regression error line"; echo "$out"; exit 1; }
+  echo "$err" | grep -q "commit-bead" ||
+    { echo "error: the error never named commit-bead"; echo "$out"; exit 1; }
+  echo "$err" | grep -q "verify-gate" ||
+    { echo "error: the error never named verify-gate"; echo "$out"; exit 1; }
+  if echo "$err" | grep -q "total passes"; then
+    echo "error: the error named the totals line as a case"; echo "$out"; exit 1;
+  fi'
+
+# The overlay mirrors deletions: a skill the cases depend on, committed then
+# removed, fails the behavioural lane naming the case — without the mirror
+# the worktree keeps the stale file and the gate stays green on a broken tree.
+probe_step "a deleted skill the cases depend on fails the behavioural lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  mkdir -p "$probe/.claude/skills/probe-victim" ||
+    { echo "error: cannot make the probe skill"; exit 1; }
+  printf "%s\n" "---" "description: probe victim skill the eval cases depend on" "---" "" "Probe victim body." > "$probe/.claude/skills/probe-victim/SKILL.md" ||
+    { echo "error: cannot plant the probe skill"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    good=os.path.isfile(\".claude/skills/probe-victim/SKILL.md\")" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\" if good else \"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\" if good else \"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  rm -rf "$probe/.claude/skills/probe-victim" ||
+    { echo "error: cannot delete the probe skill"; exit 1; }
+  mkdir -p "$probe/fakehome" ||
+    { echo "error: cannot make fakehome"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed"; echo "$out"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) &&
+    { echo "error: the gate passed a deleted skill the cases depend on"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "failed steps: .*knowledge behavioural" ||
+    { echo "error: the failure never named the behavioural lane"; echo "$out"; exit 1; }
+  row=$(python3 - "$probe/harness/evals/results.jsonl" <<PYEOF
+import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
+print("bad" if [r for r in rows if r.get("case")=="commit-bead" and r.get("pass") is False] else "ok")
+PYEOF
+) ||
+    { echo "error: cannot read the probe results"; echo "$out"; exit 1; }
+  [ "$row" = "bad" ] ||
+    { echo "error: no failing commit-bead row recorded"; echo "$out"; exit 1; }'
+
+# A nested skill description change is overlaid and evaluated: the fake keys
+# on the new description in the worktree, so a stale base copy fails the
+# cases while the overlaid candidate passes — and the eval runs at all, which
+# is the lane triggering on the nested path.
+probe_step "a nested skill change is overlaid and evaluated" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  mkdir -p "$probe/.claude/skills/suite/probe-nested" ||
+    { echo "error: cannot make the nested skill"; exit 1; }
+  printf "%s\n" "---" "description: probe nested one" "---" "" "Probe nested body." > "$probe/.claude/skills/suite/probe-nested/SKILL.md" ||
+    { echo "error: cannot plant the nested skill"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    want=os.environ.get(\"EXPECTED\", \"probe nested one\")" "    try:" "        have=open(\".claude/skills/suite/probe-nested/SKILL.md\").read()" "    except OSError:" "        have=\"\"" "    ok=want in have" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\\n\" if ok else \"no bead here\\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\\n\" if ok else \"make check\\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^ok eval commit-bead" ||
+    { echo "error: baseline never passed commit-bead"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  printf "%s\n" "---" "description: probe nested two" "---" "" "Probe nested body." > "$probe/.claude/skills/suite/probe-nested/SKILL.md" ||
+    { echo "error: cannot change the nested description"; exit 1; }
+  rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" EXPECTED="probe nested two" "$probe/scripts/harness" verify 2>&1) ||
+    { echo "error: the gate failed a nested description change"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "  ok    knowledge behavioural" ||
+    { echo "error: behavioural never passed the nested change"; echo "$out"; exit 1; }
+  rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  [ "${rows1:-0}" -gt "${rows0:-0}" ] ||
+    { echo "error: no eval ran on the nested description change ($rows0 -> $rows1)"; echo "$out"; exit 1; }'
+
+# The eval baseline is a ratchet over history, not the latest row: a committed
+# red run keeps failing until a run passes, and a committed-green case with
+# no directory now fails naming it. Runs eval.sh directly, twice red with a
+# commit between, then with one passing case deleted.
+probe_step "a committed red run still fails and a deleted case fails naming it" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant bad fake opencode"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: eval passed a breaking layer"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
+    { echo "error: the red run never named the regression"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe red results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the red results"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: a committed red run went green"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
+    { echo "error: committed red stopped failing"; echo "$out"; exit 1; }
+  rm -rf "$probe/harness/evals/verify-gate" ||
+    { echo "error: cannot delete the probe case"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: eval passed a deleted passing case"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "verify-gate" ||
+    { echo "error: the deleted case was never named"; echo "$out"; exit 1; }'
+
+# An empty suite over a committed-green baseline fails naming every missing
+# case — the deleted-case ratchet with nothing left, not a quiet pass.
+probe_step "an empty evals dir fails naming its committed-green cases" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  rm -rf "$probe/harness/evals/commit-bead" "$probe/harness/evals/verify-gate" ||
+    { echo "error: cannot wipe the probe cases"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: eval passed an empty suite over a green baseline"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "commit-bead" ||
+    { echo "error: the empty run never named commit-bead"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "verify-gate" ||
+    { echo "error: the empty run never named verify-gate"; echo "$out"; exit 1; }'
+
+# An empty suite with no baseline behind it skips out loud naming the evals
+# dir — not a pass, not a fail — and writes no rows.
+probe_step "an empty evals suite with no baseline skips out loud" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  rm -rf "$probe/harness/evals/commit-bead" "$probe/harness/evals/verify-gate" ||
+    { echo "error: cannot wipe the probe cases"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed an empty suite with no baseline"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "SKIP" ||
+    { echo "error: the empty run never said SKIP"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "harness/evals" ||
+    { echo "error: the SKIP never named the evals dir"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "^FAIL eval "; then
+    echo "error: the empty skip failed a case"; echo "$out"; exit 1;
+  fi
+  [ ! -e "$probe/harness/evals/results.jsonl" ] ||
+    { echo "error: the empty skip wrote result rows"; exit 1; }'
+
+# A brand-new untracked skill repeating a committed sentence fires the static
+# lane: regular untracked files have no HEAD version, so they read as absent
+# from the baseline instead of duplicating themselves there.
+probe_step "an untracked new file duplicating committed text fails the static lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  printf "%s\n" "the probe layer sentence about harness budgets repeats here verbatim for the untracked duplicate check" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot plant the probe sentence"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  mkdir -p "$probe/.claude/skills/probe-new" ||
+    { echo "error: cannot make the probe skill"; exit 1; }
+  printf "%s\n" "---" "description: probe new skill for the untracked duplicate check" "---" "" "the probe layer sentence about harness budgets repeats here verbatim for the untracked duplicate check" > "$probe/.claude/skills/probe-new/SKILL.md" ||
+    { echo "error: cannot plant the probe skill"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
+    { echo "error: the gate passed an untracked duplicate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge static" ||
+    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "duplicate facts" ||
+    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "repeats here verbatim" ||
+    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
+
+# A sentence duplicated through a nested skill fails the static lane naming
+# the skill: the corpus reads skills at any depth, so a nested suit counts
+# like a top-level one.
+probe_step "a nested skill duplicating committed text fails the static lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  printf "%s\n" "# probe knowledge line" "The nested probe sentence about harness layering repeats here verbatim for the nested static check" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot plant the probe sentence"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  mkdir -p "$probe/.claude/skills/suite/probe-nested" ||
+    { echo "error: cannot make the nested skill"; exit 1; }
+  printf "%s\n" "---" "description: probe nested static skill" "---" "" "The nested probe sentence about harness layering repeats here verbatim for the nested static check" > "$probe/.claude/skills/suite/probe-nested/SKILL.md" ||
+    { echo "error: cannot plant the nested skill"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
+    { echo "error: the gate passed a nested duplicate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge static" ||
+    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "duplicate facts" ||
+    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "suite/probe-nested" ||
+    { echo "error: the failure never named the nested skill"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "nested probe sentence about harness layering" ||
+    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
+
+# A newline inside a skill path must not split the changed set: the worktree
+# sentence duplicating committed text fails the static lane naming it,
+# instead of the flattened filter missing both halves.
+probe_step "a newline skill path duplicating committed text fails the static lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  printf "%s\n" "# probe knowledge line" "The probe layer sentence about harness budgets repeats here verbatim for the newline path check" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot plant the probe sentence"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  nl="$(printf "\nX")"
+  nl="${nl%X}"
+  mkdir -p "$probe/.claude/skills/probe${nl}newline" ||
+    { echo "error: cannot make the newline skill"; exit 1; }
+  printf "%s\n" "---" "description: probe newline skill for the path check" "---" "" "The probe layer sentence about harness budgets repeats here verbatim for the newline path check" > "$probe/.claude/skills/probe${nl}newline/SKILL.md" ||
+    { echo "error: cannot plant the newline skill"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
+    { echo "error: the gate passed a duplicate through a newline path"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge static" ||
+    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "duplicate facts" ||
+    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "repeats here verbatim" ||
+    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
+# A breaking template counterpart is overlaid, not skipped: the fake keys on
+# a BREAK marker in template/AGENTS.md and the run must fail naming the case.
+probe_step "a breaking template counterpart is caught by the eval overlay" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  mkdir -p "$probe/template" ||
+    { echo "error: cannot make the probe template tree"; exit 1; }
+  printf "%s\n" "# probe template layer" "" "A benign probe line about the template layer and nothing else." > "$probe/template/AGENTS.md" ||
+    { echo "error: cannot plant the probe template layer"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    bad=False" "    try:" "        bad=\"BREAK\" in open(\"template/AGENTS.md\").read()" "    except OSError:" "        bad=False" "    if bad:" "        open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    else:" "        open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "2" ] ||
+    { echo "error: want two ok lines at baseline, got $n"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  printf "%s\n" "BREAK the always-loaded template layer for the probe" >> "$probe/template/AGENTS.md" ||
+    { echo "error: cannot break the probe template layer"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: eval passed a breaking template change"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^FAIL eval " ||
+    { echo "error: the template break never failed a case"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
+    { echo "error: the template break never named the regression"; echo "$out"; exit 1; }'
+
+# A symlink pointing outside any git repo reads as absent from the baseline:
+# live bytes would make the base depend on untracked state, so the committed
+# sentence repeated through the link still fires the static lane.
+probe_step "a link target outside any repo reads as absent from the baseline" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  printf "%s\n" "the probe layer sentence about harness budgets repeats here verbatim for the outside link check" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot plant the probe sentence"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  shared="$probe-shared.txt"
+  printf "%s\n" "---" "description: probe link skill for the outside target check" "---" "" "the probe layer sentence about harness budgets repeats here verbatim for the outside link check" > "$shared" ||
+    { echo "error: cannot plant the shared target"; exit 1; }
+  mkdir -p "$probe/.claude/skills/probe-link" ||
+    { echo "error: cannot make the probe skill"; exit 1; }
+  ln -s "$shared" "$probe/.claude/skills/probe-link/SKILL.md" ||
+    { echo "error: cannot link the probe skill"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
+    { echo "error: the gate passed a duplicate through an outside link"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "FAIL  knowledge static" ||
+    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "duplicate facts" ||
+    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
+  rm -f "$shared" ||
+    { echo "error: cannot clean the shared target"; exit 1; }'
+
+# A case name with a space runs once — one ok line, valid JSON rows — instead
+# of word-splitting into phantom FAILs.
+probe_step "eval.sh handles a spaced case name with one line and valid rows" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  mkdir -p "$probe/harness/evals/my case" ||
+    { echo "error: cannot make the spaced case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" ||
+    { echo "error: cannot seed the spaced case"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case "my case" 2>&1) ||
+    { echo "error: eval failed on a spaced case name"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "1" ] ||
+    { echo "error: want one ok line, got $n"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "^FAIL eval "; then
+    echo "error: the spaced name word-split into phantom FAILs"; echo "$out"; exit 1;
+  fi
+  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
+import json
+import sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+assert any(row.get("case") == "my case" and row.get("pass") is True for row in rows), rows
+PYEOF
+    { echo "error: no valid passing row for the spaced case"; exit 1; }'
+
+# A case name with a newline runs once on its raw directory: sanitised only
+# for the display rows, the name cannot re-split into phantom cases — three
+# ok lines under the spaced name, and valid JSON rows.
+probe_step "eval.sh handles a newline case name with one line and valid rows" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  nl="$(printf "\nX")"
+  nl="${nl%X}"
+  mkdir -p "$probe/harness/evals/my${nl}case" ||
+    { echo "error: cannot make the newline case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my${nl}case/" ||
+    { echo "error: cannot seed the newline case"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed on a seeded newline case"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "3" ] ||
+    { echo "error: want three ok lines, got $n"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "^FAIL eval "; then
+    echo "error: the newline case failed instead of running"; echo "$out"; exit 1;
+  fi
+  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
+import json
+import sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+assert len(rows) == 3, rows
+assert any(row.get("case") == "my case" and row.get("pass") is True for row in rows), rows
+PYEOF
+    { echo "error: no valid passing row for the newline case"; exit 1; }'
+
+# Two raw names sanitising alike run both, with indexed rows — never silently
+# dropped through a sanitised sort.
+probe_step "eval.sh runs both cases when two names sanitise alike" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  nl="$(printf "\nX")"
+  nl="${nl%X}"
+  mkdir -p "$probe/harness/evals/my case" "$probe/harness/evals/my${nl}case" ||
+    { echo "error: cannot make the colliding cases"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" ||
+    { echo "error: cannot seed the spaced case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my${nl}case/" ||
+    { echo "error: cannot seed the newline case"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed on colliding case names"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "4" ] ||
+    { echo "error: want four ok lines, got $n"; echo "$out"; exit 1; }
+  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
+import json
+import sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+assert len(rows) == 4, rows
+cases = sorted(row.get("case") for row in rows)
+assert "my case (1)" in cases and "my case (2)" in cases, cases
+assert all(row.get("pass") is True for row in rows), rows
+PYEOF
+    { echo "error: the collision dropped or merged a case"; exit 1; }'
+
+# Two sanitised names plus a literal of the suffixed form stay three cases:
+# a literal case name colliding with a generated suffix is skipped until a
+# free one, so no verdict entry collapses and no result is lost.
+probe_step "eval.sh keeps three names distinct when a literal suffix collides" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  nl="$(printf "\nX")"
+  nl="${nl%X}"
+  mkdir -p "$probe/harness/evals/my case" "$probe/harness/evals/my${nl}case" "$probe/harness/evals/my case (1)" ||
+    { echo "error: cannot make the colliding cases"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" ||
+    { echo "error: cannot seed the spaced case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my${nl}case/" ||
+    { echo "error: cannot seed the newline case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case (1)/" ||
+    { echo "error: cannot seed the literal case"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed on the triple collision"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "5" ] ||
+    { echo "error: want five ok lines, got $n"; echo "$out"; exit 1; }
+  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
+import json
+import sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+assert len(rows) == 5, rows
+cases = [row.get("case") for row in rows]
+assert len(set(cases)) == 5, cases
+assert all(row.get("pass") is True for row in rows), rows
+PYEOF
+    { echo "error: the triple collision lost or merged a case"; exit 1; }'
+
+# A filtered --case run over a green baseline passes: the verdict scopes to
+# that case only, so unrelated committed-green cases read as neither deleted
+# nor dropping the totals.
+probe_step "a filtered --case run is judged against only that case" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^ok eval commit-bead" ||
+    { echo "error: baseline never passed commit-bead"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^ok eval verify-gate" ||
+    { echo "error: baseline never passed verify-gate"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case commit-bead 2>&1) ||
+    { echo "error: a filtered run failed on a green baseline"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^ok eval commit-bead" ||
+    { echo "error: the filtered run never passed commit-bead"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "but has no case now"; then
+    echo "error: the filtered run reported an unrelated case deleted"; echo "$out"; exit 1;
+  fi
+  if echo "$out" | grep -q "total passes dropped"; then
+    echo "error: the filtered run dropped totals over the full baseline"; echo "$out"; exit 1;
+  fi'
+
+# Through a symlinked project path the baseline still resolves: the verdict
+# names the committed-green regression instead of pleading no baseline.
+probe_step "eval.sh resolves its baseline through a symlinked project path" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  trap '"'"'rm -rf "$probe" "$probe-link"'"'"' EXIT
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  ln -s "$probe" "$probe-link" ||
+    { echo "error: cannot link the probe"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe-link" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe-link" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed through the symlink"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "2" ] ||
+    { echo "error: want two ok lines through the symlink, got $n"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant bad fake opencode"; exit 1; }
+  out=$(cd "$probe-link" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe-link" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: eval passed a breaking layer through the symlink"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
+    { echo "error: the symlinked run never named the regression"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "no passing baseline yet"; then
+    echo "error: the symlinked run blinded the baseline"; echo "$out"; exit 1;
+  fi'
+
+# Deleting a costly skill credits its HEAD tokens: a delete-plus-add whose net
+# is negative passes the static lane instead of failing on the addition.
+probe_step "deleting a costly skill credits its cost in the static lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  mkdir -p "$probe/.claude/skills/probe-big" ||
+    { echo "error: cannot make the probe skill"; exit 1; }
+  desc=$(python3 -c "print(chr(120) * 12000)") ||
+    { echo "error: cannot size the probe description"; exit 1; }
+  printf "%s\n" "---" "description: $desc" "---" "" "Probe big body." > "$probe/.claude/skills/probe-big/SKILL.md" ||
+    { echo "error: cannot plant the probe skill"; exit 1; }
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  rm -rf "$probe/.claude/skills/probe-big" ||
+    { echo "error: cannot delete the probe skill"; exit 1; }
+  pad=$(python3 -c "print(chr(121) * 9000)") ||
+    { echo "error: cannot size the probe addition"; exit 1; }
+  printf "%s\n" "# probe costly line" "$pad" >> "$probe/CLAUDE.md" ||
+    { echo "error: cannot dirty CLAUDE.md"; exit 1; }
+  mkdir -p "$probe/fakehome" ||
+    { echo "error: cannot make fakehome"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed"; echo "$out"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
+    { echo "error: the gate failed a net-negative knowledge diff"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "  ok    knowledge static" ||
+    { echo "error: the static lane never passed the net-negative diff"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "tokens (-" ||
+    { echo "error: the cost line never showed the deletion credit"; echo "$out"; exit 1; }'
+
+# The behavioural trigger covers the whole always-loaded layer: an
+# AGENTS.local.md change fires it and passes, while body prose mentioning
+# description: in a skill does not fire it at all.
+probe_step "AGENTS.local.md fires the behavioural lane, skill body prose does not" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  mkdir -p "$probe/.claude/skills/probe-trigger" ||
+    { echo "error: cannot make the probe skill"; exit 1; }
+  printf "%s\n" "---" "description: probe trigger skill for the behavioural lane" "---" "" "Probe trigger body." > "$probe/.claude/skills/probe-trigger/SKILL.md" ||
+    { echo "error: cannot plant the probe skill"; exit 1; }
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the baseline results"; exit 1; }
+  mkdir -p "$probe/fakehome" ||
+    { echo "error: cannot make fakehome"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed"; echo "$out"; exit 1; }
+  printf "%s\n" "# probe local line" >> "$probe/AGENTS.local.md" ||
+    { echo "error: cannot dirty AGENTS.local.md"; exit 1; }
+  rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
+    { echo "error: the gate failed a benign AGENTS.local.md change"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "  ok    knowledge behavioural" ||
+    { echo "error: behavioural never passed the benign change"; echo "$out"; exit 1; }
+  rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  [ "${rows1:-0}" -gt "${rows0:-0}" ] ||
+    { echo "error: no eval ran on the AGENTS.local.md change ($rows0 -> $rows1) — lane detail lives in the swallowed probe log, so row growth is the signal"; echo "$out"; exit 1; }
+  (cd "$probe" && git add AGENTS.local.md harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe local change" >/dev/null 2>&1) ||
+    { echo "error: cannot commit the probe local change"; exit 1; }
+  printf "%s\n" "See the description: field above for the full contract." >> "$probe/.claude/skills/probe-trigger/SKILL.md" ||
+    { echo "error: cannot dirty the probe skill body"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
+    { echo "error: the gate failed on skill body prose"; echo "$out"; exit 1; }
+  rows2=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  [ "$rows1" = "$rows2" ] ||
+    { echo "error: an eval ran on skill body prose ($rows1 -> $rows2)"; echo "$out"; exit 1; }'
+
+# Undecodable HEAD bytes never traceback the static lane, and the same byte
+# in a skill still triggers the behavioural lane: a committed cp1252 byte in
+# CLAUDE.md plus a benign AGENTS.md touch passes static with no traceback,
+# then a new skill carrying the byte runs the behavioural eval.
+probe_step "undecodable HEAD bytes never traceback the static lane" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  python3 - "$probe/CLAUDE.md" <<PYEOF ||
+import sys
+p = sys.argv[1]
+open(p, "ab").write(b"probe cp1252 line \x93 here\n")
+PYEOF
+    { echo "error: cannot plant cp1252 byte"; exit 1; }
+  (cd "$probe" && git add CLAUDE.md >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe cp1252 head" >/dev/null 2>&1) ||
+    { echo "error: cannot commit cp1252 head"; exit 1; }
+  mkdir -p "$probe/fakehome" ||
+    { echo "error: cannot make fakehome"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed"; echo "$out"; exit 1; }
+  printf "%s\n" "# probe benign line" >> "$probe/AGENTS.md" ||
+    { echo "error: cannot dirty AGENTS.md"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
+    { echo "error: static failed on undecodable HEAD"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "  ok    knowledge static" ||
+    { echo "error: static never passed undecodable HEAD"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: static traceback on undecodable HEAD"; echo "$out"; exit 1;
+  fi
+  (cd "$probe" && git checkout -- AGENTS.md >/dev/null 2>&1) ||
+    { echo "error: cannot restore AGENTS.md"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: baseline eval failed"; echo "$out"; exit 1; }
+  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
+    { echo "error: cannot commit baseline"; exit 1; }
+  mkdir -p "$probe/.claude/skills/probe-cp1252" ||
+    { echo "error: cannot make probe skill"; exit 1; }
+  python3 - "$probe/.claude/skills/probe-cp1252/SKILL.md" <<PYEOF ||
+import sys
+p = sys.argv[1]
+open(p, "wb").write(b"---\ndescription: probe cp1252 \x93 skill\n---\n\nProbe body.\n")
+PYEOF
+    { echo "error: cannot plant cp1252 skill"; exit 1; }
+  rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" "$probe/scripts/harness" verify 2>&1) ||
+    { echo "error: gate failed on cp1252 skill"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "  ok    knowledge behavioural" ||
+    { echo "error: behavioural never passed cp1252 skill"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: traceback on cp1252 skill"; echo "$out"; exit 1;
+  fi
+  rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+  [ "${rows1:-0}" -gt "${rows0:-0}" ] ||
+    { echo "error: no eval ran on cp1252 skill"; echo "$out"; exit 1; }'
+
+# A carriage-return case name runs green with one valid row, and vertical-tab
+# and form-feed names survive the same pass: five ok lines, no FAIL, no
+# malformed rows, and valid passing JSON for every control name.
+probe_step "eval handles carriage-return and vertical-tab names" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  cr="$(printf "\rX")"
+  cr="${cr%X}" ||
+    { echo "error: cannot shape carriage return"; exit 1; }
+  vt="$(printf "\vX")"
+  vt="${vt%X}" ||
+    { echo "error: cannot shape vertical tab"; exit 1; }
+  ff="$(printf "\fX")"
+  ff="${ff%X}" ||
+    { echo "error: cannot shape form feed"; exit 1; }
+  mkdir -p "$probe/harness/evals/bad${cr}case" ||
+    { echo "error: cannot make cr case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/bad${cr}case/" ||
+    { echo "error: cannot seed cr case"; exit 1; }
+  mkdir -p "$probe/harness/evals/vt${vt}case" "$probe/harness/evals/ff${ff}case" ||
+    { echo "error: cannot make control cases"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/vt${vt}case/" ||
+    { echo "error: cannot seed vt case"; exit 1; }
+  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/ff${ff}case/" ||
+    { echo "error: cannot seed ff case"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
+    { echo "error: eval failed on control names"; echo "$out"; exit 1; }
+  n=$(echo "$out" | grep -c "^ok eval " || true)
+  [ "$n" = "5" ] ||
+    { echo "error: want five ok lines, got $n"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "^FAIL eval "; then
+    echo "error: control names failed instead of running"; echo "$out"; exit 1;
+  fi
+  if echo "$out" | grep -q "malformed"; then
+    echo "error: control names split into malformed rows"; echo "$out"; exit 1;
+  fi
+  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
+import json
+import sys
+rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+assert len(rows) == 5, rows
+cases = [row.get("case") for row in rows]
+assert "bad case" in cases, cases
+assert "vt case" in cases, cases
+assert "ff case" in cases, cases
+assert all(row.get("pass") is True for row in rows), rows
+PYEOF
+    { echo "error: no valid rows for control names"; exit 1; }'
+
+# A project with no evals dir fails loudly naming it instead of writing rows
+# into the shared checkout, where no status shows them and no clone resolves
+# the baseline.
+probe_step "eval.sh fails loudly with no project evals dir" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  mv "$probe/harness/evals" "$probe/harness/evals-away" ||
+    { echo "error: cannot hide the probe evals"; exit 1; }
+  out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
+    { echo "error: eval passed with no evals dir"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "no evals dir" ||
+    { echo "error: eval never named the missing dir"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "harness/evals" ||
+    { echo "error: eval never said which dir"; echo "$out"; exit 1; }'
+
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
 fi

@@ -128,7 +128,7 @@ def frontmatter(text):
 
 def translate(source, base=ROOT):
     """The opencode agent file for one .claude/agents/*.md, as text."""
-    fields, body = frontmatter(source.read_text())
+    fields, body = frontmatter(source.read_text(errors="replace"))
     granted = {t.strip() for t in fields.get("tools", "").split(",") if t.strip()}
 
     header = ["---"]
@@ -201,7 +201,7 @@ def orphans_for(opencode_dir, wanted):
             found.append(path)
             continue
         try:
-            if GENERATED_BY in path.read_text():
+            if GENERATED_BY in path.read_text(errors="replace"):
                 found.append(path)
         except OSError:
             # Unreadable like a leftover: fail loud below, never skip silent.
@@ -284,7 +284,7 @@ def pin_file(path):
               f"on {OPENCODE_MODEL_ARG}")
         return True
     try:
-        tree = json.loads(path.read_text())
+        tree = json.loads(path.read_text(errors="replace"))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(f"  PIN {path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}: "
               f"unreadable ({exc}) — left alone for the pin check",
@@ -367,7 +367,7 @@ def check():
                       f"run 'scripts/harness link' to prune it")
                 continue
             try:
-                ok = path.is_file() and path.read_text() == text
+                ok = path.is_file() and path.read_text(errors="replace") == text
             except OSError:
                 ok = False
             if not ok:
@@ -381,7 +381,7 @@ def check():
                       f"run 'scripts/harness link' to prune it")
                 continue
             try:
-                path.read_text()
+                path.read_text(errors="replace")
             except OSError as exc:
                 print(f"  AGENT {display_path(path)} unreadable ({exc}) — "
                       f"fix permissions or remove it")

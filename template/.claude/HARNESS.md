@@ -9,6 +9,7 @@
   scripts/brief.sh
   scripts/build-wiki.sh
   scripts/context.py
+  scripts/eval.sh
   scripts/lib/journal.sh
   scripts/opencode-agents.py
   scripts/reflect.sh
@@ -502,6 +503,51 @@ because reachability is load-bearing — and a breach past that fails loudly,
 removes any published wiki, and publishes nothing (swapped atomically when it does publish). `context.py` counts the index in the always-loaded budget,
 includes the wiki in the librarian's digest, and watches pages carrying
 `tracks:` through the staleness gate like any other doc, reporting a blessed-but-deleted page as missing and pruning a lock entry whose page lost its tracks.
+
+## The eval gate keeps the knowledge layer honest
+
+Static checks run on every knowledge-layer diff — a diff touching skills,
+`CLAUDE.md`, `AGENTS.md`, `AGENTS.local.md` (the files in `KNOWLEDGE_FILES`),
+`.claude/agents/` or memories. They re-measure the
+always-loaded cost delta from `context.py`, fail on a duplicate fact against
+the digest, and lean on the context-docs step for staleness. An unrelated
+diff skips them out loud, and with no commits yet there is no diff to judge,
+so they skip then too. They are free and local, so they run in the normal
+gate, including the `--quick` lane.
+
+Behavioural evals run only when the always-loaded layer changes — the files in
+`KNOWLEDGE_FILES` (`template/scripts/lib/knowledge_layer.py`) or a skill
+description, which is the part of a skill every session pays for. The skill
+trigger compares frontmatter
+descriptions, never greps the diff for the word, so body prose mentioning
+`description:` is not a layer change. Each case in `harness/evals/` carries `task.md` (what the
+agent must do from a bare worktree), `base` (the git ref the worktree starts
+at) and `check.sh` (exit 0 when the worktree proves the behaviour).
+`scripts/eval.sh` makes a throwaway worktree at base, overlays the candidate
+knowledge layer, runs the agent headless through `scripts/agent.py` on the
+pinned model, and runs the check — one run per case, one retry on failure,
+one line per case, no worktree left behind. The overlay mirrors deletions
+too, so a removed skill is absent from the worktree instead of lingering
+from base. Rows append to
+`harness/evals/results.jsonl`, never rewritten; the lane fails when a case
+that ever passed on the committed harness now fails — the baseline is a
+ratchet over history, so a committed red run keeps failing until a run passes
+— when a committed-green case has no directory now, or when total passes over
+the committed-green set drop. An empty suite fails naming its committed-green
+cases, the overlay carries the template/ counterparts beside the root layer,
+and untracked files and outside-repo link targets read as absent from the
+baseline. A `CLAUDE.md` change that breaks a passing case
+blocks the commit, and one that does not goes through. Static cost counts both
+sides of the diff, so a deleted file credits its committed tokens and a rename
+nets out by content. With no project evals dir the runner fails naming it
+rather than writing rows into the shared checkout. Memories and reviewer traps
+never trigger it: they are keyed, cheap and revertible, so a behavioural run
+would prove nothing a revert could not fix faster.
+
+Cases are project-owned data, seeded 3-8 deep from closed beads — the loop in
+`harness/learning.jsonl` says which behaviours keep breaking — and the two
+shipped examples are the shape, not the suite. The generator is never
+rewritten by the run; only the rows grow.
 
 ## File the bead as planning begins
 

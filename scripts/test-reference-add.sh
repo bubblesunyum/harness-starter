@@ -97,6 +97,12 @@ scripts/verify.steps.sh
 scripts/review.scope.sh
 dashboard.toml
 harness/diverged.txt
+harness/evals/commit-bead/base
+harness/evals/commit-bead/check.sh
+harness/evals/commit-bead/task.md
+harness/evals/verify-gate/base
+harness/evals/verify-gate/check.sh
+harness/evals/verify-gate/task.md
 harness/laurels.jsonl
 harness/learning.jsonl
 harness/handoffs/.gitkeep

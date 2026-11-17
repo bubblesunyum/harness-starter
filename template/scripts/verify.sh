@@ -96,6 +96,8 @@ failed_names=()
 note_failed() {
   failed=1
   local want="$1" e
+  # The ${arr[@]+...} form expands to nothing when the array is empty: under
+  # set -u a bare empty array expansion fails, so the loop needs the guard.
   for e in ${failed_names[@]+"${failed_names[@]}"}; do
     [ "$e" = "$want" ] && return 0
   done
@@ -463,7 +465,274 @@ else
   echo "        remedy: scripts/harness context bless re-records hashes after updating the doc"
 fi
 
-# The reviewers exist twice — .claude/agents/ for Claude Code, .opencode/agent/
+# Split in two helpers — cost and duplicates — sharing one detection and one
+# lane library, so the halves cannot drift apart.
+# One loader for the lane library: every python heredoc below execs through
+# here with the lib on PYTHONPATH, so no call site pastes its own import
+# block. Any extra argv the inline code reads travels after the script.
+kl_python() {
+  PYTHONPATH="$HARNESS/scripts/lib" python3 - "$@"
+}
+knowledge_cost() {
+  local out st
+  if out="$(kl_python <<'PYEOF'
+import knowledge_layer as kl
+
+# Tune here: the static lanes one number, beside the logic that reads it. A
+# knowledge diff growing the always-loaded layer past this many tokens fails
+# — the layer is a budget, and a session that will not argue with it needs
+# the gate to do it instead.
+COST_DELTA_MAX = 2000
+
+parts, now = kl.cost_now()
+base = kl.cost_base(parts)
+delta = now - base
+print("  knowledge static: cost %d tokens (%+d since HEAD)" % (now, delta))
+if delta > COST_DELTA_MAX:
+    print("error: always-loaded cost grew %+d tokens in one diff"
+          " (max %d)" % (delta, COST_DELTA_MAX))
+    print("  move the text behind a skill instead, or tune COST_DELTA_MAX above")
+    sys.exit(1)
+PYEOF
+)"; then
+    st=0
+  else
+    st=$?
+  fi
+  printf '%s\n' "$out"
+  return "$st"
+}
+
+knowledge_duplicates() {
+  # $1 carries the changed knowledge-layer paths (stripped of any template/
+  # prefix) as a NUL-separated file, written by the detection in
+  # knowledge_static below — never flattened to lines, so a newline inside a
+  # skill name cannot split one path into two phantom filters.
+  local changed_file="$1" out st
+  if out="$(kl_python "$changed_file" <<'PYEOF'
+import knowledge_layer as kl
+import os
+import sys
+
+texts, memo_note = kl.duplicate_texts()
+if memo_note:
+    print(memo_note, end="")
+
+# Sentence granularity, not file granularity: a benign touch to a file that
+# already carries a settled duplicate must not fail. Only a sentence
+# duplicated now that was not duplicated at HEAD is introduced by this diff;
+# the rest stays with the librarian. Memories have no HEAD version, so both
+# sides read them live: a file sentence matching a memory still counts, and
+# only a sentence already duplicated at HEAD stays silent.
+base_entries, base_note = kl.duplicate_base_texts()
+if base_note:
+    print(base_note, end="")
+base_entries.extend((name, text) for name, text in texts if name.startswith("memory:"))
+
+changed_keys = set()
+with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
+    for entry in handle.read().split("\0"):
+        if entry:
+            changed_keys.add(entry)
+
+duplicates = kl.find_introduced_duplicates(texts, base_entries, changed_keys)
+if duplicates:
+    print("error: duplicate facts across the knowledge layer:")
+    for sent, names in duplicates[:5]:
+        print("  - \"%s...\" in %s" % (sent[:80], ", ".join(names)))
+    print("  say it once, or let the librarian pass merge them")
+    sys.exit(1)
+PYEOF
+)"; then
+    st=0
+  else
+    st=$?
+  fi
+  printf '%s\n' "$out"
+  return "$st"
+}
+
+knowledge_static() {
+  local detect st changed_file header cost_out duplicate_out cost_st duplicate_st out
+  # The changed set travels NUL-safe in a scratch file, not as
+  # newline-joined lines: flattening it would split a newline path in two
+  # and the verdict below would never match either half.
+  changed_file="$(mktemp)" || {
+    capture_report "knowledge static" "  knowledge static: cannot make a scratch file" 1
+    return 1
+  }
+  if detect="$(kl_python "$changed_file" <<'PYEOF'
+import knowledge_layer as kl
+import sys
+
+rows = kl.git_status_rows()
+if rows is None:
+    print("  knowledge static: git status failed — checks skip")
+    sys.exit(2)
+# No commits, no diff: a fresh tree is all untracked, which would read every
+# installed file as changed and fail fresh installs on dormant facts the
+# librarian owns. Static judges a diff, so without one it skips out loud.
+if not kl.has_commits():
+    print("  knowledge static: no commits yet — no diff to judge, checks skip")
+    sys.exit(2)
+paths = sorted({path for _, path in rows if kl.is_knowledge_static(path)})
+if not paths:
+    print("  knowledge static: no knowledge-layer change — checks skip")
+    sys.exit(2)
+def safe(path):
+    for boundary in ("\t", "\n", "\x0b", "\x0c", "\r",
+                     "\x1c", "\x1d", "\x1e"):
+        path = path.replace(boundary, " ")
+    return path
+print("  knowledge static: " + ", ".join(sorted(safe(path) for path in paths)))
+stripped = sorted({kl.strip_template_prefix(path) for _, path in rows if kl.is_knowledge_static(path)})
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write("\0".join(stripped) + "\0")
+PYEOF
+)"; then
+    st=0
+  else
+    st=$?
+  fi
+  if [ "$st" -eq 2 ]; then
+    # A skip, not a verdict: the lane never ran, and says so out loud.
+    rm -f "$changed_file"
+    capture_report "knowledge static" "$detect" 0
+    return 0
+  elif [ "$st" -ne 0 ]; then
+    rm -f "$changed_file"
+    capture_report "knowledge static" "$detect" "$st"
+    return "$st"
+  fi
+  header="$(printf '%s\n' "$detect" | sed -n '1p')"
+  if cost_out="$(knowledge_cost)"; then
+    cost_st=0
+  else
+    cost_st=$?
+  fi
+  if duplicate_out="$(knowledge_duplicates "$changed_file")"; then
+    duplicate_st=0
+  else
+    duplicate_st=$?
+  fi
+  rm -f "$changed_file"
+  if [ "$cost_st" -ne 0 ] || [ "$duplicate_st" -ne 0 ]; then
+    st=1
+  else
+    st=0
+  fi
+  if [ "$st" -eq 0 ]; then
+    out="$header
+$cost_out
+  knowledge static: cost and duplicates clean"
+  else
+    out="$header
+$cost_out
+$duplicate_out"
+  fi
+  capture_report "knowledge static" "$out" "$st"
+  # report above always exits 0 — the verdict travels in the failed flag,
+  # which dies with a subshell — so hand the status back explicitly. The bare
+  # call below ignores it; the behavioural lane inside probe_step needs it.
+  return "$st"
+}
+# Bare, like the context-docs check above: step would swallow the verdict
+# lines the probes below grep for, and every probe is already drained by the
+# model-probes step further up.
+knowledge_static
+
+# The knowledge layers behavioural half: the eval cases in harness/evals/,
+# only when always-loaded text changes — the files in KNOWLEDGE_FILES in
+# template/scripts/lib/knowledge_layer.py or a skill description, which is
+# the part of a skill every session pays for (compared frontmatter to
+# frontmatter, so body prose mentioning the word is not a layer change). Anything else, including a memory-only change, skips
+# before the runner is even called. A probe step because the runner takes
+# minutes: skipped in the --quick and ledger lanes like every other
+# throwaway-repo check. A shell function like the static lane above, so the
+# evals one-line-per-case output echoes instead of being swallowed.
+knowledge_behavioural() {
+  local out st eval_sh
+  eval_sh="${HARNESS_ROOT:?harness root is missing}/scripts/eval.sh"
+  if out="$(kl_python "$eval_sh" <<'PYEOF'
+import knowledge_layer as kl
+import re
+import subprocess
+import sys
+
+eval_sh = sys.argv[1]
+
+rows = kl.git_status_rows()
+if rows is None:
+    print("  knowledge behavioural: git status failed — evals skip")
+    sys.exit(0)
+if not kl.has_commits():
+    print("  knowledge behavioural: no commits yet — evals skip")
+    sys.exit(0)
+
+triggered = []
+for code, path in rows:
+    if kl.strip_template_prefix(path) in kl.KNOWLEDGE_FILES:
+        triggered.append(path)
+for code, path in rows:
+    cand = kl.strip_template_prefix(path)
+    if not cand.startswith(".claude/skills/") or not cand.endswith("/SKILL.md"):
+        continue
+    if code == "??" or code.strip() == "A":
+        triggered.append(path + " (new)")
+        continue
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            now_text = handle.read()
+    except OSError:
+        triggered.append(path + " (deleted)")
+        continue
+    head_text = kl.read_base(path)
+    if head_text is None:
+        head_text = ""
+    # Frontmatter to frontmatter, never a grep for the word: body prose
+    # mentioning description: is not an always-loaded change.
+    if kl.skill_description(now_text) != kl.skill_description(head_text):
+        triggered.append(path)
+seen = []
+for item in triggered:
+    if item not in seen:
+        seen.append(item)
+if not seen:
+    print("  knowledge behavioural: no always-loaded change — evals skip")
+    sys.exit(0)
+print("  knowledge behavioural: " + ", ".join(seen))
+run = subprocess.run(["bash", eval_sh], capture_output=True, text=True,
+                     errors="replace")
+sys.stdout.write(run.stdout)
+sys.stderr.write(run.stderr)
+if run.returncode != 0:
+    case_re = re.compile("^eval: regression \u2014 (.*?) "
+                         "(passed on the last committed harness|"
+                         "has no passing baseline)")
+    names = []
+    for line in (run.stdout or "").split("\n"):
+        found = case_re.match(line)
+        if found:
+            names.append(found.group(1))
+    if names:
+        print("error: eval regression in %s"
+              " — the eval lines above say which" % ", ".join(sorted(set(names))))
+    else:
+        print("error: a passing eval case now fails — the eval lines above say which")
+    sys.exit(1)
+PYEOF
+)"; then
+    st=0
+  else
+    st=$?
+  fi
+  capture_report "knowledge behavioural" "$out" "$st"
+  # report above always exits 0 — without this the probe step wrapping this
+  # function reads success whatever eval said, and a breaking change sails
+  # through.
+  return "$st"
+}
+probe_step "knowledge behavioural" knowledge_behavioural
 # generated from it — and the generated half drifts silently, because nothing
 # about editing the source makes opencode complain. Checked rather than
 # regenerated: a gate that quietly fixed this would pass every time and never
@@ -542,6 +811,8 @@ echo $((SECONDS - started)) > "$LOGS/elapsed"
 # Names, not just a count: a red gate should say which steps to re-run.
 if [ "$failed" -ne 0 ] && [ "${#failed_names[@]}" -gt 0 ]; then
   _failed_line=""
+  # The ${arr[@]+...} form expands to nothing when the array is empty: under
+  # set -u a bare empty array expansion fails, so the loop needs the guard.
   for _failed_e in ${failed_names[@]+"${failed_names[@]}"}; do
     if [ -z "$_failed_line" ]; then
       _failed_line="$_failed_e"

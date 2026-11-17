@@ -134,6 +134,13 @@ scripts/harness context bless    # after updating a doc, re-record what it track
 file isn't in the diff, the thing it describes is. When you change a doc on
 purpose, `bless` it.
 
+**Behavioural evals guard the always-loaded layer.** `scripts/harness verify`
+runs the cases in `harness/evals/` when the always-loaded layer changes — the
+files in `KNOWLEDGE_FILES` or a skill description, which is the part of a skill
+every session pays for. A case that passed on the last committed harness and
+now fails blocks the commit. Seed new cases from closed beads; memory-only
+changes never trigger them.
+
 **Always-loaded cost is reported, not capped.** `scripts/harness verify` prints what
 a session pays before it does anything. Nothing fails on the number — it's a
 trend line. When it climbs, the fix is still to move something behind a skill
@@ -252,4 +259,4 @@ reads as the truth instead of a guess.
 honest" — nothing ready means the next session has nothing to pick up, and
 something stale means work is rotting rather than moving.
 
-<!-- tracks: scripts/brief.sh scripts/verify.sh scripts/dashboard.py scripts/hooks/commit-msg scripts/context.py scripts/reflect.sh -->
+<!-- tracks: scripts/brief.sh scripts/verify.sh scripts/dashboard.py scripts/hooks/commit-msg scripts/context.py scripts/reflect.sh scripts/eval.sh -->

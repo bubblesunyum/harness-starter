@@ -85,7 +85,7 @@ def strip_jsonc(text):
 
 def read_jsonc(path):
     """JSON or JSONC — opencode accepts both under either name."""
-    return json.loads(strip_jsonc(path.read_text()))
+    return json.loads(strip_jsonc(path.read_text(errors="replace")))
 
 
 def roster_problems(root):
@@ -96,7 +96,7 @@ def roster_problems(root):
         # ensure` backfills it; the gate must not fail first.
         return []
     try:
-        data = json.loads(roster.read_text())
+        data = json.loads(roster.read_text(errors="replace"))
     except ValueError:
         return [f"{roster.relative_to(root)}: unreadable — run scripts/harness models ensure"]
     if not isinstance(data, dict):
@@ -178,7 +178,7 @@ def agent_file_problems(root):
     seen = set(paths)
     for path in paths:
         try:
-            text = path.read_text()
+            text = path.read_text(errors="replace")
         except (OSError, UnicodeDecodeError) as exc:
             problems.append(f"{path.relative_to(root)}: unreadable ({exc})")
             continue
@@ -194,7 +194,7 @@ def agent_file_problems(root):
             continue
         label = short_label(path, home)
         try:
-            text = path.read_text()
+            text = path.read_text(errors="replace")
         except (OSError, UnicodeDecodeError) as exc:
             problems.append(f"{label}: unreadable ({exc})")
             continue
@@ -324,7 +324,7 @@ def script_problems(root):
         if not path.is_file() or path.name.startswith("test-") or path.name == Path(__file__).name:
             continue
         try:
-            text = path.read_text()
+            text = path.read_text(errors="replace")
         except (OSError, UnicodeDecodeError):
             continue
         rel = path.relative_to(root)
@@ -350,7 +350,7 @@ def doc_problems(root):
             if path in seen or not path.is_file():
                 continue
             seen.add(path)
-            for number, line in enumerate(path.read_text().splitlines(), 1):
+            for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
                 for value in DOC_MODEL_FLAG.findall(line):
                     if value != OPENCODE_MODEL_ARG:
                         problems.append(f"{path.relative_to(root)}:{number}: example "
