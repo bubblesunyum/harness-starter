@@ -107,17 +107,330 @@ export -f fresh_probe
 # with cp -R instead of installing. Built from this tree, so a reference
 # install of it is the install — the same stubs, seeds and finder, the same
 # wired hooks, the same fresh ledger, the shared contract a link away.
-build_golden() {
-  GOLDEN="$(mktemp -d)" || { echo "error: mktemp failed"; return 1; }
+#
+# The build is cached per checkout under .tmp/golden-cache (gitignored — skill
+# symlinks are absolute, so sharing entries across checkouts would serve the
+# wrong tree). The key derives from what the install reads: the modes,
+# contents and names of the files git lists under template commands bin — the
+# installer predicate at commands/lib/install.sh, plus commands/ and bin/ for
+# the installer logic itself — salted with the bd, git and python3 versions.
+# Names come from one bulk `git ls-files --cached --others --exclude-standard
+# -z` (tracked plus untracked-non-ignored, no index hashes); modes from one
+# bulk stat and contents from one bulk shasum over those working-tree files,
+# each sorted so the merge is deterministic. Keying the working tree is the
+# point: the index knows nothing of unstaged edits, so an index key serves a
+# stale HIT over the normal edit-then-gate flow. Never
+# a hand-maintained file list, and never a bare hash-and-copy: two gates
+# racing populate-vs-read serialize on a lock (flock where it exists, a mkdir
+# spin where it does not, macOS ships no flock), the store publishes
+# atomically (copy to a stage dir, rename into place) with the newest 5
+# entries kept, and every HIT still proves itself — a sentinel written at
+# store time carrying the key and the checkout top, a byte-compare of the
+# installed finder against its template source, and a bd list smoke in the
+# HIT copy. A tripwire failure, including a checkout-top mismatch (the tree
+# moved under a warm cache), clears the poisoned entry and fails loudly; the
+# retry is a clean MISS rebuild. A mkdir lock left by a dead holder is stolen
+# with a warning; a lock held by a live gate past the 30s ceiling falls back
+# to an uncached build — green and slow, never red.
+golden_cache_dir() {
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  printf '%s/.tmp/golden-cache\n' "$top"
+}
+
+golden_cache_key() {
+  # Key over the WORKING TREE uniformly: one bulk name list from git, one
+  # bulk stat for modes, one bulk shasum for contents, all sorted, then the
+  # version salts. The list travels through a temp file — never a variable,
+  # which cannot hold the NULs `ls-files -z` emits. Empty list or any
+  # list/stat/sum failure returns 1 (the caller builds uncached), never a key
+  # over nothing.
+  local top="$1" list modes sums rc
+  list="$(mktemp 2>/dev/null)" || return 1
+  modes="$(mktemp 2>/dev/null)" || { rm -f "$list"; return 1; }
+  sums="$(mktemp 2>/dev/null)" || { rm -f "$list" "$modes"; return 1; }
+  git -C "$top" ls-files --cached --others --exclude-standard -z -- template commands bin >"$list" 2>/dev/null ||
+    { rm -f "$list" "$modes" "$sums"; return 1; }
+  if [ ! -s "$list" ]; then
+    echo "error: git lists no files under template commands bin — cannot key the golden cache" >&2
+    rm -f "$list" "$modes" "$sums"
+    return 1
+  fi
+  if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+    (cd "$top" && xargs -0 stat -f '%Lp %N' <"$list" 2>/dev/null | sort >"$modes") ||
+      { rm -f "$list" "$modes" "$sums"; return 1; }
+  else
+    (cd "$top" && xargs -0 stat -c '%a %n' <"$list" 2>/dev/null | sort >"$modes") ||
+      { rm -f "$list" "$modes" "$sums"; return 1; }
+  fi
+  if [ ! -s "$modes" ]; then rm -f "$list" "$modes" "$sums"; return 1; fi
+  (cd "$top" && xargs -0 shasum <"$list" 2>/dev/null | sort >"$sums") ||
+    { rm -f "$list" "$modes" "$sums"; return 1; }
+  if [ ! -s "$sums" ]; then rm -f "$list" "$modes" "$sums"; return 1; fi
+  {
+    cat "$modes"
+    cat "$sums"
+    printf 'bd: %s\n' "$(bd --version 2>/dev/null || echo no-bd)"
+    printf 'git: %s\n' "$(git --version 2>/dev/null || echo no-git)"
+    printf 'python3: %s\n' "$(python3 --version 2>&1 || echo no-python3)"
+  } | shasum | cut -d' ' -f1
+  rc=$?
+  rm -f "$list" "$modes" "$sums"
+  return $rc
+}
+
+# Serialize one cache fetch-or-build. Prefers flock, which the kernel releases
+# if the holder dies; without it (macOS) a mkdir spin with a 30s ceiling. The
+# mkdir branch writes the holder PID into $dir.lock/pid on acquisition. On
+# contention a lock whose pid file is missing or unreadable, whose PID is dead
+# (kill -0), or which is older than 15 minutes is stolen with a loud warning
+# (rm the pid, rmdir, loop around and take it over). A lock held by a live
+# gate spins as before, but expiry returns 2 (vs 1 for errors) so the caller
+# can stay green with an uncached build instead of failing red. No traps here:
+# a trap would fight the gate reaps, and traps cannot cover kill -9 anyway —
+# the PID file does.
+golden_cache_lock() {
+  local dir="$1" tries holder steal
+  GOLDEN_LOCK_MODE=""
+  GOLDEN_LOCK_DIR="$dir"
+  if command -v flock >/dev/null 2>&1; then
+    : > "$dir.lockfile" 2>/dev/null || return 1
+    exec 9>"$dir.lockfile" || return 1
+    flock 9 || { exec 9>&-; return 1; }
+    GOLDEN_LOCK_MODE="flock"
+    return 0
+  fi
+  tries=0
+  while true; do
+    if mkdir "$dir.lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$dir.lock/pid" 2>/dev/null || true
+      GOLDEN_LOCK_MODE="mkdir"
+      return 0
+    fi
+    # Contention. A missing pid may only mean the winner has not written it
+    # yet, so grace-sleep and re-read before calling it stale.
+    holder="$(cat "$dir.lock/pid" 2>/dev/null)" || holder=""
+    if [ -z "$holder" ]; then
+      sleep 0.2
+      holder="$(cat "$dir.lock/pid" 2>/dev/null)" || holder=""
+    fi
+    steal=0
+    case "$holder" in
+      ''|*[!0-9]*) steal=1;;
+      *) kill -0 "$holder" 2>/dev/null || steal=1;;
+    esac
+    if [ "$steal" = "0" ] && [ -n "$(find "$dir.lock" -mmin +15 2>/dev/null)" ]; then
+      steal=1
+    fi
+    if [ "$steal" = "1" ]; then
+      echo "warning: stealing a stale golden cache lock at $dir.lock (holder ${holder:-missing}) — removing it and taking over"
+      rm -f "$dir.lock/pid" 2>/dev/null || true
+      if rmdir "$dir.lock" 2>/dev/null; then
+        continue
+      fi
+      # Lost a race: someone else stole it or the holder finished. Back off
+      # and re-evaluate; bounded so a junk-filled lock dir fails loudly.
+      sleep 0.2
+      tries=$((tries + 1))
+      if [ "$tries" -ge 150 ]; then
+        echo "error: cannot take the golden cache lock at $dir.lock"
+        return 1
+      fi
+      continue
+    fi
+    sleep 0.2
+    tries=$((tries + 1))
+    if [ "$tries" -ge 150 ]; then
+      return 2
+    fi
+  done
+}
+
+golden_cache_unlock() {
+  if [ "${GOLDEN_LOCK_MODE:-}" = "flock" ]; then
+    exec 9>&-
+  elif [ "${GOLDEN_LOCK_MODE:-}" = "mkdir" ]; then
+    rm -f "${GOLDEN_LOCK_DIR:-}.lock/pid" 2>/dev/null || true
+    rmdir "${GOLDEN_LOCK_DIR:-}.lock" 2>/dev/null || true
+  fi
+  GOLDEN_LOCK_MODE=""
+  GOLDEN_LOCK_DIR=""
+}
+
+# Keep the newest 5 entries; anything else under the lock is a leftover stage
+# from a killed run (the live stager holds the lock), so stages go too.
+golden_cache_evict() {
+  local cache="$1" n d
+  # Plain ls never yields dotfiles, so sweep dead stages directly: anything
+  # still here under the lock is a leftover — the live stager holds the lock,
+  # and our own stage already renamed into place before this runs.
+  rm -rf "$cache"/.stage-* 2>/dev/null || true
+  n=0
+  for d in $(ls -t "$cache" 2>/dev/null); do
+    case "$d" in
+      .lock|.lockfile) continue;;
+    esac
+    [ -d "$cache/$d" ] || continue
+    n=$((n + 1))
+    if [ "$n" -gt 5 ]; then
+      rm -rf "$cache/$d" || true
+    fi
+  done
+}
+
+# Fresh reference install of this tree into a new GOLDEN dir. Owns no lock:
+# callers hold it (or hold none) and unlock on failure. Cleans its own dirs on
+# failure, with the same messages as the pre-cache install.
+golden_install_fresh() {
   # Reference install of this tree: the harness must resolve without the
   # network, and the real ~/.harness is never consulted. HOME is overridden
   # inline — never exported — so the rest of the gate keeps its own.
-  GOLDEN_HOME="$(mktemp -d)" || { echo "error: mktemp failed"; return 1; }
+  GOLDEN="$(mktemp -d)" || { echo "error: mktemp failed"; return 1; }
+  GOLDEN_HOME="$(mktemp -d)" || { echo "error: mktemp failed"; rm -rf "$GOLDEN"; return 1; }
   HARNESS_HOME="$PWD" HOME="$GOLDEN_HOME" bin/harness add "$GOLDEN" >/dev/null 2>&1 || {
     echo "error: harness add failed for the golden fixture"
     rm -rf "$GOLDEN" "$GOLDEN_HOME"
     return 1
   }
+  return 0
+}
+
+# HIT path under the lock: prove the entry tripwires into a fresh GOLDEN copy.
+# Returns 0 on a HIT, 1 after clearing a poisoned entry (caller fails loudly),
+# 2 on a local error that keeps the entry (caller fails without STALE status).
+# Same messages and same entry-clearing as the inline tripwires before it.
+golden_hit_copy() {
+  local entry="$1" key="$2" top="$3" sentinel_key sentinel_top
+  sentinel_key="$(sed -n '1p' "$entry/.golden-sentinel" 2>/dev/null)"
+  sentinel_top="$(sed -n '2p' "$entry/.golden-sentinel" 2>/dev/null)"
+  if [ "$sentinel_key" != "$key" ]; then
+    rm -rf "$entry"
+    unset GOLDEN
+    echo "error: the golden cache entry for key $key is torn (sentinel mismatch) — cleared it, re-run the gate to rebuild"
+    return 1
+  fi
+  if [ "$sentinel_top" != "$top" ]; then
+    rm -rf "$entry"
+    unset GOLDEN
+    echo "error: the golden cache entry for key $key is stale (checkout moved from ${sentinel_top:-unknown} to $top) — cleared it, re-run the gate to rebuild"
+    return 1
+  fi
+  GOLDEN="$(mktemp -d)" || { echo "error: mktemp failed"; return 2; }
+  if ! cp -R "$entry/." "$GOLDEN/" 2>/dev/null; then
+    echo "error: cannot copy the golden cache entry for key $key into $GOLDEN"
+    rm -rf "$GOLDEN"
+    unset GOLDEN
+    return 2
+  fi
+  # The sentinel proves the entry, it is not part of the fixture: a HIT copy
+  # carries exactly what a fresh install would.
+  rm -f "$GOLDEN/.golden-sentinel"
+  git init -q "$GOLDEN" 2>/dev/null || {
+    echo "error: git init failed in $GOLDEN"
+    rm -rf "$GOLDEN"
+    unset GOLDEN
+    return 2
+  }
+  if ! cmp -s "$GOLDEN/scripts/harness" "$top/template/scripts/harness"; then
+    rm -rf "$entry" "$GOLDEN"
+    unset GOLDEN
+    echo "error: the golden cache entry for key $key is stale (scripts/harness no longer matches template) — cleared it, re-run the gate to rebuild"
+    return 1
+  fi
+  if ! (cd "$GOLDEN" && bd list --json --all >/dev/null 2>&1); then
+    rm -rf "$entry" "$GOLDEN"
+    unset GOLDEN
+    echo "error: the golden cache entry for key $key is stale (bd list fails in the HIT copy) — cleared it, re-run the gate to rebuild"
+    return 1
+  fi
+  return 0
+}
+
+# MISS publish under the lock: copy GOLDEN to a stage dir, write the sentinel
+# (key beside checkout top), rename into place, evict the oldest. A store
+# failure warns and stays green — the MISS build itself is already good.
+golden_publish() {
+  local cache="$1" entry="$2" key="$3" top="$4" stage
+  stage="$cache/.stage-$$"
+  rm -rf "$stage"
+  if mkdir -p "$stage" 2>/dev/null &&
+     cp -R "$GOLDEN/." "$stage/" 2>/dev/null &&
+     printf '%s\n' "$key" "$top" > "$stage/.golden-sentinel" 2>/dev/null &&
+     rm -rf "$entry" && mv "$stage" "$entry" 2>/dev/null; then
+    # Recency bump for the ls -t LRU in golden_cache_evict: the fresh entry
+    # must read as newest or the evict below could reap what it just stored.
+    touch "$entry" 2>/dev/null || true
+    golden_cache_evict "$cache"
+  else
+    echo "warning: cannot store the golden cache entry for key $key — continuing uncached"
+    rm -rf "$stage"
+  fi
+}
+
+build_golden() {
+  local top cache key entry rc
+  GOLDEN_CACHE_STATUS=""
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  cache=""
+  key=""
+  if [ -n "$top" ]; then
+    cache="$(golden_cache_dir)" || cache=""
+  fi
+  if [ -n "$cache" ] && key="$(golden_cache_key "$top")" && [ -n "$key" ]; then
+    mkdir -p "$cache" 2>/dev/null || cache=""
+  else
+    cache=""
+    key=""
+  fi
+  case "$key" in ''|*[!0-9a-f]*) cache=""; key="";; esac
+  if [ -z "$cache" ]; then
+    # Unkeyable tree or unwritable cache: today's behavior, no cache at all.
+    echo "golden fixture cache MISS (uncached)"
+    GOLDEN_CACHE_STATUS="MISS (uncached)"
+    golden_install_fresh || return 1
+    return 0
+  fi
+  entry="$cache/$key"
+  golden_cache_lock "$cache"
+  rc=$?
+  if [ "$rc" -eq 2 ]; then
+    # A live gate holds the lock past the ceiling: stay green and slow with a
+    # fully uncached build rather than failing red on a race.
+    echo "warning: the golden cache lock is held by a live gate — building uncached instead of waiting"
+    echo "golden fixture cache MISS (uncached)"
+    GOLDEN_CACHE_STATUS="MISS (uncached)"
+    golden_install_fresh || return 1
+    return 0
+  elif [ "$rc" -ne 0 ]; then
+    return 1
+  fi
+  if [ -d "$entry" ]; then
+    golden_hit_copy "$entry" "$key" "$top"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      # Recency bump for the ls -t LRU in golden_cache_evict: a HIT must read
+      # as new or an old hot entry ages out under newer cold ones.
+      touch "$entry" 2>/dev/null || true
+      echo "golden fixture cache HIT key=$key"
+      GOLDEN_CACHE_STATUS="HIT key=$key"
+      golden_cache_unlock
+      return 0
+    elif [ "$rc" -eq 1 ]; then
+      GOLDEN_CACHE_STATUS="STALE key=$key (entry cleared)"
+      golden_cache_unlock
+      return 1
+    else
+      golden_cache_unlock
+      return 1
+    fi
+  fi
+  # MISS: the same install as before the cache existed, then an atomic publish.
+  golden_install_fresh || { golden_cache_unlock; return 1; }
+  golden_publish "$cache" "$entry" "$key" "$top"
+  echo "golden fixture cache MISS key=$key"
+  GOLDEN_CACHE_STATUS="MISS key=$key"
+  golden_cache_unlock
+  return 0
 }
 
 # A throwaway repo carrying the golden install: `golden_probe || exit 1`, then
@@ -146,6 +459,9 @@ elif [ "${scope:-full}" = "ledger" ]; then
   echo "  skip  golden fixture (ledger lane — no serial step reads GOLDEN)"
 else
   step "golden fixture" build_golden
+  # Which lane the cache took, beside the step line: the body output above is
+  # swallowed into the step log, and HIT-vs-MISS is what the next reader asks.
+  [ -n "${GOLDEN_CACHE_STATUS:-}" ] && echo "  golden cache ${GOLDEN_CACHE_STATUS}"
   # step runs in this shell, so a good build leaves GOLDEN set on the install
   # and a bad one removed it above; every golden_probe then fails fast instead
   # of copying nothing. Exported for the bash -c children, reaped on exit.
