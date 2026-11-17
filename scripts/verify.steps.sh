@@ -25,12 +25,14 @@ unset HARNESS_PROJECT HARNESS_ROOT HARNESS_SOURCE
 # than an inline assignment on every probe command.
 export HARNESS_HOME="$PWD"
 
-probe_step "codex install context" python3 scripts/test-codex-install.py
-probe_step "project contract and export policy" python3 scripts/test-contract-overrides.py
+probe_step --when "bin/* commands/add.sh commands/lib/* template/scripts/harness template/scripts/h template/stubs/* template/scripts/codex-support.py" "codex install context" python3 scripts/test-codex-install.py
+probe_step --when "bin/* commands/add.sh commands/lib/* template/scripts/harness template/scripts/h template/stubs/*" "project contract and export policy" python3 scripts/test-contract-overrides.py
+# finder and contract split read the whole template/ (session output, every
+# file scanned for fill-in blocks), so no path list is narrow enough: always run.
 probe_step "finder resolution" bash scripts/test-finder.sh
 probe_step "contract split" bash scripts/test-contract-split.sh
-probe_step "reference install" bash scripts/test-reference-add.sh
-probe_step "migrate a copied install" bash scripts/test-migrate.sh
+probe_step --when "bin/* commands/add.sh commands/lib/* template/scripts/harness template/scripts/h template/stubs/* template/harness/* template/harness/evals/* scripts/harness scripts/verify.steps.sh scripts/review.scope.sh dashboard.toml" "reference install" bash scripts/test-reference-add.sh
+probe_step --when "bin/* commands/migrate.sh commands/add.sh commands/lib/* template/scripts/harness template/scripts/h template/stubs/*" "migrate a copied install" bash scripts/test-migrate.sh
 
 # The starter runs by reference: its finder resolves to its own template/
 # first, so editing a template file takes effect in the next `scripts/harness`
@@ -604,7 +606,7 @@ export -f probe_dashboard_verdict
 # A template file that still says {{PROJECT}} after substitution is one the
 # installer missed — and the placeholder only shows up at the far end, in an
 # installed project, long after anyone would connect it to this change.
-probe_step "placeholders substitute" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/*" "placeholders substitute" bash -c '
   # Each step checked on its own. An && chain here reports ok when its own setup
   # failed: probe would be empty, the install would never run, grep would find
   # nothing to complain about, and the gate would pass vacuously — which is the
@@ -625,7 +627,7 @@ probe_step "placeholders substitute" bash -c '
 
 # Retired commands stay retired: update and diverge print their pointer on
 # stderr and exit 2, and the listing names them as retired.
-probe_step "retired commands print their pointer and exit 2" bash -c '
+probe_step --when "bin/* commands/update.sh commands/diverge.sh" "retired commands print their pointer and exit 2" bash -c '
   out=$(bin/harness update 2>&1); rc=$?; [ "$rc" -eq 2 ] ||
     { echo "error: update exited $rc, want 2"; echo "$out"; exit 1; }
   echo "$out" | grep -q "retired" ||
@@ -638,7 +640,7 @@ probe_step "retired commands print their pointer and exit 2" bash -c '
     { echo "error: the listing never names the retired commands"; exit 1; }'
 
 # One copy proves both session separation and the findings append: two sessions write separate live files, brief names the unclosed journal, close and the hook reap only the closer, and a finding lands with its category.
-probe_step "learning loop journal and findings" bash -c '
+probe_step --when "template/scripts/lib/journal.sh template/scripts/hooks/commit-msg template/stubs/scripts/hooks/commit-msg template/scripts/brief.sh commands/lib/*" "learning loop journal and findings" bash -c '
 PROBE_SCENARIO="learning loop journal and findings"
 golden_probe || probe_fail "no golden fixture"
 root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
@@ -671,7 +673,7 @@ PYEOF
 '
 
 # Skip and fail-soft share one copy with a stubbed gate: --no-reflect skips out loud and a dead reflector warns and continues. Verify is stubbed here because the reflector is under test, not the gate, keeping the scenario under time.
-probe_step "reflect skips and fails soft" bash -c '
+probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh" "reflect skips and fails soft" bash -c '
 PROBE_SCENARIO="reflect skips and fails soft"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -693,7 +695,7 @@ out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$t
 echo "$out" | grep -q "continuing without candidates" || probe_fail "reflector failure never warned and continued"
 '
 # Native reflector in one copy: with OPENCODE_SESSION_ID set the real reflect.sh says to run the reflector natively instead of calling out. Wrap-up forwards this line verbatim, so calling reflect.sh directly keeps the scenario under time.
-probe_step "reflect runs native in opencode" bash -c '
+probe_step --when "template/scripts/reflect.sh template/.claude/agents/reflector.md" "reflect runs native in opencode" bash -c '
 PROBE_SCENARIO="reflect runs native in opencode"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -707,7 +709,7 @@ echo "$out" | grep -q "REFLECTOR_NATIVE" || probe_fail "native path never said t
 
 
 # Propose path in one copy with a stubbed gate: fake opencode returns one candidate, wrap-up keeps it, learning log and export carry it. Same stub reason as above.
-probe_step "reflect proposes a lesson and logs it kept" bash -c '
+probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh" "reflect proposes a lesson and logs it kept" bash -c '
 PROBE_SCENARIO="reflect proposes a lesson and logs it kept"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -734,7 +736,7 @@ grep -q "\"outcome\": \"kept\"" "$probe/harness/learning.jsonl" || probe_fail "n
 '
 
 # Due signal in one copy: fresh silent, five old notes due once, reset silent, three lessons and three findings each due once, restore silent.
-probe_step "consolidation due signal" bash -c '
+probe_step --when "template/scripts/brief.sh template/.claude/agents/librarian.md" "consolidation due signal" bash -c '
 PROBE_SCENARIO="consolidation due signal"
 golden_probe || probe_fail "no golden fixture"
 expect_brief() {
@@ -851,7 +853,7 @@ step "wiki derived layer format" bash -c '
   done'
 
 # Wiki lifecycle in one copy: empty builds nothing, 27 keys build and rebuild losslessly, colliding topics keep distinct files, zero cap breaches loudly with no publish, fake harness proves staleness.
-probe_step "wiki lifecycle" bash -c '
+probe_step --when "template/scripts/build-wiki.sh template/scripts/brief.sh template/scripts/context.py template/.claude/agents/librarian.md" "wiki lifecycle" bash -c '
 PROBE_SCENARIO="wiki lifecycle"
 golden_probe || probe_fail "no golden fixture"
 root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
@@ -908,7 +910,7 @@ echo "$out" | grep -q "harness/wiki/probe.md" || probe_fail "STALE line never na
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
 # pattern from the reader.
-probe_step "dashboard serves the default verdict silently with no verdict section" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard serves the default verdict silently with no verdict section" bash -c '
   golden_probe || exit 1
   grep -q "^\\[verdict\\]" "$probe/dashboard.toml" &&
     { echo "error: the fixture already has a verdict section"; exit 1; }
@@ -1031,14 +1033,14 @@ export -f probe_dashboard_broken_config
 
 # What the toml lists is what state.json carries: the theme overrides, the
 # board hide/reorder lists, and the asset paths, read through the real module.
-probe_step "dashboard serves theme, board, and assets from the toml" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard serves theme, board, and assets from the toml" bash -c '
   golden_probe || exit 1
   mod="$(probe_shared_root "$probe")/scripts/dashboard.py" || exit 1
   probe_dashboard_config "$probe" "$mod" || exit 1'
 
 # Only an allowlisted file resolves, with a fixed content-type; an unlisted
 # file and every traversal shape read as missing, which the handler 404s.
-probe_step "dashboard serves allowlisted assets and 404s the rest" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard serves allowlisted assets and 404s the rest" bash -c '
   golden_probe || exit 1
   mod="$(probe_shared_root "$probe")/scripts/dashboard.py" || exit 1
   probe_dashboard_asset_serving "$probe" "$mod" || exit 1'
@@ -1188,28 +1190,28 @@ export -f probe_dashboard_vercel_labels
 
 # An unlinked checkout serves no vercel key: the page renders no chip and the
 # board reads as before this reader existed.
-probe_step "dashboard vercel unlinked serves no vercel key" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard vercel unlinked serves no vercel key" bash -c '
   golden_probe || exit 1
   mod="$(probe_shared_root "$probe")/scripts/dashboard.py" || exit 1
   probe_dashboard_vercel_unlinked "$probe" "$mod" || exit 1'
 
 # A linked checkout missing the token or the upstream ref reads as
 # unconfigured with why, never an exception.
-probe_step "dashboard vercel misconfigured reads unconfigured with why" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard vercel misconfigured reads unconfigured with why" bash -c '
   golden_probe || exit 1
   mod="$(probe_shared_root "$probe")/scripts/dashboard.py" || exit 1
   probe_dashboard_vercel_misconfigured "$probe" "$mod" || exit 1'
 
 # API states map to chip labels; a dead API reads unreachable with the token
 # nowhere in what the reader serves.
-probe_step "dashboard vercel maps api states to chip labels" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard vercel maps api states to chip labels" bash -c '
   golden_probe || exit 1
   mod="$(probe_shared_root "$probe")/scripts/dashboard.py" || exit 1
   probe_dashboard_vercel_labels "$probe" "$mod" || exit 1'
 
 # A broken table keeps serving its last good values and says so on stderr,
 # while a good table beside it keeps updating.
-probe_step "dashboard keeps last good config on a broken table" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard keeps last good config on a broken table" bash -c '
   golden_probe || exit 1
   mod="$(probe_shared_root "$probe")/scripts/dashboard.py" || exit 1
   probe_dashboard_broken_config "$probe" "$mod" || exit 1'
@@ -1218,7 +1220,7 @@ probe_step "dashboard keeps last good config on a broken table" bash -c '
 # the verdict word out of exactly one group, so zero groups serve permanent
 # red and two hand back tuples, which have no .upper. The toml keeps serving
 # the default instead, with the complaint on stderr.
-probe_step "dashboard keeps the default over a misshapen verdict pattern" bash -c '
+probe_step --when "template/scripts/dashboard.py template/scripts/dashboard-persist.sh template/dashboard/* dashboard.toml" "dashboard keeps the default over a misshapen verdict pattern" bash -c '
   golden_probe || exit 1
   printf "[verdict]\npattern = '"'"'(BUILD|TEST) (OK|FAIL)'"'"'\n" >> "$probe/dashboard.toml" ||
     { echo "error: cannot plant the bad pattern"; exit 1; }
@@ -1230,7 +1232,7 @@ probe_step "dashboard keeps the default over a misshapen verdict pattern" bash -
 # project's stacks in harness/stacks.txt and links only those stacks' guidance
 # (the path the reviewers read) — never a copy, and never guidance for someone
 # else's platform.
-probe_step "add records stacks without copying guidance" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/scripts/harness template/scripts/h template/harness/stacks/*" "add records stacks without copying guidance" bash -c '
   fresh_probe || exit 1
   touch "$probe/Package.swift" || { echo "error: cannot mark the probe as swift"; exit 1; }
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
@@ -1250,7 +1252,7 @@ probe_step "add records stacks without copying guidance" bash -c '
 
 # stacks.txt is the project's once written: a re-run of add never re-detects
 # over it — or a wrong guess could never be corrected for good.
-probe_step "an edited stacks.txt survives a re-add" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/scripts/harness template/scripts/h template/harness/stacks/*" "an edited stacks.txt survives a re-add" bash -c '
   fresh_probe || exit 1
   touch "$probe/Package.swift" || { echo "error: cannot mark the probe as swift"; exit 1; }
   bin/harness add "$probe" >/dev/null 2>&1 || { echo "error: harness add failed"; exit 1; }
@@ -1261,7 +1263,7 @@ probe_step "an edited stacks.txt survives a re-add" bash -c '
 
 # A stack name with no guidance behind it warns loudly: reviewers would
 # otherwise miss the platform checks and nothing would say so.
-probe_step "add warns loudly on unknown stack names" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/harness/stacks/*" "add warns loudly on unknown stack names" bash -c '
   fresh_probe || exit 1
   mkdir -p "$probe/harness" || { echo "error: cannot make harness/"; exit 1; }
   # Web: a case-insensitive disk finds web.md for it, yet nothing installs.
@@ -1280,7 +1282,7 @@ probe_step "add warns loudly on unknown stack names" bash -c '
 # refused rather than budgeted. A reference install keeps no models.py of its
 # own, so the shared one runs through the probe's finder — the dispatch a real
 # session uses, reading the probe's own roster.
-probe_step "models.py budget resolves explicit and default budgets" bash -c '
+probe_step --when "template/scripts/models.py template/scripts/harness scripts/harness" "models.py budget resolves explicit and default budgets" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
 {"reviewer-taste": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 12345},
@@ -1307,7 +1309,7 @@ EOF
 # — a truncated packet reporting confidently on its first pages is the failure.
 # The shared review runs through the probe's finder; the dirtied stub stands in
 # for any tracked change, since review reads the whole working tree.
-probe_step "review.sh refuses a packet over the smallest reviewer budget" bash -c '
+probe_step --when "template/scripts/review.sh template/scripts/models.py scripts/review.scope.sh" "review.sh refuses a packet over the smallest reviewer budget" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
 {"reviewer-taste": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 100},
@@ -1326,7 +1328,7 @@ EOF
 
 # A packet within budget still prints its path — the refusal must not fire on
 # ordinary changes.
-probe_step "review.sh passes a packet within budget" bash -c '
+probe_step --when "template/scripts/review.sh template/scripts/models.py scripts/review.scope.sh" "review.sh passes a packet within budget" bash -c '
   golden_probe || exit 1
   cat > "$probe/harness/models.json" <<EOF ||
 {"reviewer-taste": {"model": "opencode-go/muse-spark-1.3-contributor", "variant": "xhigh", "context": 1000000},
@@ -1346,7 +1348,7 @@ EOF
 # is no local roster — ensure writes the pinned one with no terminal, the pin
 # check passes the install as it stands, and a foreign roster planted
 # afterwards fails it.
-probe_step "a fresh install pins opencode to one model" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/stubs/opencode.json template/.opencode/agent/* template/scripts/opencode-agents.py template/scripts/opencode-pin.py template/scripts/models.py template/harness/evals/*" "a fresh install pins opencode to one model" bash -c '
   PROBE_SCENARIO="a fresh install pins opencode to one model"
   golden_probe || probe_fail "no golden fixture"
   pin="opencode-go/muse-spark-1.3-contributor"
@@ -1393,7 +1395,7 @@ EOF
 # of leaving AGENTS.md unloaded: the shadow keeps its own entries and its
 # plugin, and gains whatever root entries it was missing. Add never
 # overwrites, so the planted shadow survives the install to be merged.
-probe_step "add merges root instructions into a shadowing opencode.json" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/stubs/opencode.json" "add merges root instructions into a shadowing opencode.json" bash -c '
   fresh_probe || exit 1
   mkdir -p "$probe/.opencode" || { echo "error: cannot make .opencode"; exit 1; }
   printf "{\"instructions\":[\"CLAUDE.md\",\"LOCAL.md\"],\"plugin\":[\"probe-plugin\"]}\n" \
@@ -1416,7 +1418,7 @@ probe_step "add merges root instructions into a shadowing opencode.json" bash -c
 # A copied install is a conversion, not an install: add refuses before writing
 # anything and points at the migrate, instead of printing "already there" for
 # every stub and leaving the stale contract in place.
-probe_step "add refuses a copied install and points at migrate" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "add refuses a copied install and points at migrate" bash -c '
   fresh_probe || exit 1
   mkdir -p "$probe/scripts" || { echo "error: cannot shape the probe as a copy"; exit 1; }
   cp "$PWD/template/scripts/brief.sh" "$probe/scripts/brief.sh" ||
@@ -1433,7 +1435,7 @@ probe_step "add refuses a copied install and points at migrate" bash -c '
 
 # A target that is already a reference install — scripts/harness, no copies —
 # re-runs idempotently instead of refusing.
-probe_step "add re-runs idempotently over a reference install" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/* template/scripts/harness template/scripts/h" "add re-runs idempotently over a reference install" bash -c '
   golden_probe || exit 1
   out=$(bin/harness add "$probe" 2>&1) || { echo "error: re-add failed"; echo "$out"; exit 1; }
   if echo "$out" | grep -q "copied install"; then
@@ -1443,7 +1445,7 @@ probe_step "add re-runs idempotently over a reference install" bash -c '
 # A pre rename tree carries the old finder at scripts/h with no harness.
 # Migrate writes the finder and leaves the shim in its place, and a second
 # apply changes nothing.
-probe_step "migrate converts a project with scripts/h" bash -c '
+probe_step --when "bin/* commands/migrate.sh commands/lib/* template/scripts/harness template/scripts/h" "migrate converts a project with scripts/h" bash -c '
   fresh_probe || exit 1
   mkdir -p "$probe/scripts" || { echo "error: cannot make scripts"; exit 1; }
   # Genuinely old finder text: the newest historic blob under either finder
@@ -1479,7 +1481,7 @@ probe_step "migrate converts a project with scripts/h" bash -c '
 # only the deeper file — so without its instructions AGENTS.md never loads.
 # The pin check fails it loudly rather than passing a tree that unloads the
 # contract.
-probe_step "a plugin-only opencode shadow fails the pin check" bash -c '
+probe_step --when "template/scripts/opencode-pin.py template/stubs/opencode.json opencode.json .opencode/opencode.json" "a plugin-only opencode shadow fails the pin check" bash -c '
   golden_probe || exit 1
   mkdir -p "$probe/.opencode" || { echo "error: cannot make .opencode"; exit 1; }
   printf "{\"plugin\":[\"probe-plugin\"]}\n" > "$probe/.opencode/opencode.json" ||
@@ -1491,7 +1493,7 @@ probe_step "a plugin-only opencode shadow fails the pin check" bash -c '
 
 # `harness add` owns the git dependency: a fresh directory gets a repository
 # rather than an error, and says so in its own voice.
-probe_step "add initialises a missing git repository" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "add initialises a missing git repository" bash -c '
   probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
   trap "rm -rf \"$probe\"" EXIT
   out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
@@ -1503,7 +1505,7 @@ probe_step "add initialises a missing git repository" bash -c '
 # parent, rather than leaving a repository inside a repository. Asserted on the
 # parent path itself — the target path contains it, so matching the target
 # would pass even a refusal that named nothing.
-probe_step "add refuses a subdirectory of a repository" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "add refuses a subdirectory of a repository" bash -c '
   fresh_probe || exit 1
   mkdir "$probe/sub" || { echo "error: mkdir failed"; exit 1; }
   parent="$(cd "$probe" && pwd -P)" || { echo "error: pwd failed"; exit 1; }
@@ -1515,7 +1517,7 @@ probe_step "add refuses a subdirectory of a repository" bash -c '
 
 # A .git entry git itself rejects — half a `git init`, a stray file — refuses
 # rather than installing a harness onto a repository that doesn't work.
-probe_step "add refuses a broken .git entry" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "add refuses a broken .git entry" bash -c '
   probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
   trap "rm -rf \"$probe\"" EXIT
   mkdir "$probe/.git" || { echo "error: mkdir failed"; exit 1; }
@@ -1528,7 +1530,7 @@ probe_step "add refuses a broken .git entry" bash -c '
 # A bare repository has no working tree to install into: refuse, and leave it
 # alone. `rev-parse --show-toplevel` fails there, so without this the install
 # would sail past the nesting guard and git init a .git inside the bare repo.
-probe_step "add refuses a bare repository" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "add refuses a bare repository" bash -c '
   probe=$(mktemp -d) || { echo "error: mktemp failed"; exit 1; }
   trap "rm -rf \"$probe\"" EXIT
   git init -q --bare "$probe/b.git" || { echo "error: git init --bare failed"; exit 1; }
@@ -1540,7 +1542,7 @@ probe_step "add refuses a bare repository" bash -c '
 
 # A linked worktree is a repository already — .git is a file, not a directory —
 # so it installs rather than refusing with the directory as its own parent.
-probe_step "add accepts a linked worktree" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "add accepts a linked worktree" bash -c '
   fresh_probe || exit 1
   trap '"'"'rm -rf "$probe" "$probe-wt"'"'"' EXIT
   (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init) ||
@@ -1557,7 +1559,7 @@ probe_step "add accepts a linked worktree" bash -c '
 # bead-less content in a wired probe and expects rejection, then proves the
 # hook still accepts a commit naming a real bead, so a hook that rejects
 # everything doesn't pass either.
-probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
+probe_step --when "template/scripts/hooks/commit-msg template/stubs/scripts/hooks/commit-msg commands/lib/*" "the commit-msg hook rejects a bead-less commit" bash -c '
   golden_probe || exit 1
   # Normalize the install-staged fixture (ledger export, model roster) into a
   # seed commit: the artifact-only commit below must stage only the handoff,
@@ -1614,7 +1616,7 @@ probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
 # Overlay files are the project's to edit, so doctor reports an edited one as
 # an overlay, never a shadow — a warning nobody can clear is the one that stops
 # being read, and then the real drift hides behind it.
-probe_step "doctor names edited seeds as overlays, not shadows" bash -c '
+probe_step --when "template/scripts/harness scripts/harness scripts/verify.steps.sh scripts/review.scope.sh" "doctor names edited seeds as overlays, not shadows" bash -c '
   golden_probe || exit 1
   echo "# local steps" >> "$probe/scripts/verify.steps.sh" ||
     { echo "error: cannot edit the steps file"; exit 1; }
@@ -1634,7 +1636,7 @@ probe_step "doctor names edited seeds as overlays, not shadows" bash -c '
 # keep reading the old inline scope, and the packet would carry files the
 # project excluded — silently unreviewable in the other direction. The shared
 # review runs through the probe's finder, reading the probe's own scope.
-probe_step "review honors the scope overlay" bash -c '
+probe_step --when "template/scripts/review.sh scripts/review.scope.sh" "review honors the scope overlay" bash -c '
   golden_probe || exit 1
   # --no-verify: the probe commit is scaffolding in a throwaway repo, and add
   # wired the bead-naming hook here. Its message names nothing real.
@@ -1657,7 +1659,7 @@ probe_step "review honors the scope overlay" bash -c '
 # A gate with no project steps must not pass: "ok" from a suite that ran
 # nothing is the silent success this project exists to avoid, in the check
 # meant to catch it. The shared gate runs through the probe's finder.
-probe_step "a missing steps overlay fails the gate loudly" bash -c '
+probe_step --when "template/scripts/verify.sh scripts/verify.steps.sh" "a missing steps overlay fails the gate loudly" bash -c '
   golden_probe || exit 1
   rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the steps file"; exit 1; }
   out=$(HARNESS_HOME="$PWD" "$probe/scripts/harness" verify --quick 2>&1) &&
@@ -1680,7 +1682,7 @@ export -f probe_export_check
 # configured remote starts an empty database without reading the committed
 # export. So add imports it on fresh init — issues and memories both, and only
 # then. Seeded here with one of each; recall proves the memories arrived.
-probe_step "a fresh install hydrates the committed ledger export" bash -c '
+probe_step --when "bin/* commands/add.sh commands/lib/*" "a fresh install hydrates the committed ledger export" bash -c '
   fresh_probe || exit 1
   mkdir -p "$probe/.beads" || { echo "error: cannot seed the export"; exit 1; }
   printf "%s\n" "{\"_type\":\"issue\",\"id\":\"probe-1\",\"title\":\"seeded\",\"status\":\"open\"}" \
@@ -1709,7 +1711,7 @@ probe_step "a fresh install hydrates the committed ledger export" bash -c '
 # delete drift healed itself. Every harness prefix lookup now reads `bd list`
 # instead, and the probe below trips if a future bd starts healing under those
 # commands too.
-probe_step "a stale ledger export fails the gate naming the bead" bash -c '
+probe_step --when "template/scripts/ledger-export-check.sh template/scripts/hooks/pre-commit template/stubs/scripts/hooks/pre-commit commands/lib/*" "a stale ledger export fails the gate naming the bead" bash -c '
   golden_probe || exit 1
   bid=$(cd "$probe" && bd q "probe bead for a stale export" 2>/dev/null) ||
     { echo "error: cannot file a probe bead"; exit 1; }
@@ -1751,7 +1753,7 @@ probe_step "a stale ledger export fails the gate naming the bead" bash -c '
 # and the worktree file must match it. Runs through the live hooks path
 # (.beads/hooks, where the install appends the refresh after bd's own block),
 # not just the .git/hooks delegation the commit-msg probe covers.
-probe_step "a commit refreshes the ledger export without a manual regen" bash -c '
+probe_step --when "template/scripts/ledger-export-check.sh template/scripts/hooks/pre-commit template/stubs/scripts/hooks/pre-commit commands/lib/*" "a commit refreshes the ledger export without a manual regen" bash -c '
   golden_probe || exit 1
   (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "seed install fixture" >/dev/null 2>&1) ||
     { echo "error: cannot seed-commit the install fixture"; exit 1; }
@@ -1793,7 +1795,7 @@ probe_step "a commit refreshes the ledger export without a manual regen" bash -c
 # clears it. Opens by pinning the har-67c trap — bare `bd delete` only
 # previews and exits 0, so the bead must still resolve there — then deletes
 # with --force and polls until it stops resolving before asserting anything.
-probe_step "a deleted bead still exported fails the gate naming the bead" bash -c '
+probe_step --when "template/scripts/ledger-export-check.sh template/scripts/hooks/pre-commit template/stubs/scripts/hooks/pre-commit commands/lib/*" "a deleted bead still exported fails the gate naming the bead" bash -c '
   golden_probe || exit 1
   bid=$(cd "$probe" && bd q "probe bead for a deleted export" 2>/dev/null) ||
     { echo "error: cannot file a probe bead"; exit 1; }
@@ -1829,7 +1831,7 @@ probe_step "a deleted bead still exported fails the gate naming the bead" bash -
 # The har-l5a path: an export with matching content but no git tracking reaches
 # no fresh clone, so the gate fails saying untracked with the fix — and a
 # `git add` clears it.
-probe_step "an untracked ledger export fails the gate saying to track it" bash -c '
+probe_step --when "template/scripts/ledger-export-check.sh template/scripts/hooks/pre-commit template/stubs/scripts/hooks/pre-commit commands/lib/*" "an untracked ledger export fails the gate saying to track it" bash -c '
   golden_probe || exit 1
   (cd "$probe" && bd q "probe bead for an untracked export" >/dev/null 2>&1) ||
     { echo "error: cannot file a probe bead"; exit 1; }
@@ -1857,7 +1859,7 @@ probe_step "an untracked ledger export fails the gate saying to track it" bash -
 
 # An empty install has no export and nothing to carry: the probe passes rather
 # than failing a project that did nothing wrong.
-probe_step "an empty install passes the ledger export check" bash -c '
+probe_step --when "template/scripts/ledger-export-check.sh template/scripts/hooks/pre-commit template/stubs/scripts/hooks/pre-commit commands/lib/*" "an empty install passes the ledger export check" bash -c '
   golden_probe || exit 1
   out=$(probe_export_check "$probe" 2>&1)
   if echo "$out" | grep -q "FAIL  ledger export"; then
@@ -1869,7 +1871,7 @@ probe_step "an empty install passes the ledger export check" bash -c '
 # A fresh clone carries the committed export without the gitignored Dolt
 # working set behind it. The probe skips that shape out loud instead of failing
 # on an export command that cannot work before hydration.
-probe_step "a clone with no live ledger skips the export check" bash -c '
+probe_step --when "template/scripts/ledger-export-check.sh template/scripts/hooks/pre-commit template/stubs/scripts/hooks/pre-commit commands/lib/*" "a clone with no live ledger skips the export check" bash -c '
   golden_probe || exit 1
   (cd "$probe" && bd q "probe bead" >/dev/null 2>&1) ||
     { echo "error: cannot file a probe bead"; exit 1; }
@@ -1884,7 +1886,7 @@ probe_step "a clone with no live ledger skips the export check" bash -c '
     { echo "error: the skip never said itself"; echo "$out"; exit 1; }'
 
 # Static lane through the real gate lane: unrelated silence, clean pass, duplicate fail, nested and untracked duplicates, and deletion credit.
-probe_step "knowledge static lane" bash -c '
+probe_step --when "template/scripts/lib/knowledge_layer.py template/scripts/context.py AGENTS.md CLAUDE.md AGENTS.local.md template/AGENTS.md template/CLAUDE.md template/AGENTS.local.md template/.claude/skills/* template/.claude/agents/*" "knowledge static lane" bash -c '
 PROBE_SCENARIO="knowledge static lane"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -1935,7 +1937,7 @@ echo "$out" | grep -q "tokens (-" || probe_fail "cost line never showed the dele
 '
 
 # Eval runner in one copy: two runs prove lines, worktree, append, pin; then one spaced name, missing dir fails, empty suite skips.
-probe_step "eval runner" bash -c '
+probe_step --when "template/scripts/eval.sh template/harness/evals/*" "eval runner" bash -c '
 PROBE_SCENARIO="eval runner"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -2001,7 +2003,7 @@ if echo "$out" | grep -q "^FAIL eval "; then probe_fail "empty skip failed a cas
 '
 
 # Behavioural lane through the real gate lane: one case keeps each run cheap while the trigger and verdict prove memory-only skip, break naming the case, benign pass, body-prose skip and deleted skill fail.
-probe_step "knowledge behavioural lane" bash -c '
+probe_step --when "template/scripts/eval.sh template/harness/evals/* template/scripts/lib/knowledge_layer.py template/.claude/skills/* AGENTS.md CLAUDE.md AGENTS.local.md template/AGENTS.md template/CLAUDE.md template/AGENTS.local.md" "knowledge behavioural lane" bash -c '
 PROBE_SCENARIO="knowledge behavioural lane"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"

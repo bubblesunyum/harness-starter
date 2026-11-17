@@ -72,7 +72,11 @@ how the pieces fit together.
   when the ledger looks stale — resurrecting deleted beads — and anything
   earlier would heal the drift under test and report a match on resurrected
   state. The close runs ledger writes, export, verify, commit, push: the push
-  goes last, best-effort, never blocking the commit.
+  goes last, best-effort, never blocking the commit. Probes carry `--when`
+  globs over the changed paths: a probe runs when a path matches, when a gate
+  file moves (`verify.sh`, `verify.steps.sh`, `lib/paths.sh`), or
+  when the scope cannot narrow; otherwise it skips loudly as unaffected, and
+  the run ends with ran-vs-skipped counts.
 - **Dashboard:** `scripts/harness dashboard` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in

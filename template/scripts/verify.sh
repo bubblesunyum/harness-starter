@@ -39,6 +39,11 @@
 # probes loudly rather than silently. Run it while iterating, the full gate
 # before committing: a quick green is a signal, not proof.
 #
+# Impact-scoped probes. probe_step --when "<glob> ..." runs only when a
+# changed path matches one of its globs (or a gate file moved, which runs
+# everything); otherwise it skips loudly as unaffected. Undeclared probes
+# always run, and --lane runs ignore --when entirely.
+#
 # One lane for probes: --lane runs scope detection plus only the named lane(s)
 # (knowledge-static, knowledge-behavioural, comma-separated for both) with the
 # same lines and exit status as the full gate — no probes, no other serial
@@ -132,6 +137,7 @@ note_failed() {
 }
 started=$SECONDS
 probes_run=0
+probes_skipped_unaffected=0
 probe_pids=()
 probe_bases=()
 probe_names=()
@@ -273,6 +279,11 @@ step() {
 # reads the live ledger, which that diff does move. Composable: a
 # ledger-scoped --quick run skips on the first check above.
 probe_step() {
+  local when=""
+  if [ "${1:-}" = "--when" ]; then
+    when="${2:-}"
+    shift 2
+  fi
   if [ "$mode" = "--quick" ]; then
     echo "  skip  $1 (--quick lane)"
     return 0
@@ -282,6 +293,40 @@ probe_step() {
     return 0
   fi
   local name="$1"; shift
+  if [ -n "$when" ] && [ "$mode" != "--full" ] && [ -z "${lane_list:-}" ]; then
+    case "$scope_reason" in
+      *not\ a\ git\ checkout*|*git\ status\ failed*|*clean\ tree*|*explicit\ --full*)
+        : # scope cannot be narrowed — run everything
+        ;;
+      *)
+        local _ps_path _ps_glob _ps_matched=0 _ps_file="$LOGS/changed-paths.nul"
+        if [ -f "$_ps_file" ]; then
+          set -f
+          while IFS= read -r -d '' _ps_path; do
+            [ -n "$_ps_path" ] || continue
+            case "$_ps_path" in
+              template/scripts/verify.sh|scripts/verify.steps.sh|template/scripts/verify.steps.sh|template/scripts/lib/paths.sh)
+                _ps_matched=1; break;;
+            esac
+            for _ps_glob in $when; do
+              # shellcheck disable=SC2254: the glob must stay unquoted to match
+              case "$_ps_path" in
+                $_ps_glob) _ps_matched=1; break 2;;
+              esac
+            done
+          done < "$_ps_file"
+          set +f
+          if [ "$_ps_matched" -eq 0 ]; then
+            echo "  skip  $name (unaffected — none of its paths changed)"
+            probes_skipped_unaffected=$((probes_skipped_unaffected + 1))
+            return 0
+          fi
+        else
+          : # no changed list — run
+        fi
+        ;;
+    esac
+  fi
   wait_for_probe_slot
   local base
   base="$(slug "$name")"
@@ -321,6 +366,32 @@ pick_scope() {
     printf 'full|clean tree, so there is nothing to narrow from — running everything\n'
     return 0
   fi
+  # The changed path list for --when probes, NUL-separated like the knowledge
+  # lane's scratch file (newlines and quotes in names must not split or hide
+  # a path). Both sides of a rename, quotes stripped — git's, not the name's.
+  rm -f "$LOGS/changed-paths.nul"
+  local _rp_line _rp_p _rp_old _rp_new _rp_side
+  while IFS= read -r _rp_line; do
+    [ -n "$_rp_line" ] || continue
+    _rp_p="${_rp_line#???}"
+    case "$_rp_p" in
+      *" -> "*)
+        _rp_old="${_rp_p%% -> *}"; _rp_new="${_rp_p##* -> }"
+        for _rp_side in "$_rp_old" "$_rp_new"; do
+          case "$_rp_side" in
+            \"*\") _rp_side="${_rp_side#\"}"; _rp_side="${_rp_side%\"}";;
+          esac
+          printf '%s\0' "$_rp_side" >> "$LOGS/changed-paths.nul"
+        done
+        continue;;
+    esac
+    case "$_rp_p" in
+      \"*\") _rp_p="${_rp_p#\"}"; _rp_p="${_rp_p%\"}";;
+    esac
+    printf '%s\0' "$_rp_p" >> "$LOGS/changed-paths.nul"
+  done <<EOF
+$st
+EOF
   local line p old new side ledger_only=1
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -854,6 +925,7 @@ drain_probes
 if [ "$probes_run" -gt 0 ]; then
   echo "verify: $probes_run probe(s) in parallel (at most $PROBE_MAX at once)"
 fi
+echo "verify: $probes_run probe(s) ran, $probes_skipped_unaffected skipped as unaffected"
 
 # The golden probe fixture pays one install per run and every probe copies it
 # instead of installing — but probe bodies reset the EXIT trap, so the fixture
