@@ -5,6 +5,7 @@
 #   scripts/harness verify           # the changed paths pick the lane (see below)
 #   scripts/harness verify --full    # everything, whatever changed
 #   scripts/harness verify --quick   # fast lane only: no throwaway-repo probes
+#   scripts/harness verify --lane <name,...>   # only one gate lane (see below)
 #
 # Diff-scoped lanes. The default run looks at what moved: only ledger paths
 # (.beads/, harness/handoffs/, harness/laurels.jsonl) mean a bead close or a
@@ -19,7 +20,10 @@
 # the same goes for a clean tree, which has nothing to narrow from.
 #
 # Parallel probes. probe_step runs its body in the background instead of
-# inline — at most PROBE_MAX at once (the CPU count, clamped 2..8) — and
+# inline — at most PROBE_MAX at once (the CPU count, clamped 2..8), with
+# slot reuse: when the flight is full the next probe polls the in-flight
+# pids with kill -0 and starts as soon as any slot frees (reaping each
+# finished pid with wait) instead of waiting on the oldest — and
 # every step drains whatever is still flying before it runs, so the
 # one-line-per-step output keeps source order: quick checks print while
 # probes run, each probe's line lands at the next serial step, and the
@@ -35,6 +39,12 @@
 # probes loudly rather than silently. Run it while iterating, the full gate
 # before committing: a quick green is a signal, not proof.
 #
+# One lane for probes: --lane runs scope detection plus only the named lane(s)
+# (knowledge-static, knowledge-behavioural, comma-separated for both) with the
+# same lines and exit status as the full gate — no probes, no other serial
+# steps, no golden fixture. Probes asserting lane behavior call this instead of
+# pasting the lane's python or nesting a full gate.
+#
 # Output is deliberately tiny. A build tool prints tens of thousands of lines
 # and an agent that pipes that into its context has spent a chunk of the day's
 # tokens to learn one bit — did it pass. Full logs land in /tmp/<prefix>-verify/
@@ -47,6 +57,17 @@
 # which swallows the log and reports one line — that is the whole point of
 # the gate.
 set -uo pipefail
+mode="--default"
+lane_list=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quick|--full|--default) mode="$1"; shift;;
+    --lane)
+      [ -n "${2:-}" ] || { echo "verify: --lane needs a lane list (knowledge-static,knowledge-behavioural)" >&2; exit 2; }
+      lane_list="$2"; shift 2;;
+    *) shift;;
+  esac
+done
 
 ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Where this script was loaded from: the shared checkout, whose scripts/ holds
@@ -82,13 +103,19 @@ _harness_prefix() {
 }
 LOGS=/tmp/$(_harness_prefix)-verify
 mkdir -p "$LOGS"
+if [ -n "$lane_list" ]; then
+  # Lane runs happen inside probe copies that share the gate log dir: point
+  # them at scratch so lane logs never clobber the outer run's files. Removed
+  # explicitly at the end of the lane-only path below: probe bodies reset
+  # EXIT traps, so a trap here would not reliably run there.
+  LOGS="$(mktemp -d 2>/dev/null)" || { echo "verify: cannot create a scratch log dir for --lane" >&2; exit 1; }
+fi
 # Per-step seconds for the last run, in run order (`sort -rn` for
 # slowest-first): har-ckm showed the gate's total cost with no breakdown, so
 # the next slowdown gets measured rather than guessed at. Truncated here so
 # the file describes one run.
 rm -f "$LOGS/timings"
 
-mode="${1:---default}"
 failed=0
 # Every failure names its step for the summary before the verdict: report()
 # records serial steps here, drain_probes records failed probes.
@@ -193,6 +220,29 @@ drain_probes() {
   fi
 }
 
+# Bound the flight without wait -n (bash 3.2 has none): poll the in-flight
+# pids with kill -0 and reap each finished pid with wait, so the next
+# probe starts as soon as any slot frees (slot reuse) instead of waiting
+# on the oldest. probe_pids is an unordered in-flight set;
+# probe_bases/probe_names stay in enqueue order for drain_probes.
+wait_for_probe_slot() {
+  local slot_pid live_pids
+  while [ "${#probe_pids[@]}" -ge "$PROBE_MAX" ]; do
+    live_pids=()
+    for slot_pid in ${probe_pids[@]+"${probe_pids[@]}"}; do
+      if kill -0 "$slot_pid" 2>/dev/null; then
+        live_pids+=("$slot_pid")
+      else
+        wait "$slot_pid" 2>/dev/null || true
+      fi
+    done
+    probe_pids=(${live_pids[@]+"${live_pids[@]}"})
+    if [ "${#probe_pids[@]}" -ge "$PROBE_MAX" ]; then
+      sleep 0.2
+    fi
+  done
+}
+
 step() {
   # A serial step is a barrier: whatever is still flying prints first, so the
   # output keeps source order even though probes finish out of order. Skipped
@@ -216,7 +266,7 @@ step() {
 # A step too slow for the --quick lane: throwaway-repo probes and heavy
 # suites. Skipped there, loudly: a green suite that silently ran nothing is
 # the failure the steps file warns about, so skips print as skips. Otherwise
-# the body runs in the background (bounded above) and its line prints at the
+# the body runs in the background (bounded above with slot reuse) and its line prints at the
 # next drain, in enqueue order — same contract, just not inline. The ledger
 # lane skips the same way: a beads-only diff moves nothing a throwaway-repo
 # probe can observe, while every serial step still runs — the local-ok check
@@ -232,12 +282,7 @@ probe_step() {
     return 0
   fi
   local name="$1"; shift
-  # Bound the flight without wait -n (bash 3.2 has none): each new probe
-  # waits out the oldest, so at most PROBE_MAX run at once.
-  if [ "${#probe_pids[@]}" -ge "$PROBE_MAX" ]; then
-    wait "${probe_pids[0]}" 2>/dev/null || true
-    probe_pids=("${probe_pids[@]:1}")
-  fi
+  wait_for_probe_slot
   local base
   base="$(slug "$name")"
   ( trap - EXIT; PROBE_CHILD=1; step "$name" "$@" >"$LOGS/$base.report" 2>&1 ) &
@@ -307,163 +352,6 @@ EOF
     printf 'full|changes outside the ledger paths — running everything\n'
   fi
 }
-
-echo "verify: $ROOT"
-scope_line="$(pick_scope)"
-scope="${scope_line%%|*}"
-scope_reason="${scope_line#*|}"
-echo "verify: scope=$scope ($scope_reason)"
-# This runs before every other bd call in the gate — the context check's brief
-# included. `bd config`, `bd info`, `bd stats` and friends auto-import a stale
-# .beads/issues.jsonl when the ledger looks stale to them, resurrecting deleted
-# beads (har-67c); anything that ran first would heal the drift this check
-# exists to catch. The only bd call before this point is the prefix lookup up
-# top, which reads `bd list` — a command that never imports.
-#
-# Ledger lane, one contract: when the scope above came back ledger, the probe
-# steps below skip loudly (same contract as the --quick lane) while every
-# serial step still runs — a beads-only diff moves the live ledger the
-# local-ok check reads, but nothing any probe observes.
-if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
-  echo "$export_out"
-else
-  # The check's own output already carries its FAIL line naming the step; only
-  # record the name for the summary below.
-  note_failed "ledger export"
-  echo "$export_out"
-fi
-
-# Ledger hygiene every install enforces, not just the starter: parked in a
-# project's steps file these run only there, while leaf installs carry a
-# skeleton that never mentions them. Read-only `bd list` only — the same
-# command the prefix lookup above trusts never to import — never export,
-# config or info, which auto-import a stale export and would heal the drift
-# the export check exists to catch. No live ledger skips out loud. Serial
-# steps, so the ledger lane still judges the live ledger a beads-only diff
-# moved while every probe skips.
-# A bead queued for a local model carries its own spec — --design and
-# --acceptance filled in, plus a `local-ok` label — because a small model
-# executes well only when the bead says what done looks like. Closed beads
-# are history, not queue, so only open work is judged.
-step "local-ok beads carry design and acceptance" bash -c '
-  python3 - <<PYEOF || exit 1
-import json
-import os
-import subprocess
-import sys
-try:
-    out = subprocess.run(
-        ["bd", "list", "--json", "--all", "--limit", "0"],
-        capture_output=True, text=True)
-except FileNotFoundError:
-    print("no bd here, skipping")
-    sys.exit(0)
-if out.returncode != 0:
-    if not os.path.isdir(".beads/embeddeddolt"):
-        print("no live ledger, skipping")
-        sys.exit(0)
-    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
-    print("error: cannot list the beads: " + err)
-    sys.exit(1)
-try:
-    issues = json.loads(out.stdout or "[]")
-except ValueError:
-    print("error: cannot read the bead list")
-    sys.exit(1)
-bad = []
-for issue in issues:
-    if "local-ok" not in (issue.get("labels") or []):
-        continue
-    if (issue.get("status") or "open") == "closed":
-        continue
-    missing = []
-    if not (issue.get("design") or "").strip():
-        missing.append("design")
-    acceptance = issue.get("acceptance_criteria", issue.get("acceptance"))
-    if not (acceptance or "").strip():
-        missing.append("acceptance")
-    if missing:
-        bad.append("%s lacks %s" % (issue.get("id", "?"), " and ".join(missing)))
-if bad:
-    print("error: local-ok beads without their own spec, no local model can execute these:")
-    for line in bad:
-        print("  - " + line)
-    print("fill --design and --acceptance, or drop the local-ok label")
-    sys.exit(1)
-PYEOF'
-
-# Closed and backlog are mutually exclusive: a closed bead is finished work,
-# not shelved work, so it never renders in the backlog strip and never counts
-# as ready. bd itself keeps the label on close, and no hook may strip it
-# (hooks are not harness-owned), so the gate fails the bead instead. Own
-# labels only: an open child of a shelved parent stays shelved by inheritance
-# without carrying the label itself.
-step "no closed bead carries backlog" bash -c '
-  python3 - <<PYEOF || exit 1
-import json
-import os
-import subprocess
-import sys
-try:
-    out = subprocess.run(
-        ["bd", "list", "--json", "--all", "--limit", "0"],
-        capture_output=True, text=True)
-except FileNotFoundError:
-    print("no bd here, skipping")
-    sys.exit(0)
-if out.returncode != 0:
-    if not os.path.isdir(".beads/embeddeddolt"):
-        print("no live ledger, skipping")
-        sys.exit(0)
-    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
-    print("error: cannot list the beads: " + err)
-    sys.exit(1)
-try:
-    issues = json.loads(out.stdout or "[]")
-except ValueError:
-    print("error: cannot read the bead list")
-    sys.exit(1)
-bad = sorted(
-    (issue.get("id", "?") for issue in issues
-     if (issue.get("status") or "open") == "closed"
-     and "backlog" in (issue.get("labels") or [])))
-if bad:
-    print("error: closed beads still carry the backlog label — closed and backlog are mutually exclusive:")
-    for line in bad:
-        print("  - " + line)
-    print("clear it on close (bd label remove <id> backlog), or drop the label by hand")
-    sys.exit(1)
-PYEOF'
-
-step "codex support" python3 "$(harness_script codex-support.py)" check
-# Self-tests: hermetic by construction — each builds its own throwaway root —
-# so the dispatch environment is unset for them. Inheriting HARNESS_PROJECT
-# would point the copied scripts at this checkout instead of their fixture.
-# Resolved harness-first, never project-first: a project file named
-# test-agent.py must not stand in for the gate's own probe. Real steps stay
-# project-first.
-step "codex regression" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-codex-support.py)"
-# Flies with the probes in a full run; skipped in the --quick and ledger lanes
-# with them, per the lane contract above.
-probe_step "agent runner" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-agent.py)"
-step "model probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-models-probe.py)"
-step "opencode permissions" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-permissions.py)"
-step "opencode pin probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-pin.py)"
-
-# The knowledge layer gets the same treatment as the code. A doc that quietly
-# stopped being true is worse than a missing one, and it can't be caught by
-# reviewing a diff — the stale file isn't in the diff, the thing it describes is.
-# Runs early because it takes a second and needs no build.
-if context_out="$(python3 "$(harness_script context.py)" check 2>&1)"; then
-  echo "$context_out"
-else
-  context_st=$?
-  # Routed through capture_report so the failure emits a FAIL line naming the
-  # step; the STALE detail stays in the echoed output above. context.py itself
-  # is harness-owned elsewhere, so the bless remedy lives here, beside the failure.
-  capture_report "context docs" "$context_out" "$context_st"
-  echo "        remedy: scripts/harness context bless re-records hashes after updating the doc"
-fi
 
 # Split in two helpers — cost and duplicates — sharing one detection and one
 # lane library, so the halves cannot drift apart.
@@ -636,10 +524,6 @@ $duplicate_out"
   # call below ignores it; the behavioural lane inside probe_step needs it.
   return "$st"
 }
-# Bare, like the context-docs check above: step would swallow the verdict
-# lines the probes below grep for, and every probe is already drained by the
-# model-probes step further up.
-knowledge_static
 
 # The knowledge layers behavioural half: the eval cases in harness/evals/,
 # only when always-loaded text changes — the files in KNOWLEDGE_FILES in
@@ -732,6 +616,196 @@ PYEOF
   # through.
   return "$st"
 }
+
+# One lane for probes: scope detection already ran above; this runs only the
+# named lane(s) with the same lines and exit status as the full gate, without
+# probes, serial steps, or the golden fixture (the project steps file that
+# builds it is never sourced on this path). Names are comma-separated.
+verify_lanes_only() {
+  local lanes="$1" item st=0
+  for item in $(printf '%s' "$lanes" | tr ',' ' '); do
+    case "$item" in
+      knowledge-static) knowledge_static || st=1;;
+      knowledge-behavioural) knowledge_behavioural || st=1;;
+      *) echo "verify: unknown lane '$item' (want knowledge-static,knowledge-behavioural)" >&2; return 2;;
+    esac
+  done
+  return "$st"
+}
+
+echo "verify: $ROOT"
+scope_line="$(pick_scope)"
+scope="${scope_line%%|*}"
+scope_reason="${scope_line#*|}"
+echo "verify: scope=$scope ($scope_reason)"
+# --lane: probe-cheap entry to a single gate lane. Scope detection already ran
+# above; this runs only the named lane(s) and exits with the lane status, so
+# probes asserting lane behavior call the real code instead of pasting the
+# lane's python or nesting a full gate.
+if [ -n "$lane_list" ]; then
+  verify_lanes_only "$lane_list"
+  lane_st=$?
+  [ "$lane_st" -eq 0 ] && echo "verify: passed" || echo "verify: FAILED"
+  rm -rf "$LOGS"
+  exit "$lane_st"
+fi
+# This runs before every other bd call in the gate — the context check's brief
+# included. `bd config`, `bd info`, `bd stats` and friends auto-import a stale
+# .beads/issues.jsonl when the ledger looks stale to them, resurrecting deleted
+# beads (har-67c); anything that ran first would heal the drift this check
+# exists to catch. The only bd call before this point is the prefix lookup up
+# top, which reads `bd list` — a command that never imports.
+#
+# Ledger lane, one contract: when the scope above came back ledger, the probe
+# steps below skip loudly (same contract as the --quick lane) while every
+# serial step still runs — a beads-only diff moves the live ledger the
+# local-ok check reads, but nothing any probe observes.
+if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
+  echo "$export_out"
+else
+  # The check's own output already carries its FAIL line naming the step; only
+  # record the name for the summary below.
+  note_failed "ledger export"
+  echo "$export_out"
+fi
+
+# Ledger hygiene every install enforces, not just the starter: parked in a
+# project's steps file these run only there, while leaf installs carry a
+# skeleton that never mentions them. Read-only `bd list` only — the same
+# command the prefix lookup above trusts never to import — never export,
+# config or info, which auto-import a stale export and would heal the drift
+# the export check exists to catch. No live ledger skips out loud. Serial
+# steps, so the ledger lane still judges the live ledger a beads-only diff
+# moved while every probe skips.
+# A bead queued for a local model carries its own spec — --design and
+# --acceptance filled in, plus a `local-ok` label — because a small model
+# executes well only when the bead says what done looks like. Closed beads
+# are history, not queue, so only open work is judged.
+step "local-ok beads carry design and acceptance" bash -c '
+  python3 - <<PYEOF || exit 1
+import json
+import os
+import subprocess
+import sys
+try:
+    out = subprocess.run(
+        ["bd", "list", "--json", "--all", "--limit", "0"],
+        capture_output=True, text=True)
+except FileNotFoundError:
+    print("no bd here, skipping")
+    sys.exit(0)
+if out.returncode != 0:
+    if not os.path.isdir(".beads/embeddeddolt"):
+        print("no live ledger, skipping")
+        sys.exit(0)
+    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
+    print("error: cannot list the beads: " + err)
+    sys.exit(1)
+try:
+    issues = json.loads(out.stdout or "[]")
+except ValueError:
+    print("error: cannot read the bead list")
+    sys.exit(1)
+bad = []
+for issue in issues:
+    if "local-ok" not in (issue.get("labels") or []):
+        continue
+    if (issue.get("status") or "open") == "closed":
+        continue
+    missing = []
+    if not (issue.get("design") or "").strip():
+        missing.append("design")
+    acceptance = issue.get("acceptance_criteria", issue.get("acceptance"))
+    if not (acceptance or "").strip():
+        missing.append("acceptance")
+    if missing:
+        bad.append("%s lacks %s" % (issue.get("id", "?"), " and ".join(missing)))
+if bad:
+    print("error: local-ok beads without their own spec, no local model can execute these:")
+    for line in bad:
+        print("  - " + line)
+    print("fill --design and --acceptance, or drop the local-ok label")
+    sys.exit(1)
+PYEOF'
+
+# Closed and backlog are mutually exclusive: a closed bead is finished work,
+# not shelved work, so it never renders in the backlog strip and never counts
+# as ready. bd itself keeps the label on close, and no hook may strip it
+# (hooks are not harness-owned), so the gate fails the bead instead. Own
+# labels only: an open child of a shelved parent stays shelved by inheritance
+# without carrying the label itself.
+step "no closed bead carries backlog" bash -c '
+  python3 - <<PYEOF || exit 1
+import json
+import os
+import subprocess
+import sys
+try:
+    out = subprocess.run(
+        ["bd", "list", "--json", "--all", "--limit", "0"],
+        capture_output=True, text=True)
+except FileNotFoundError:
+    print("no bd here, skipping")
+    sys.exit(0)
+if out.returncode != 0:
+    if not os.path.isdir(".beads/embeddeddolt"):
+        print("no live ledger, skipping")
+        sys.exit(0)
+    err = (out.stderr.strip().splitlines() or ["unknown"])[0]
+    print("error: cannot list the beads: " + err)
+    sys.exit(1)
+try:
+    issues = json.loads(out.stdout or "[]")
+except ValueError:
+    print("error: cannot read the bead list")
+    sys.exit(1)
+bad = sorted(
+    (issue.get("id", "?") for issue in issues
+     if (issue.get("status") or "open") == "closed"
+     and "backlog" in (issue.get("labels") or [])))
+if bad:
+    print("error: closed beads still carry the backlog label — closed and backlog are mutually exclusive:")
+    for line in bad:
+        print("  - " + line)
+    print("clear it on close (bd label remove <id> backlog), or drop the label by hand")
+    sys.exit(1)
+PYEOF'
+
+step "codex support" python3 "$(harness_script codex-support.py)" check
+# Self-tests: hermetic by construction — each builds its own throwaway root —
+# so the dispatch environment is unset for them. Inheriting HARNESS_PROJECT
+# would point the copied scripts at this checkout instead of their fixture.
+# Resolved harness-first, never project-first: a project file named
+# test-agent.py must not stand in for the gate's own probe. Real steps stay
+# project-first.
+step "codex regression" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-codex-support.py)"
+# Flies with the probes in a full run; skipped in the --quick and ledger lanes
+# with them, per the lane contract above.
+probe_step "agent runner" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-agent.py)"
+step "model probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-models-probe.py)"
+step "opencode permissions" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-permissions.py)"
+step "opencode pin probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-pin.py)"
+
+# The knowledge layer gets the same treatment as the code. A doc that quietly
+# stopped being true is worse than a missing one, and it can't be caught by
+# reviewing a diff — the stale file isn't in the diff, the thing it describes is.
+# Runs early because it takes a second and needs no build.
+if context_out="$(python3 "$(harness_script context.py)" check 2>&1)"; then
+  echo "$context_out"
+else
+  context_st=$?
+  # Routed through capture_report so the failure emits a FAIL line naming the
+  # step; the STALE detail stays in the echoed output above. context.py itself
+  # is harness-owned elsewhere, so the bless remedy lives here, beside the failure.
+  capture_report "context docs" "$context_out" "$context_st"
+  echo "        remedy: scripts/harness context bless re-records hashes after updating the doc"
+fi
+
+# Bare, like the context-docs check above: step would swallow the verdict
+# lines the probes below grep for, and every probe is already drained by the
+# model-probes step further up.
+knowledge_static
+
 probe_step "knowledge behavioural" knowledge_behavioural
 # generated from it — and the generated half drifts silently, because nothing
 # about editing the source makes opencode complain. Checked rather than
@@ -806,7 +880,19 @@ fi
 
 # How long the gate takes is worth watching: it's the tax on every change, and
 # when it grows past the patience of whoever's waiting, it stops getting run.
-echo $((SECONDS - started)) > "$LOGS/elapsed"
+print_slowest_steps() {
+  local wall_secs="$1" slowest_summary
+  echo "$wall_secs" > "$LOGS/elapsed"
+  echo "verify: ${wall_secs}s wall"
+  if [ -f "$LOGS/timings" ]; then
+    slowest_summary="$(sort -rn "$LOGS/timings" | head -5 | awk '{s=$1; $1=""; sub(/^ +/, ""); printf "%s (%ss); ", $0, s}' | sed 's/; $//')"
+    if [ -n "$slowest_summary" ]; then
+      echo "verify: slowest steps: $slowest_summary"
+    fi
+  fi
+}
+
+print_slowest_steps "$((SECONDS - started))"
 
 # Names, not just a count: a red gate should say which steps to re-run.
 if [ "$failed" -ne 0 ] && [ "${#failed_names[@]}" -gt 0 ]; then

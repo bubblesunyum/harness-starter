@@ -448,6 +448,13 @@ golden_probe() {
 }
 export -f golden_probe
 
+# One failure path for every scenario below: the name up front says which
+# scenario broke, the message says which sub-case, and the captured output
+# follows only when there is any — no pasted command text. Exported like
+# golden_probe because each step runs in its own bash -c child.
+probe_fail() { echo "error: ${PROBE_SCENARIO:-probe}: $1"; [ -n "${out:-}" ] && printf '%s\n' "$out"; exit 1; }
+export -f probe_fail
+
 # Ledger-lane runs need no fixture: every serial step reads the tree or the
 # live ledger, and every golden_probe sits inside a probe_step that already
 # skips in this lane — so building the golden install here would pay a full
@@ -630,153 +637,143 @@ probe_step "retired commands print their pointer and exit 2" bash -c '
   bin/harness 2>&1 | grep -q "retired" ||
     { echo "error: the listing never names the retired commands"; exit 1; }'
 
-# The session journal, through a reference install: two session ids write
-# separate live files, the live pattern is gitignored after link, the brief
-# names the unclosed journal, close removes only the closer's own file, and
-# the real commit hook closes the same way. Event writes go through the
-# shared lib directly — a full verify-in-a-probe would nest gates — while
-# ignore, brief, close and the hook run the paths a real session uses.
-probe_step "session journal" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  jl="$root/scripts/lib/journal.sh"
-  HARNESS_HOME="$PWD" "$probe/scripts/harness" link >/dev/null 2>&1 ||
-    { echo "error: link failed in the probe"; exit 1; }
-  (cd "$probe" && git check-ignore -q harness/handoffs/.live-probe-a.md) ||
-    { echo "error: live journal files are not gitignored after link"; exit 1; }
-  HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "FAILED probe-build" ||
-    { echo "error: session-a journal write failed"; exit 1; }
-  HARNESS_SESSION_ID=probe-b HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "passed" ||
-    { echo "error: session-b journal write failed"; exit 1; }
-  [ -f "$probe/harness/handoffs/.live-probe-a.md" ] ||
-    { echo "error: session-a live file missing"; exit 1; }
-  [ -f "$probe/harness/handoffs/.live-probe-b.md" ] ||
-    { echo "error: session-b live file missing — sessions share one file"; exit 1; }
-  grep -q "FAILED probe-build" "$probe/harness/handoffs/.live-probe-a.md" ||
-    { echo "error: the failing run never landed in the live file"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" HARNESS_SESSION_ID=probe-c "$probe/scripts/harness" brief 2>&1) ||
-    { echo "error: brief failed in the probe"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "probe-a" ||
-    { echo "error: brief never named the unclosed journal"; echo "$out"; exit 1; }
-  HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" close ||
-    { echo "error: session-a close failed"; exit 1; }
-  [ ! -e "$probe/harness/handoffs/.live-probe-a.md" ] ||
-    { echo "error: session-a live file survives its own close"; exit 1; }
-  [ -f "$probe/harness/handoffs/.live-probe-b.md" ] ||
-    { echo "error: session-a close removed the session-b live file"; exit 1; }
-  HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "passed" ||
-    { echo "error: session-a journal rewrite failed"; exit 1; }
-  printf "# probe note\n" > "$probe/harness/handoffs/note-probe.md" ||
-    { echo "error: cannot plant the probe handoff note"; exit 1; }
-  (cd "$probe" && git reset -q .beads/issues.jsonl 2>/dev/null || true; git add harness/handoffs/note-probe.md &&
-    printf "probe close\n" > .tmp-probe-msg &&
-    HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/hooks/commit-msg" .tmp-probe-msg; rc=$?; rm -f .tmp-probe-msg; [ $rc -eq 0 ]) ||
-    { echo "error: the close hook through the real hook failed"; exit 1; }
-  [ ! -e "$probe/harness/handoffs/.live-probe-a.md" ] ||
-    { echo "error: session-a live file survives its hook close"; exit 1; }
-  [ -f "$probe/harness/handoffs/.live-probe-b.md" ] ||
-    { echo "error: session-a hook close removed the session-b live file"; exit 1; }'
-
-# A review finding the session accepted, appended to harness/learning.jsonl
-# with its category — through the shared lib, read back as JSON.
-probe_step "findings log" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  jl="$root/scripts/lib/journal.sh"
-  HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" finding --category probe-slug --reviewer reviewer-taste --bead probe-1 --outcome accepted --note "probe finding" ||
-    { echo "error: finding append failed"; exit 1; }
-  python3 - "$probe/harness/learning.jsonl" <<PYEOF ||
+# One copy proves both session separation and the findings append: two sessions write separate live files, brief names the unclosed journal, close and the hook reap only the closer, and a finding lands with its category.
+probe_step "learning loop journal and findings" bash -c '
+PROBE_SCENARIO="learning loop journal and findings"
+golden_probe || probe_fail "no golden fixture"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+jl="$root/scripts/lib/journal.sh"
+HARNESS_HOME="$PWD" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot link the probe install"
+(cd "$probe" && git check-ignore -q harness/handoffs/.live-probe-a.md) || probe_fail "live journal files are not gitignored after link"
+HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "FAILED probe-build" || probe_fail "session-a journal write failed"
+HARNESS_SESSION_ID=probe-b HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "passed" || probe_fail "session-b journal write failed"
+[ -f "$probe/harness/handoffs/.live-probe-a.md" ] || probe_fail "session-a live file missing"
+[ -f "$probe/harness/handoffs/.live-probe-b.md" ] || probe_fail "sessions share one live file"
+grep -q "FAILED probe-build" "$probe/harness/handoffs/.live-probe-a.md" || probe_fail "failing run never landed in the live file"
+out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" HARNESS_SESSION_ID=probe-c "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed in the probe"
+echo "$out" | grep -q "probe-a" || probe_fail "brief never named the unclosed journal"
+HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" close || probe_fail "session-a close failed"
+[ ! -e "$probe/harness/handoffs/.live-probe-a.md" ] || probe_fail "session-a live file survives its own close"
+[ -f "$probe/harness/handoffs/.live-probe-b.md" ] || probe_fail "session-a close removed the session-b live file"
+printf "# probe note\n" > "$probe/harness/handoffs/note-probe.md" || probe_fail "cannot plant the probe handoff note"
+# The hook half needs its own unclosed journal: the direct close above already reaped session-a, so write again, then the hook close must reap only the closer.
+HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "passed" || probe_fail "session-a journal rewrite failed"
+[ -f "$probe/harness/handoffs/.live-probe-a.md" ] || probe_fail "rewritten live file missing before the hook close"
+(cd "$probe" && git reset -q .beads/issues.jsonl 2>/dev/null || true; git add harness/handoffs/note-probe.md && printf "probe close\n" > .tmp-probe-msg && HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/hooks/commit-msg" .tmp-probe-msg; rc=$?; rm -f .tmp-probe-msg; [ $rc -eq 0 ]) || probe_fail "hook close failed"
+[ ! -e "$probe/harness/handoffs/.live-probe-a.md" ] || probe_fail "session-a live file survives its hook close"
+[ -f "$probe/harness/handoffs/.live-probe-b.md" ] || probe_fail "hook close removed the session-b live file"
+HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" finding --category probe-slug --reviewer reviewer-taste --bead probe-1 --outcome accepted --note "probe finding" || probe_fail "finding append failed"
+python3 - "$probe/harness/learning.jsonl" <<PYEOF || probe_fail "finding never landed with its category"
 import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
 assert rows and rows[-1].get("category") == "probe-slug", rows
 PYEOF
-    { echo "error: finding never landed with its category"; exit 1; }'
+'
 
-# The close reflects by default: one packet over the session, one pinned-model
-# reflector run, and every candidate logged with its outcome. The reflector is
-# a fake opencode here — same argv shape agent.py builds, canned JSON-line
-# reply — because the gate never reaches the network.
-probe_step "reflect proposes a lesson at close and logs it kept" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 ||
-    { echo "error: link failed in the probe"; exit 1; }
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git -c user.email=t@t -c user.name=t add -A &&
-    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  bid=$(cd "$probe" && bd create "probe reflect work" --design d --acceptance a --silent 2>/dev/null) ||
-    { echo "error: cannot file a probe bead"; exit 1; }
-  await_bead_ready "$probe" "$bid" || exit 1
-  HARNESS_SESSION_ID=probe-reflect HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/lib/journal.sh" event verify "passed" ||
-    { echo "error: probe journal write failed"; exit 1; }
-  echo "probe work" > "$probe/probe-work.txt" ||
-    { echo "error: cannot dirty the probe"; exit 1; }
-  printf "%s\n" "# probe note draft" "" "stood where the probe stood" > "$probe/harness/handoffs/20260101-000000.md" ||
-    { echo "error: cannot plant the note draft"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":os.environ[\"FAKE_CANDIDATE\"]},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" OPENCODE_CONFIG_CONTENT="{\"agent\":{}}" HARNESS_SESSION_ID=probe-reflect FAKE_CANDIDATE="{\"tier\":\"memory\",\"target\":\"probe-trap\",\"text\":\"probe lesson text here\",\"evidence\":\"$bid\"}" "$probe/scripts/harness" wrap-up --quick -m "probe reflect $bid" --bead "$bid" --note-file harness/handoffs/20260101-000000.md --keep-lesson 1 2>&1) ||
-    { echo "error: wrap-up failed"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "reflector proposed 1 candidate" ||
-    { echo "error: wrap-up never reported the candidate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "lesson 1 .* kept" ||
-    { echo "error: wrap-up never marked lesson 1 kept"; echo "$out"; exit 1; }
-  grep -q "\"kind\": \"lesson\"" "$probe/harness/learning.jsonl" ||
-    { echo "error: no lesson row in learning.jsonl"; exit 1; }
-  grep -q "\"outcome\": \"kept\"" "$probe/harness/learning.jsonl" ||
-    { echo "error: no kept outcome in learning.jsonl"; exit 1; }
-  (cd "$probe" && git show HEAD:.beads/issues.jsonl 2>/dev/null | grep -q "probe lesson text here") ||
-    { echo "error: kept memory never reached the committed export"; exit 1; }'
+# Skip and fail-soft share one copy with a stubbed gate: --no-reflect skips out loud and a dead reflector warns and continues. Verify is stubbed here because the reflector is under test, not the gate, keeping the scenario under time.
+probe_step "reflect skips and fails soft" bash -c '
+PROBE_SCENARIO="reflect skips and fails soft"
+golden_probe || probe_fail "no golden fixture"
+top="$PWD"
+HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot link the probe install"
+printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" || probe_fail "cannot plant trivial steps"
+printf "%s\n" "#!/bin/bash" "exit 0" > "$probe/scripts/verify.sh" || probe_fail "cannot plant the gate stub"
+chmod +x "$probe/scripts/verify.sh" || probe_fail "cannot chmod the gate stub"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) || probe_fail "probe init commit failed"
+bid=$(cd "$probe" && bd create "probe reflect skips" --design d --acceptance a --silent 2>/dev/null) || probe_fail "cannot file a probe bead"
+await_bead_ready "$probe" "$bid" || probe_fail "probe bead never resolved"
+echo "probe work" > "$probe/probe-work.txt" || probe_fail "cannot dirty the probe"
+out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-flag "$probe/scripts/harness" wrap-up --quick --no-push --no-reflect -m "probe no-reflect close $bid" --bead "$bid" 2>&1) || probe_fail "wrap-up failed with --no-reflect"
+echo "$out" | grep -q "reflect skipped (--no-reflect)" || probe_fail "--no-reflect never said it skipped"
+if echo "$out" | grep -q "reflector proposed"; then probe_fail "--no-reflect still ran the reflector"; fi
+echo "more probe work" >> "$probe/probe-work.txt" || probe_fail "cannot dirty the probe again"
+printf "%s\n" "#!/usr/bin/env python3" "import sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    sys.stderr.write(\"fake opencode: no model here\")" "    sys.exit(1)" > "$probe/opencode" || probe_fail "cannot plant failing fake opencode"
+chmod +x "$probe/opencode" || probe_fail "cannot chmod the fake"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_SESSION_ID=probe-fail "$probe/scripts/harness" wrap-up --quick --no-push -m "probe failed-reflect close $bid" --bead "$bid" 2>&1) || probe_fail "wrap-up failed when the reflector failed"
+echo "$out" | grep -q "continuing without candidates" || probe_fail "reflector failure never warned and continued"
+'
+# Native reflector in one copy: with OPENCODE_SESSION_ID set the real reflect.sh says to run the reflector natively instead of calling out. Wrap-up forwards this line verbatim, so calling reflect.sh directly keeps the scenario under time.
+probe_step "reflect runs native in opencode" bash -c '
+PROBE_SCENARIO="reflect runs native in opencode"
+golden_probe || probe_fail "no golden fixture"
+top="$PWD"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot link the probe install"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) || probe_fail "probe init commit failed"
+echo "native probe work" > "$probe/probe-work.txt" || probe_fail "cannot dirty the probe"
+out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" OPENCODE_SESSION_ID=probe-native bash "$root/scripts/reflect.sh" 2>&1) || probe_fail "reflector failed on the native path"
+echo "$out" | grep -q "REFLECTOR_NATIVE" || probe_fail "native path never said to run the reflector natively"
+'
 
-# The soft paths: --no-reflect skips, an empty close skips itself out loud, a
-# dead reflector warns and never blocks the close, and inside opencode the
-# session is told to run the reflector natively.
-probe_step "reflect skips and fails soft at close" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 ||
-    { echo "error: link failed in the probe"; exit 1; }
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git -c user.email=t@t -c user.name=t add -A &&
-    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  bid=$(cd "$probe" && bd create "probe reflect skips" --design d --acceptance a --silent 2>/dev/null) ||
-    { echo "error: cannot file a probe bead"; exit 1; }
-  await_bead_ready "$probe" "$bid" || exit 1
-  out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-empty "$probe/scripts/harness" wrap-up --quick -m "probe empty close $bid" --bead "$bid" 2>&1) ||
-    { echo "error: wrap-up failed on an empty close"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "reflect skipped — clean tree and empty journal" ||
-    { echo "error: empty close never said it skipped reflect"; echo "$out"; exit 1; }
-  echo "probe work" > "$probe/probe-work.txt" ||
-    { echo "error: cannot dirty the probe"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-flag "$probe/scripts/harness" wrap-up --quick --no-reflect -m "probe no-reflect close $bid" --bead "$bid" 2>&1) ||
-    { echo "error: wrap-up failed with --no-reflect"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "reflect skipped (--no-reflect)" ||
-    { echo "error: --no-reflect never said it skipped"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "reflector proposed"; then
-    echo "error: --no-reflect still ran the reflector"; echo "$out"; exit 1;
-  fi
-  echo "more probe work" >> "$probe/probe-work.txt" ||
-    { echo "error: cannot dirty the probe again"; exit 1; }
-  printf "%s\n" "#!/usr/bin/env python3" "import sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    sys.stderr.write(\"fake opencode: no model here\")" "    sys.exit(1)" > "$probe/opencode" ||
-    { echo "error: cannot plant failing fake opencode"; exit 1; }
-  chmod +x "$probe/opencode" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_SESSION_ID=probe-fail "$probe/scripts/harness" wrap-up --quick -m "probe failed-reflect close $bid" --bead "$bid" 2>&1) ||
-    { echo "error: wrap-up failed when the reflector failed"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "continuing without candidates" ||
-    { echo "error: reflector failure never warned and continued"; echo "$out"; exit 1; }
-  echo "even more probe work" >> "$probe/probe-work.txt" ||
-    { echo "error: cannot dirty the probe a third time"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-native OPENCODE_SESSION_ID=probe-native "$probe/scripts/harness" wrap-up --quick -m "probe native close $bid" --bead "$bid" 2>&1) ||
-    { echo "error: wrap-up failed on the native path"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "REFLECTOR_NATIVE" ||
-    { echo "error: native path never said to run the reflector natively"; echo "$out"; exit 1; }'
+
+# Propose path in one copy with a stubbed gate: fake opencode returns one candidate, wrap-up keeps it, learning log and export carry it. Same stub reason as above.
+probe_step "reflect proposes a lesson and logs it kept" bash -c '
+PROBE_SCENARIO="reflect proposes a lesson and logs it kept"
+golden_probe || probe_fail "no golden fixture"
+top="$PWD"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot link the probe install"
+printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" || probe_fail "cannot plant trivial steps"
+printf "%s\n" "#!/bin/bash" "exit 0" > "$probe/scripts/verify.sh" || probe_fail "cannot plant the gate stub"
+chmod +x "$probe/scripts/verify.sh" || probe_fail "cannot chmod the gate stub"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) || probe_fail "probe init commit failed"
+bid=$(cd "$probe" && bd create "probe reflect work" --design d --acceptance a --silent 2>/dev/null) || probe_fail "cannot file a probe bead"
+await_bead_ready "$probe" "$bid" || probe_fail "probe bead never resolved"
+HARNESS_SESSION_ID=probe-reflect HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/lib/journal.sh" event verify "passed" || probe_fail "probe journal write failed"
+echo "probe work" > "$probe/probe-work.txt" || probe_fail "cannot dirty the probe"
+printf "%s\n" "# probe note draft" "" "stood where the probe stood" > "$probe/harness/handoffs/20260101-000000.md" || probe_fail "cannot plant the note draft"
+fake="$probe/opencode"
+printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":os.environ[\"FAKE_CANDIDATE\"]},\"sessionID\":\"ses_probe\"}))" > "$fake" || probe_fail "cannot plant fake opencode"
+chmod +x "$fake" || probe_fail "cannot chmod the fake"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" OPENCODE_CONFIG_CONTENT="{\"agent\":{}}" HARNESS_SESSION_ID=probe-reflect FAKE_CANDIDATE="{\"tier\":\"memory\",\"target\":\"probe-trap\",\"text\":\"probe lesson text here\",\"evidence\":\"$bid\"}" "$probe/scripts/harness" wrap-up --quick --no-push -m "probe reflect $bid" --bead "$bid" --note-file harness/handoffs/20260101-000000.md --keep-lesson 1 2>&1) || probe_fail "wrap-up failed"
+echo "$out" | grep -q "reflector proposed 1 candidate" || probe_fail "wrap-up never reported the candidate"
+echo "$out" | grep -q "lesson 1 .* kept" || probe_fail "wrap-up never marked lesson 1 kept"
+grep -q "\"kind\": \"lesson\"" "$probe/harness/learning.jsonl" || probe_fail "no lesson row in learning.jsonl"
+grep -q "\"outcome\": \"kept\"" "$probe/harness/learning.jsonl" || probe_fail "no kept outcome in learning.jsonl"
+(cd "$probe" && git show HEAD:.beads/issues.jsonl 2>/dev/null | grep -q "probe lesson text here") || probe_fail "kept memory never reached the committed export"
+'
+
+# Due signal in one copy: fresh silent, five old notes due once, reset silent, three lessons and three findings each due once, restore silent.
+probe_step "consolidation due signal" bash -c '
+PROBE_SCENARIO="consolidation due signal"
+golden_probe || probe_fail "no golden fixture"
+expect_brief() {
+out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed"
+}
+expect_due_once() {
+expect_brief || probe_fail "brief failed"
+n="$(echo "$out" | grep -c "consolidation due" || true)"
+[ "$n" = "1" ] || probe_fail "reported due $n times, want exactly 1"
+[ -z "${1:-}" ] || echo "$out" | grep -q "$1" || probe_fail "due line never matched $1"
+}
+expect_silent() {
+expect_brief || probe_fail "brief failed"
+if echo "$out" | grep -q "consolidation due"; then probe_fail "still reports due"; fi
+}
+[ ! -e "$probe/harness/.last-consolidation" ] || probe_fail "fresh install carries a consolidation marker"
+expect_silent
+date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" || probe_fail "cannot plant the marker"
+touch -t 202001010000 "$probe/harness/.last-consolidation" || probe_fail "cannot age the marker"
+for i in 1 2 3 4 5; do printf "%s\n" "# probe note $i" > "$probe/harness/handoffs/note-probe-$i.md" || probe_fail "cannot plant handoff note $i"; done
+expect_due_once "5 handoffs"
+date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" || probe_fail "cannot reset the marker"
+expect_silent
+rm -f "$probe"/harness/handoffs/note-probe-*.md || probe_fail "cannot clear the probe notes"
+cp "$probe/harness/learning.jsonl" "$probe/learning-backup.jsonl" || probe_fail "cannot back up the learning log"
+printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" || probe_fail "cannot backdate the marker"
+stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" || probe_fail "cannot stamp probe rows"
+printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-x\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-x\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"dropped\", \"target\": \"probe-target\", \"text\": \"probe lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-x\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant probe lessons"
+expect_due_once "lessons on probe-target"
+cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" || probe_fail "cannot restore the learning log"
+expect_silent
+printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" || probe_fail "cannot backdate the marker"
+stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" || probe_fail "cannot stamp probe rows"
+printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-findings\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-taste\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-findings\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"rejected\", \"reviewer\": \"reviewer-correctness\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-findings\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-design\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant probe findings"
+expect_due_once "findings in probe-findings"
+cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" || probe_fail "cannot restore the learning log"
+expect_silent
+'
+
 
 # The consolidation prompt: the librarian gains promote/correct/prune beside
 # delete/merge/move/shorten, scopes every pass to the marker, proposes only,
@@ -819,107 +816,6 @@ step "librarian consolidation prompt" bash -c '
       { echo "error: opencode translation lost $w"; exit 1; }
   done'
 
-# The due signal, through a reference install: a fresh install with no marker
-# stays silent, >=5 handoff notes plus a 24h-old marker reports exactly one
-# line, a reset marker clears it, each pressure signal (lessons, findings,
-# traps over budget) reports exactly one line on its own, and pressure scopes
-# to the marker: legacy rows with no marker report due, a UTC reset clears
-# them, and fresh rows after the reset report due again. Silent otherwise.
-probe_step "consolidation due signal" bash -c '
-  expect_brief() {
-    out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
-      { echo "error: brief failed ($1)"; echo "$out"; exit 1; }
-  }
-  expect_due_once() {
-    expect_brief "$1" || exit 1
-    n="$(echo "$out" | grep -c "consolidation due" || true)"
-    [ "$n" = "1" ] ||
-      { echo "error: $1 reported due $n times, want exactly 1"; echo "$out"; exit 1; }
-    [ -z "${2:-}" ] || echo "$out" | grep -q "$2" ||
-      { echo "error: $1 line never matched $2"; echo "$out"; exit 1; }
-  }
-  expect_silent() {
-    expect_brief "$1" || exit 1
-    if echo "$out" | grep -q "consolidation due"; then
-      echo "error: $1 still reports due"; echo "$out"; exit 1;
-    fi
-  }
-  golden_probe || exit 1
-  [ ! -e "$probe/harness/.last-consolidation" ] ||
-    { echo "error: fresh install carries a consolidation marker"; exit 1; }
-  expect_silent "fresh install"
-  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot plant the marker"; exit 1; }
-  touch -t 202001010000 "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot age the marker"; exit 1; }
-  for i in 1 2 3 4 5; do
-    printf "%s\n" "# probe note $i" > "$probe/harness/handoffs/note-probe-$i.md" ||
-      { echo "error: cannot plant handoff note $i"; exit 1; }
-  done
-  expect_due_once "cadence" "5 handoffs"
-  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot reset the marker"; exit 1; }
-  expect_silent "reset marker"
-  rm -f "$probe"/harness/handoffs/note-probe-*.md ||
-    { echo "error: cannot clear the probe notes"; exit 1; }
-  printf "%s\n" "# probe note 1" > "$probe/harness/handoffs/note-probe-1.md" ||
-    { echo "error: cannot plant one probe note"; exit 1; }
-  touch -t 202001010000 "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot re-age the marker"; exit 1; }
-  expect_silent "one old note"
-  rm -f "$probe"/harness/handoffs/note-probe-*.md ||
-    { echo "error: cannot clear the probe notes again"; exit 1; }
-  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot freshen the marker"; exit 1; }
-  for i in 1 2 3 4 5; do
-    printf "%s\n" "# probe note $i" > "$probe/harness/handoffs/note-probe-$i.md" ||
-      { echo "error: cannot replant handoff note $i"; exit 1; }
-  done
-  expect_silent "five fresh notes"
-  rm -f "$probe"/harness/handoffs/note-probe-*.md ||
-    { echo "error: cannot clear the notes before the pressure cases"; exit 1; }
-  cp "$probe/harness/learning.jsonl" "$probe/learning-backup.jsonl" ||
-    { echo "error: cannot back up the learning log"; exit 1; }
-  printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot backdate the marker content"; exit 1; }
-  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" ||
-    { echo "error: cannot stamp probe rows"; exit 1; }
-  printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-x\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-x\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"dropped\", \"target\": \"probe-target\", \"text\": \"probe lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-x\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot plant probe lessons"; exit 1; }
-  expect_due_once "lesson pressure" "lessons on probe-target"
-  cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot restore the learning log"; exit 1; }
-  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" ||
-    { echo "error: cannot stamp probe rows"; exit 1; }
-  printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-slug\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-taste\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-slug\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"rejected\", \"reviewer\": \"reviewer-correctness\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-slug\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-design\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot plant probe findings"; exit 1; }
-  expect_due_once "finding pressure" "findings in probe-slug"
-  cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot restore the learning log again"; exit 1; }
-  expect_silent "restored log"
-  rm -f "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot drop the marker for the legacy case"; exit 1; }
-  printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-legacy\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"legacy lesson one\", \"tier\": \"memory\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-legacy\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"legacy lesson two\", \"tier\": \"memory\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-legacy\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"legacy lesson three\", \"tier\": \"memory\"}" >> "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot plant legacy lessons"; exit 1; }
-  expect_due_once "legacy rows with no marker" "lessons on probe-legacy"
-  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
-    { echo "error: cannot write the UTC reset"; exit 1; }
-  expect_silent "UTC reset over legacy rows"
-  sleep 2 ||
-    { echo "error: cannot wait out the marker second"; exit 1; }
-  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" ||
-    { echo "error: cannot stamp fresh rows"; exit 1; }
-  printf "%s\n" "{\"bead\": \"probe-4\", \"category\": \"probe-legacy\", \"evidence\": \"probe-4\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"fresh lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-5\", \"category\": \"probe-legacy\", \"evidence\": \"probe-5\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"fresh lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-6\", \"category\": \"probe-legacy\", \"evidence\": \"probe-6\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"fresh lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot plant fresh lessons"; exit 1; }
-  expect_due_once "fresh rows after reset" "lessons on probe-legacy"
-  cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" ||
-    { echo "error: cannot restore the learning log a third time"; exit 1; }
-  for i in 1 2 3 4 5 6 7 8 9; do
-    (cd "$probe" && bd remember "probe trap $i" --key "probe-trap-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember probe memory $i"; exit 1; }
-  done
-  expect_due_once "trap pressure" "known traps over budget"'
-
 # The wiki's static shape: the generator carries its caps and its link check,
 # the brief carries the threshold and the topic display, the librarian carries
 # the proposal duties, context.py counts and watches the layer, and HARNESS.md
@@ -954,418 +850,60 @@ step "wiki derived layer format" bash -c '
       { echo "error: opencode translation lost $w"; exit 1; }
   done'
 
-# Below the wiki threshold the brief reads as it always did: the flat key
-# list, no topic names, and no directory. A build with no memories says so
-# and writes nothing.
-probe_step "below threshold the brief shows keys and builds nothing" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) || exit 1
-  echo "$out" | grep -q "nothing to build" ||
-    { echo "error: an empty build never said so"; echo "$out"; exit 1; }
-  [ ! -e "$probe/harness/wiki" ] ||
-    { echo "error: an empty build created harness/wiki"; exit 1; }
-  (cd "$probe" && bd remember "probe below-threshold one" --key "probe-below-one" >/dev/null 2>&1) ||
-    { echo "error: cannot remember probe memory one"; exit 1; }
-  (cd "$probe" && bd remember "probe below-threshold two" --key "probe-below-two" >/dev/null 2>&1) ||
-    { echo "error: cannot remember probe memory two"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
-    { echo "error: brief failed in the probe"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "known traps (2)" ||
-    { echo "error: brief lost the flat key list below threshold"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "wiki topics"; then
-    echo "error: brief named topics below threshold"; echo "$out"; exit 1;
-  fi
-  [ ! -e "$probe/harness/wiki" ] ||
-    { echo "error: harness/wiki exists below threshold"; exit 1; }'
+# Wiki lifecycle in one copy: empty builds nothing, 27 keys build and rebuild losslessly, colliding topics keep distinct files, zero cap breaches loudly with no publish, fake harness proves staleness.
+probe_step "wiki lifecycle" bash -c '
+PROBE_SCENARIO="wiki lifecycle"
+golden_probe || probe_fail "no golden fixture"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) || probe_fail "empty build failed"
+echo "$out" | grep -q "nothing to build" || probe_fail "empty build never said so"
+[ ! -e "$probe/harness/wiki" ] || probe_fail "empty build created harness/wiki"
+(cd "$probe" && bd remember "probe below-threshold one" --key "probe-below-one" >/dev/null 2>&1) || probe_fail "cannot remember probe memory one"
+(cd "$probe" && bd remember "probe below-threshold two" --key "probe-below-two" >/dev/null 2>&1) || probe_fail "cannot remember probe memory two"
+out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed"
+echo "$out" | grep -q "known traps (2)" || probe_fail "brief lost the flat key list below threshold"
+if echo "$out" | grep -q "wiki topics"; then probe_fail "brief named topics below threshold"; fi
+[ ! -e "$probe/harness/wiki" ] || probe_fail "harness/wiki exists below threshold"
+for i in 1 2 3 4 5 6 7; do (cd "$probe" && bd remember "probe wiki memory alpha $i" --key "alpha-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe memory alpha $i"; done
+for i in 1 2 3 4 5 6; do (cd "$probe" && bd remember "probe wiki memory beta $i" --key "beta-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe memory beta $i"; (cd "$probe" && bd remember "probe wiki memory gamma $i" --key "gamma-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe memory gamma $i"; done
+for i in 1 2 3 4; do (cd "$probe" && bd remember "probe wiki filler memory $i" --key "filler-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe filler $i"; done
+(cd "$probe" && bd remember "probe wiki memory Alpha" --key "Alpha-1" >/dev/null 2>&1) || probe_fail "cannot remember Alpha-1"
+(cd "$probe" && bd remember "probe wiki memory Beta" --key "Beta-1" >/dev/null 2>&1) || probe_fail "cannot remember Beta-1"
+out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) || probe_fail "build failed above threshold"
+echo "$out" | grep -q "7 topics, 27 keys" || probe_fail "build never reported its topics and keys"
+[ -f "$probe/harness/wiki/index.md" ] || probe_fail "build wrote no index"
+[ -f "$probe/harness/wiki/Alpha.md" ] || probe_fail "no page for colliding topic Alpha"
+[ -f "$probe/harness/wiki/alpha-2.md" ] || probe_fail "no suffixed page for colliding topic alpha"
+[ -f "$probe/harness/wiki/Beta.md" ] || probe_fail "no page for colliding topic Beta"
+[ -f "$probe/harness/wiki/beta-2.md" ] || probe_fail "no suffixed page for colliding topic beta"
+for k in alpha-1 beta-6 filler-4 gamma-1 alpha-7 Alpha-1 alpha-2 Beta-1 beta-2; do grep -rqF "$k" "$probe/harness/wiki/" || probe_fail "key $k reachable from no page"; done
+out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed above threshold"
+echo "$out" | grep -q "wiki topics (7 topics, 27 keys)" || probe_fail "brief never switched to topics"
+if echo "$out" | grep -q "known traps ("; then probe_fail "brief still printed the flat key list"; fi
+cp -R "$probe/harness/wiki" "$probe/wiki-backup" || probe_fail "cannot back up the probe wiki"
+rm -rf "$probe/harness/wiki" || probe_fail "cannot delete the probe wiki"
+out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) || probe_fail "rebuild failed"
+diff -r "$probe/wiki-backup" "$probe/harness/wiki" || probe_fail "delete plus rebuild lost data"
+rm -rf "$probe/wiki-backup" || probe_fail "cannot clean the wiki backup"
+out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_INDEX_MAX_PCT=0 bash "$root/scripts/build-wiki.sh" 2>&1) && probe_fail "breached rebuild passed" || true
+echo "$out" | grep -q "cap breach" || probe_fail "breach never said cap"
+[ ! -e "$probe/harness/wiki" ] || probe_fail "breached rebuild left the stale wiki"
+fake="$probe/fakeharness"
+mkdir -p "$fake/.claude" "$fake/scripts" "$probe/harness/wiki" "$probe/fakehome" || probe_fail "cannot shape the fake harness"
+printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe harness\n" > "$fake/.claude/HARNESS.md" || probe_fail "cannot plant the fake HARNESS.md"
+printf "#!/bin/bash\necho probe generator\n" > "$fake/scripts/build-wiki.sh" || probe_fail "cannot plant the fake generator"
+printf "<!-- tracks: scripts/build-wiki.sh -->\n<!-- wiki: topics=1 keys=1 -->\n# probe index\n" > "$probe/harness/wiki/index.md" || probe_fail "cannot plant the fake index"
+printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe topic\n" > "$probe/harness/wiki/probe.md" || probe_fail "cannot plant the fake page"
+out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" bless 2>&1) || probe_fail "bless failed over the fake harness"
+grep -q "harness/wiki/index.md" "$probe/.claude/context.lock" || probe_fail "bless never recorded the wiki index"
+out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) || probe_fail "blessed check failed"
+echo "$out" | grep -q "^  ok " || probe_fail "blessed check never said ok"
+printf "# probe generator, moved\n" >> "$fake/scripts/build-wiki.sh" || probe_fail "cannot move the fake generator"
+out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) && probe_fail "check passed a moved generator" || true
+echo "$out" | grep -q "STALE" || probe_fail "moved generator failed without a STALE line"
+echo "$out" | grep -q "harness/wiki/probe.md" || probe_fail "STALE line never named the wiki page"
+'
 
-# Above the threshold the brief names topics instead of keys: the build groups
-# the probe memories, every key is reachable from its page, the budget counts
-# the index, and the digest carries the layer. Deleting the directory and
-# rebuilding diffs empty — the wiki holds nothing the ledger does not.
-probe_step "above threshold topics replace the key list and rebuild losslessly" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  for i in 1 2 3 4 5 6 7; do
-    (cd "$probe" && bd remember "probe wiki memory alpha $i" --key "alpha-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember probe memory alpha $i"; exit 1; }
-  done
-  for i in 1 2 3 4 5 6; do
-    (cd "$probe" && bd remember "probe wiki memory beta $i" --key "beta-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember probe memory beta $i"; exit 1; }
-    (cd "$probe" && bd remember "probe wiki memory gamma $i" --key "gamma-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember probe memory gamma $i"; exit 1; }
-    (cd "$probe" && bd remember "probe wiki filler memory $i" --key "filler-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember probe filler $i"; exit 1; }
-  done
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: build failed above threshold"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "4 topics, 25 keys" ||
-    { echo "error: build never reported its topics and keys"; echo "$out"; exit 1; }
-  [ -f "$probe/harness/wiki/index.md" ] ||
-    { echo "error: build wrote no index"; exit 1; }
-  for t in alpha beta filler gamma; do
-    [ -f "$probe/harness/wiki/$t.md" ] ||
-      { echo "error: build wrote no page for $t"; exit 1; }
-  done
-  for k in alpha-1 beta-6 filler-6 gamma-1 alpha-7; do
-    grep -rqF "$k" "$probe/harness/wiki/" ||
-      { echo "error: key $k reachable from no page"; exit 1; }
-  done
-  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
-    { echo "error: brief failed in the probe"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "wiki topics (4 topics, 25 keys)" ||
-    { echo "error: brief never switched to topics"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "known traps ("; then
-    echo "error: brief still printed the flat key list"; echo "$out"; exit 1;
-  fi
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" report 2>&1) ||
-    { echo "error: context report failed in the probe"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "wiki index" ||
-    { echo "error: the budget never counted the index"; echo "$out"; exit 1; }
-  pkt=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" digest 2>&1) ||
-    { echo "error: context digest failed in the probe"; echo "$pkt"; exit 1; }
-  grep -q "## Wiki" "$pkt" ||
-    { echo "error: the digest never carried the wiki"; exit 1; }
-  grep -q "alpha-1" "$pkt" ||
-    { echo "error: the digest wiki never reached a key"; exit 1; }
-  cp -R "$probe/harness/wiki" "$probe/wiki-backup" ||
-    { echo "error: cannot back up the probe wiki"; exit 1; }
-  rm -rf "$probe/harness/wiki" || { echo "error: cannot delete the probe wiki"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: rebuild failed"; echo "$out"; exit 1; }
-  diff -r "$probe/wiki-backup" "$probe/harness/wiki" ||
-    { echo "error: delete plus rebuild lost something"; exit 1; }'
-
-# Caps are enforced, and a breach fails loudly without publishing. A zero index
-# cap breaches on any wiki; a zero total cap breaches even after the build
-# prunes every excerpt — the message says which. A total cap between the two
-# sizes prunes the excerpts and still passes, with every key still reachable.
-probe_step "an oversize wiki fails loudly and pruning saves a close one" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  pad=""
-  i=0
-  while [ "$i" -lt 5 ]; do
-    pad="$pad padding-words-to-make-the-excerpt-dominate"
-    i=$((i + 1))
-  done
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    (cd "$probe" && bd remember "probe cap memory number $i $pad" --key "probe-cap-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember probe memory $i"; exit 1; }
-  done
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_INDEX_MAX_PCT=0 bash "$root/scripts/build-wiki.sh" 2>&1) &&
-    { echo "error: the build passed a zero index cap"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "cap breach" ||
-    { echo "error: the index breach never said cap"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "index" ||
-    { echo "error: the index breach never named the index"; echo "$out"; exit 1; }
-  [ ! -e "$probe/harness/wiki" ] ||
-    { echo "error: a breached build published a wiki"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_TOTAL_MAX_PCT=0 WIKI_INDEX_MAX_PCT=10000 bash "$root/scripts/build-wiki.sh" 2>&1) &&
-    { echo "error: the build passed a zero total cap"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "without excerpts" ||
-    { echo "error: the total breach never said it pruned first"; echo "$out"; exit 1; }
-  [ ! -e "$probe/harness/wiki" ] ||
-    { echo "error: a breached build published a wiki"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_TOTAL_MAX_PCT=25 WIKI_INDEX_MAX_PCT=10000 bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: the build failed a passable total cap"; echo "$out"; exit 1; }
-  if grep -q "^  > " "$probe"/harness/wiki/*.md; then
-    echo "error: the pruned wiki still carries excerpts"; exit 1;
-  fi
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    grep -rqF "probe-cap-$i" "$probe/harness/wiki/" ||
-      { echo "error: pruning dropped key probe-cap-$i"; exit 1; }
-  done'
-
-# Wiki pages carry tracks: into the staleness gate through a scratch harness —
-# the real checkout stays untouched. Bless, pass, move the generator, fail
-# naming the page, then prove a brand-new page only asks for a bless.
-probe_step "staleness watches wiki pages" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  fake="$probe/fakeharness"
-  mkdir -p "$fake/.claude" "$fake/scripts" "$probe/harness/wiki" "$probe/fakehome" ||
-    { echo "error: cannot shape the fake harness"; exit 1; }
-  printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe harness\n" > "$fake/.claude/HARNESS.md" ||
-    { echo "error: cannot plant the fake HARNESS.md"; exit 1; }
-  printf "#!/bin/bash\necho probe generator\n" > "$fake/scripts/build-wiki.sh" ||
-    { echo "error: cannot plant the fake generator"; exit 1; }
-  printf "<!-- tracks: scripts/build-wiki.sh -->\n<!-- wiki: topics=1 keys=1 -->\n# probe index\n" > "$probe/harness/wiki/index.md" ||
-    { echo "error: cannot plant the fake index"; exit 1; }
-  printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe topic\n" > "$probe/harness/wiki/probe.md" ||
-    { echo "error: cannot plant the fake page"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed over the fake harness"; echo "$out"; exit 1; }
-  grep -q "harness/wiki/index.md" "$probe/.claude/context.lock" ||
-    { echo "error: bless never recorded the wiki index"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) ||
-    { echo "error: blessed check failed"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^  ok " ||
-    { echo "error: blessed check never said ok"; echo "$out"; exit 1; }
-  printf "<!-- tracks: scripts/build-wiki.sh -->\n# another topic\n" > "$probe/harness/wiki/another.md" ||
-    { echo "error: cannot plant a new page"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) ||
-    { echo "error: check failed on a new page"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "new   harness/wiki/another.md" ||
-    { echo "error: the new page never asked for a bless"; echo "$out"; exit 1; }
-  rm "$probe/harness/wiki/another.md" ||
-    { echo "error: cannot clear the new page"; exit 1; }
-  printf "# probe generator, moved\n" >> "$fake/scripts/build-wiki.sh" ||
-    { echo "error: cannot move the fake generator"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) &&
-    { echo "error: check passed a moved generator"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "STALE" ||
-    { echo "error: the moved generator failed without a STALE line"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "harness/wiki/probe.md" ||
-    { echo "error: the STALE line never named the wiki page"; echo "$out"; exit 1; }'
-
-# Colliding topics share one sanitized filename: first wins, later ones take a
-# numeric suffix, compared case-insensitively — the build stays green and every
-# key stays reachable instead of the second overwriting the first.
-probe_step "colliding topics build green with both keys reachable" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  (cd "$probe" && bd remember "probe collision alpha one" --key "Alpha-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember Alpha-1"; exit 1; }
-  (cd "$probe" && bd remember "probe collision alpha two" --key "alpha-2" >/dev/null 2>&1) ||
-    { echo "error: cannot remember alpha-2"; exit 1; }
-  (cd "$probe" && bd remember "probe collision beta one" --key "Beta-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember Beta-1"; exit 1; }
-  (cd "$probe" && bd remember "probe collision beta two" --key "beta-2" >/dev/null 2>&1) ||
-    { echo "error: cannot remember beta-2"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: build failed on colliding topics"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "4 topics, 4 keys" ||
-    { echo "error: build never reported 4 topics 4 keys"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "broken link"; then
-    echo "error: colliding build reported broken links"; echo "$out"; exit 1;
-  fi
-  for k in Alpha-1 alpha-2 Beta-1 beta-2; do
-    grep -rqF "$k" "$probe/harness/wiki/" ||
-      { echo "error: key $k reachable from no page"; exit 1; }
-  done
-  n=$(ls "$probe"/harness/wiki/*.md 2>/dev/null | wc -l | tr -d " ") ||
-    { echo "error: cannot count wiki pages"; exit 1; }
-  [ "$n" = "5" ] ||
-    { echo "error: want 5 wiki files with dedupe, got $n"; exit 1; }'
-
-# A breached rebuild publishes nothing and removes the stale wiki, so the brief
-# falls back to the current flat list instead of serving last good topics.
-probe_step "a breached rebuild removes the stale wiki" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  (cd "$probe" && bd remember "probe breach base one" --key "probe-breach-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember base one"; exit 1; }
-  (cd "$probe" && bd remember "probe breach base two" --key "probe-breach-2" >/dev/null 2>&1) ||
-    { echo "error: cannot remember base two"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: base build failed"; echo "$out"; exit 1; }
-  [ -d "$probe/harness/wiki" ] ||
-    { echo "error: base build wrote no wiki"; exit 1; }
-  for i in 3 4 5 6 7 8 9 10 11 12; do
-    (cd "$probe" && bd remember "probe breach filler number $i" --key "probe-breach-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember filler $i"; exit 1; }
-  done
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_INDEX_MAX_PCT=0 bash "$root/scripts/build-wiki.sh" 2>&1) &&
-    { echo "error: breached rebuild passed"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "cap breach" ||
-    { echo "error: breach never said cap"; echo "$out"; exit 1; }
-  [ ! -e "$probe/harness/wiki" ] ||
-    { echo "error: breached rebuild left the stale wiki"; exit 1; }'
-
-# A stale index is ignored: the brief compares live memory count against the
-# index machine comment and falls back to the current capped key list.
-probe_step "a stale index is ignored for the current key list" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
-    (cd "$probe" && bd remember "probe stale memory $i" --key "c4-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember c4 $i"; exit 1; }
-  done
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: stale base build failed"; echo "$out"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
-    { echo "error: brief failed on fresh index"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "wiki topics" ||
-    { echo "error: brief never switched to topics"; echo "$out"; exit 1; }
-  for i in 26 27 28 29 30 31 32 33 34 35; do
-    (cd "$probe" && bd remember "probe stale memory $i" --key "c4-$i" >/dev/null 2>&1) ||
-      { echo "error: cannot remember c4 $i"; exit 1; }
-  done
-  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
-    { echo "error: brief failed on stale index"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "known traps (35)" ||
-    { echo "error: brief never showed the current 35 keys"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "wiki topics"; then
-    echo "error: brief served stale topics"; echo "$out"; exit 1;
-  fi
-  echo "$out" | grep -q "wiki unavailable" ||
-    { echo "error: stale fallback never capped with rebuild line"; echo "$out"; exit 1; }'
-
-# A blessed-but-deleted page is reported missing instead of staying silent.
-probe_step "a deleted wiki page is reported missing" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  (cd "$probe" && bd remember "probe missing alpha" --key "c5a-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember c5a"; exit 1; }
-  (cd "$probe" && bd remember "probe missing beta" --key "c5b-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember c5b"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: missing base build failed"; echo "$out"; exit 1; }
-  mkdir -p "$probe/fakehome" ||
-    { echo "error: cannot make fakehome"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed"; echo "$out"; exit 1; }
-  victim=$(ls "$probe"/harness/wiki/c5*.md 2>/dev/null | head -1) ||
-    { echo "error: cannot list wiki pages"; exit 1; }
-  [ -n "$victim" ] ||
-    { echo "error: no c5 page to delete"; exit 1; }
-  rm "$victim" ||
-    { echo "error: cannot delete the page"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) &&
-    { echo "error: check passed a deleted page"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "missing" ||
-    { echo "error: check never said missing"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "harness/wiki/" ||
-    { echo "error: missing line never named the page"; echo "$out"; exit 1; }'
-
-# A bad byte in a wiki page is diagnosed, never a traceback.
-probe_step "a bad byte in a wiki page is diagnosed not crashed" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  fake="$probe/fakeharness"
-  mkdir -p "$fake/.claude" "$fake/scripts" "$probe/harness/wiki" "$probe/fakehome" ||
-    { echo "error: cannot shape the fake harness"; exit 1; }
-  printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe harness\n" > "$fake/.claude/HARNESS.md" ||
-    { echo "error: cannot plant fake HARNESS"; exit 1; }
-  printf "#!/bin/bash\necho probe generator\n" > "$fake/scripts/build-wiki.sh" ||
-    { echo "error: cannot plant fake generator"; exit 1; }
-  printf "<!-- tracks: scripts/build-wiki.sh -->\n<!-- wiki: topics=1 keys=1 -->\n# probe index\n" > "$probe/harness/wiki/index.md" ||
-    { echo "error: cannot plant fake index"; exit 1; }
-  python3 - "$probe/harness/wiki/probe.md" <<PYEOF ||
-import sys
-open(sys.argv[1], "wb").write(b"<!-- tracks: scripts/build-wiki.sh -->\n# probe topic\n\xff\n")
-PYEOF
-    { echo "error: cannot plant bad byte page"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless crashed on bad byte"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: bless traceback on bad byte"; echo "$out"; exit 1;
-  fi
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) ||
-    { echo "error: check crashed on bad byte"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: check traceback on bad byte"; echo "$out"; exit 1;
-  fi
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" report 2>&1) ||
-    { echo "error: report crashed on bad byte"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: report traceback on bad byte"; echo "$out"; exit 1;
-  fi'
-
-# A bad byte outside the wiki is diagnosed, never a traceback: the budget
-# counts an unreadable file as 0 loudly, and report, check and digest print
-# their normal lines with rc 0/1 instead of a traceback.
-probe_step "a bad byte outside the wiki is diagnosed not crashed" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  mkdir -p "$probe/fakehome" "$probe/.claude/skills/probe-skill" ||
-    { echo "error: cannot shape the probe skills"; exit 1; }
-  python3 - "$probe/CLAUDE.md" <<PYEOF ||
-import sys
-p = sys.argv[1]
-open(p, "wb").write(open(p, "rb").read() + b"\xff")
-PYEOF
-    { echo "error: cannot plant bad byte CLAUDE"; exit 1; }
-  python3 - "$probe/.claude/skills/probe-skill/SKILL.md" <<PYEOF ||
-import sys
-open(sys.argv[1], "wb").write(b"---\ndescription: probe skill\n---\n\nbody\n\xff\n")
-PYEOF
-    { echo "error: cannot plant bad byte skill"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" report 2>&1) ||
-    { echo "error: report crashed on a bad byte outside the wiki"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: report traceback on a bad byte outside the wiki"; echo "$out"; exit 1;
-  fi
-  echo "$out" | grep -q "  cost " ||
-    { echo "error: report never printed the cost line"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^  ok " ||
-    { echo "error: report never printed the ok line"; echo "$out"; exit 1; }
-  rc=0
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) || rc=$?
-  case "$rc" in 0|1) ;; *) echo "error: check crashed rc=$rc"; echo "$out"; exit 1;; esac
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: check traceback on a bad byte outside the wiki"; echo "$out"; exit 1;
-  fi
-  pkt=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" digest 2>&1) ||
-    { echo "error: digest crashed on a bad byte outside the wiki"; echo "$pkt"; exit 1; }
-  if echo "$pkt" | grep -q "Traceback"; then
-    echo "error: digest traceback on a bad byte outside the wiki"; echo "$pkt"; exit 1;
-  fi
-  grep -q "probe skill" "$pkt" ||
-    { echo "error: digest lost the probe skill"; exit 1; }'
-
-# A bad byte in laurels and the newest handoff costs those two lines, never
-# the brief: the summary still prints the ledger, ready and traps lines.
-probe_step "a bad byte in laurels and handoff still briefs" bash -c '
-  golden_probe || exit 1
-  bid=$(cd "$probe" && bd create "probe brief work" --design d --acceptance a --silent 2>/dev/null) ||
-    { echo "error: cannot file a probe bead"; exit 1; }
-  await_bead_ready "$probe" "$bid" || exit 1
-  (cd "$probe" && bd remember "probe brief trap" --key "probe-brief-trap" >/dev/null 2>&1) ||
-    { echo "error: cannot remember a probe memory"; exit 1; }
-  printf "%s\n" "{\"quote\": \"probe praise\", \"date\": \"2026-01-01\"}" > "$probe/harness/laurels.jsonl" ||
-    { echo "error: cannot plant the probe laurel"; exit 1; }
-  printf "\xff" >> "$probe/harness/laurels.jsonl" ||
-    { echo "error: cannot plant bad byte laurel"; exit 1; }
-  printf "%s\n" "# probe note" "" "stood where the probe stood" > "$probe/harness/handoffs/note-probe.md" ||
-    { echo "error: cannot plant the probe handoff"; exit 1; }
-  printf "\xff" >> "$probe/harness/handoffs/note-probe.md" ||
-    { echo "error: cannot plant bad byte handoff"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
-    { echo "error: brief failed on bad bytes"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: brief traceback on bad bytes"; echo "$out"; exit 1;
-  fi
-  for w in "ledger:" "ready:" "known traps"; do
-    echo "$out" | grep -q "$w" ||
-      { echo "error: brief lost $w under bad bytes"; echo "$out"; exit 1; }
-  done'
-
-# A wiki page losing its tracks line is a ghost lock entry: check names it
-# until a re-bless prunes it, instead of staying green over a stale hash.
-probe_step "a wiki page losing its tracks fails check until re-blessed" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  (cd "$probe" && bd remember "probe untracked alpha" --key "c6a-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember c6a"; exit 1; }
-  (cd "$probe" && bd remember "probe untracked beta" --key "c6b-1" >/dev/null 2>&1) ||
-    { echo "error: cannot remember c6b"; exit 1; }
-  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
-    { echo "error: untracked base build failed"; echo "$out"; exit 1; }
-  mkdir -p "$probe/fakehome" ||
-    { echo "error: cannot make fakehome"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed"; echo "$out"; exit 1; }
-  victim=$(ls "$probe"/harness/wiki/c6*.md 2>/dev/null | head -1) ||
-    { echo "error: cannot list wiki pages"; exit 1; }
-  [ -n "$victim" ] ||
-    { echo "error: no c6 page to strip"; exit 1; }
-  grep -v "tracks:" "$victim" > "$victim.tmp" ||
-    { echo "error: cannot strip the tracks line"; exit 1; }
-  mv "$victim.tmp" "$victim" ||
-    { echo "error: cannot write the stripped page"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) &&
-    { echo "error: check passed a page that lost its tracks"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "untracked" ||
-    { echo "error: check never said untracked"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "harness/wiki/" ||
-    { echo "error: the untracked line never named the page"; echo "$out"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: re-bless failed"; echo "$out"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) ||
-    { echo "error: check failed after re-bless"; echo "$out"; exit 1; }'
 
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
@@ -1809,7 +1347,8 @@ EOF
 # check passes the install as it stands, and a foreign roster planted
 # afterwards fails it.
 probe_step "a fresh install pins opencode to one model" bash -c '
-  golden_probe || exit 1
+  PROBE_SCENARIO="a fresh install pins opencode to one model"
+  golden_probe || probe_fail "no golden fixture"
   pin="opencode-go/muse-spark-1.3-contributor"
   [ ! -e "$probe/harness/models.json" ] ||
     { echo "error: a reference install carries a roster"; exit 1; }
@@ -1840,7 +1379,15 @@ EOF
     { echo "error: cannot plant a foreign roster"; exit 1; }
   if python3 "$modroot/scripts/opencode-pin.py" check "$probe" >/dev/null 2>&1; then
     echo "error: pin check passed a foreign roster"; exit 1;
-  fi'
+  fi
+  # The reference install carries the eval cases too, so the fresh-install shape is proved here rather than in its own probe.
+  for f in harness/evals/commit-bead/task.md harness/evals/commit-bead/base harness/evals/commit-bead/check.sh harness/evals/verify-gate/task.md harness/evals/verify-gate/base harness/evals/verify-gate/check.sh; do
+    [ -f "$probe/$f" ] || probe_fail "reference install missed $f"
+  done
+  [ -x "$probe/harness/evals/commit-bead/check.sh" ] || probe_fail "commit-bead check.sh lost its executable bit"
+  [ -x "$probe/harness/evals/verify-gate/check.sh" ] || probe_fail "verify-gate check.sh lost its executable bit"
+  [ ! -e "$probe/harness/evals/results.jsonl" ] || probe_fail "results.jsonl shipped — it is runtime data"
+  [ -f "$modroot/scripts/eval.sh" ] || probe_fail "shared checkout has no scripts/eval.sh"'
 
 # `harness add` merges the root instructions into an existing shadow instead
 # of leaving AGENTS.md unloaded: the shadow keeps its own entries and its
@@ -2336,1050 +1883,177 @@ probe_step "a clone with no live ledger skips the export check" bash -c '
   echo "$out" | grep -q "no live ledger, skipping" ||
     { echo "error: the skip never said itself"; echo "$out"; exit 1; }'
 
-# A fresh install carries the eval cases: the two example behaviours with
-# their task, base and check, executable checks, and no results file — rows
-# are runtime data the first run creates, like wiki pages, never shipped.
-probe_step "a fresh install carries the eval cases" bash -c '
-  fresh_probe || exit 1
-  out=$(bin/harness add "$probe" 2>&1) || { echo "error: harness add failed"; echo "$out"; exit 1; }
-  for f in harness/evals/commit-bead/task.md harness/evals/commit-bead/base harness/evals/commit-bead/check.sh harness/evals/verify-gate/task.md harness/evals/verify-gate/base harness/evals/verify-gate/check.sh; do
-    [ -f "$probe/$f" ] || { echo "error: fresh install missed $f"; exit 1; }
-  done
-  [ -x "$probe/harness/evals/commit-bead/check.sh" ] ||
-    { echo "error: commit-bead check.sh lost its executable bit"; exit 1; }
-  [ -x "$probe/harness/evals/verify-gate/check.sh" ] ||
-    { echo "error: verify-gate check.sh lost its executable bit"; exit 1; }
-  [ ! -e "$probe/harness/evals/results.jsonl" ] ||
-    { echo "error: results.jsonl shipped — it is runtime data, created by the first run"; exit 1; }
-  modroot="$(probe_shared_root "$probe")" || exit 1
-  [ -f "$modroot/scripts/eval.sh" ] ||
-    { echo "error: the shared checkout has no scripts/eval.sh"; exit 1; }'
+# Static lane through the real gate lane: unrelated silence, clean pass, duplicate fail, nested and untracked duplicates, and deletion credit.
+probe_step "knowledge static lane" bash -c '
+PROBE_SCENARIO="knowledge static lane"
+golden_probe || probe_fail "no golden fixture"
+top="$PWD"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) || probe_fail "probe init commit failed"
+run_static_lane() {
+(cd "$probe" && HARNESS_HOME="$top" "$probe/scripts/harness" verify --lane knowledge-static 2>&1)
+}
+echo "probe" > "$probe/probe-unrelated.txt" || probe_fail "cannot dirty an unrelated file"
+out=$(run_static_lane) || probe_fail "lane failed on an unrelated diff"
+echo "$out" | grep -q "no knowledge-layer change" || probe_fail "lane never stayed silent on an unrelated diff"
+rm "$probe/probe-unrelated.txt" || probe_fail "cannot clean the unrelated file"
+printf "%s\n" "# probe knowledge line" >> "$probe/AGENTS.md" || probe_fail "cannot dirty AGENTS.md"
+out=$(run_static_lane) || probe_fail "lane failed a clean knowledge diff"
+echo "$out" | grep -q "cost and duplicates clean" || probe_fail "lane never passed a clean knowledge diff"
+(cd "$probe" && git checkout -- AGENTS.md >/dev/null 2>&1) || probe_fail "cannot restore AGENTS.md"
+mkdir -p "$probe/.claude/skills/probe-dup" || probe_fail "cannot make the probe skill"
+printf "%s\n" "---" "description: probe dup skill" "---" "" "The probe duplicate fact about harness layers is intentionally repeated here verbatim for the static lane." > "$probe/.claude/skills/probe-dup/SKILL.md" || probe_fail "cannot plant the probe skill"
+printf "%s\n" "The probe duplicate fact about harness layers is intentionally repeated here verbatim for the static lane." >> "$probe/AGENTS.md" || probe_fail "cannot dirty AGENTS.md with the duplicate"
+out=$(run_static_lane) && probe_fail "lane passed a duplicate fact" || true
+echo "$out" | grep -q "duplicate facts" || probe_fail "failure never said duplicate"
+echo "$out" | grep -q "probe duplicate fact" || probe_fail "failure never named the copied sentence"
+rm -rf "$probe/.claude/skills/probe-dup" || probe_fail "cannot clean the probe skill"
+(cd "$probe" && git checkout -- AGENTS.md >/dev/null 2>&1) || probe_fail "cannot restore AGENTS.md"
+printf "%s\n" "# probe knowledge line" "The nested probe sentence about harness layering repeats here verbatim for the nested static check" >> "$probe/CLAUDE.md" || probe_fail "cannot dirty CLAUDE.md"
+mkdir -p "$probe/.claude/skills/suite/probe-nested" || probe_fail "cannot make the nested skill"
+printf "%s\n" "---" "description: probe nested static skill" "---" "" "The nested probe sentence about harness layering repeats here verbatim for the nested static check" > "$probe/.claude/skills/suite/probe-nested/SKILL.md" || probe_fail "cannot plant the nested skill"
+out=$(run_static_lane) && probe_fail "lane passed a nested duplicate" || true
+echo "$out" | grep -q "suite/probe-nested" || probe_fail "failure never named the nested skill"
+echo "$out" | grep -q "nested probe sentence about harness layering" || probe_fail "failure never named the copied sentence"
+rm -rf "$probe/.claude/skills/suite" || probe_fail "cannot clean the nested skill"
+(cd "$probe" && git checkout -- CLAUDE.md >/dev/null 2>&1) || probe_fail "cannot restore CLAUDE.md"
+printf "%s\n" "the probe layer sentence about harness budgets repeats here verbatim for the untracked duplicate check" >> "$probe/CLAUDE.md" || probe_fail "cannot plant the probe sentence"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe sentence" >/dev/null 2>&1) || probe_fail "cannot commit the probe sentence"
+mkdir -p "$probe/.claude/skills/probe-new" || probe_fail "cannot make the probe skill"
+printf "%s\n" "---" "description: probe new skill for the untracked duplicate check" "---" "" "the probe layer sentence about harness budgets repeats here verbatim for the untracked duplicate check" > "$probe/.claude/skills/probe-new/SKILL.md" || probe_fail "cannot plant the untracked skill"
+out=$(run_static_lane) && probe_fail "lane passed an untracked duplicate" || true
+echo "$out" | grep -q "repeats here verbatim" || probe_fail "failure never named the copied sentence"
+rm -rf "$probe/.claude/skills/probe-new" || probe_fail "cannot clean the probe skill"
+mkdir -p "$probe/.claude/skills/probe-big" || probe_fail "cannot make the probe skill"
+desc=$(python3 -c "print(chr(120) * 12000)") || probe_fail "cannot size the probe description"
+printf "%s\n" "---" "description: $desc" "---" "" "Probe big body." > "$probe/.claude/skills/probe-big/SKILL.md" || probe_fail "cannot plant the probe skill"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe big" >/dev/null 2>&1) || probe_fail "cannot commit the probe skill"
+rm -rf "$probe/.claude/skills/probe-big" || probe_fail "cannot delete the probe skill"
+pad=$(python3 -c "print(chr(121) * 9000)") || probe_fail "cannot size the probe addition"
+printf "%s\n" "# probe costly line" "$pad" >> "$probe/CLAUDE.md" || probe_fail "cannot dirty CLAUDE.md"
+out=$(run_static_lane) || probe_fail "lane failed a net-negative knowledge diff"
+echo "$out" | grep -q "tokens (-" || probe_fail "cost line never showed the deletion credit"
+'
 
-# The static lane is diff-scoped: an unrelated diff skips it out loud, and a
-# knowledge-layer diff fires it and passes clean.
-probe_step "knowledge static fires on a knowledge diff, silent otherwise" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  echo "probe" > "$probe/probe-unrelated.txt" ||
-    { echo "error: cannot dirty an unrelated file"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
-    { echo "error: the gate failed on an unrelated diff"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "no knowledge-layer change" ||
-    { echo "error: static never skipped on an unrelated diff"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "FAIL  knowledge static"; then
-    echo "error: static failed on an unrelated diff"; echo "$out"; exit 1;
-  fi
-  printf "%s\n" "# probe knowledge line" >> "$probe/AGENTS.md" ||
-    { echo "error: cannot dirty AGENTS.md"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
-    { echo "error: the gate failed on a clean knowledge diff"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "knowledge static: .*AGENTS.md" ||
-    { echo "error: static never fired on a knowledge diff"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "  ok    knowledge static" ||
-    { echo "error: static never passed a clean knowledge diff"; echo "$out"; exit 1; }'
-
-# A fact said twice across the layer fails the static lane, naming itself.
-probe_step "duplicate facts fail the static lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  mkdir -p "$probe/.claude/skills/probe-skill" ||
-    { echo "error: cannot make the probe skill"; exit 1; }
-  printf "%s\n" "---" "description: probe skill for the duplicate check" "---" "" "The probe duplicate fact about harness layers is intentionally repeated here verbatim for the static lane." > "$probe/.claude/skills/probe-skill/SKILL.md" ||
-    { echo "error: cannot plant the probe skill"; exit 1; }
-  printf "%s\n" "# probe knowledge line" "The probe duplicate fact about harness layers is intentionally repeated here verbatim for the static lane." >> "$probe/AGENTS.md" ||
-    { echo "error: cannot dirty AGENTS.md"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
-    { echo "error: the gate passed a duplicate fact"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge static" ||
-    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "duplicate facts" ||
-    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }'
-
-# A duplication the diff introduces fails the static lane naming the sentence,
-# while a settled duplicate the diff never added stays the librarian's job: a
-# handoff SKILL sentence copied into AGENTS.local.md fails, but the
-# fixture's own long-settled duplicates never block it.
-probe_step "introduced duplication fails the static lane naming the sentence" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  line=$(awk "NF>=10 && length(\$0)>=60 && !/[.;!?]/ {print; exit}" "$probe/.claude/skills/handoff/SKILL.md") ||
-    { echo "error: cannot read the probe skill"; exit 1; }
-  [ -n "$line" ] ||
-    { echo "error: no long sentence in the probe skill"; exit 1; }
-  printf "%s\n" "$line" >> "$probe/AGENTS.local.md" ||
-    { echo "error: cannot copy the skill sentence"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
-    { echo "error: the gate passed an introduced duplicate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge static" ||
-    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "duplicate facts" ||
-    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
-  frag=$(printf "%s" "$line" | tr "A-Z" "a-z" | tr -cs "a-z0-9 " " " | cut -c1-30) ||
-    { echo "error: cannot shape the sentence fragment"; exit 1; }
-  echo "$out" | grep -q "$frag" ||
-    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
-
-# A memory-only change — one remembered memory, no file diff at all — runs no
-# behavioural eval: the tree is clean so the scope is full, the lane runs its
-# detection, and skips before the runner is even called. The proof is the
-# side effect: eval.sh creates results.jsonl on every run, so its absence
-# afterwards means no eval ran. (The lanes skip line stays in the step log —
-# probe steps only print their one line.) The export is regened and committed
-# first, because a remembered-but-unexported memory is ledger drift and would
-# fail the gate on the export step instead.
-probe_step "a memory-only change runs no behavioural eval" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  (cd "$probe" && bd remember "probe memory trap for the behavioural lane" --key "probe-memory-trap" >/dev/null 2>&1) ||
-    { echo "error: cannot remember a probe memory"; exit 1; }
-  tries=0
-  while ! (cd "$probe" && bd recall probe-memory-trap >/dev/null 2>&1); do
-    tries=$((tries + 1))
-    [ "$tries" -ge 60 ] && { echo "error: probe memory never landed"; exit 1; }
-    sleep 0.5
-  done
-  (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
-    { echo "error: cannot regen the probe export"; exit 1; }
-  (cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe memory export" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the probe export"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
-    { echo "error: the gate failed on a memory-only change"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "FAIL  knowledge behavioural"; then
-    echo "error: behavioural failed on a memory-only change"; echo "$out"; exit 1;
-  fi
-  [ ! -e "$probe/harness/evals/results.jsonl" ] ||
-    { echo "error: an eval ran on a memory-only change — results.jsonl exists"; exit 1; }'
-
-# eval.sh on a clean layer, through the fake opencode the reflect probes use
-# (same argv shape agent.py builds, canned JSON-line reply): one ok line per
-# case, the worktree count unchanged after, and a second run appending rows
-# without touching the first ones.
-probe_step "eval.sh prints one line per case, leaves nothing behind, appends only" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  before=$(git -C "$probe" worktree list 2>/dev/null | wc -l | tr -d " ") ||
-    { echo "error: cannot list worktrees"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed on a clean layer"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "2" ] ||
-    { echo "error: want one ok line per case, got $n"; echo "$out"; exit 1; }
-  after=$(git -C "$probe" worktree list 2>/dev/null | wc -l | tr -d " ") ||
-    { echo "error: cannot relist worktrees"; exit 1; }
-  [ "$after" = "$before" ] ||
-    { echo "error: eval left a worktree behind"; git -C "$probe" worktree list; echo "$out"; exit 1; }
-  rows=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  [ "$rows" = "2" ] ||
-    { echo "error: want 2 result rows, got $rows"; echo "$out"; exit 1; }
-  cp "$probe/harness/evals/results.jsonl" "$probe/results-backup.jsonl" ||
-    { echo "error: cannot back up results"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: second eval failed"; echo "$out"; exit 1; }
-  rows=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  [ "$rows" = "4" ] ||
-    { echo "error: second run never appended, rows=$rows"; echo "$out"; exit 1; }
-  n=$(wc -l < "$probe/results-backup.jsonl" | tr -d " ") ||
-    { echo "error: cannot count backup lines"; exit 1; }
-  head -n "$n" "$probe/harness/evals/results.jsonl" > "$probe/results-head.jsonl" ||
-    { echo "error: cannot slice the rerun"; exit 1; }
-  cmp -s "$probe/results-backup.jsonl" "$probe/results-head.jsonl" ||
-    { echo "error: second run rewrote earlier rows"; exit 1; }
-  rm -f "$probe/results-backup.jsonl" "$probe/results-head.jsonl" ||
-    { echo "error: cannot clean the comparison files"; exit 1; }'
-
-# The verdict reads its baseline at the pinned rev, never live HEAD: a fake
-# git on PATH logs every show ref, and the stamp on every row matches the
-# HEAD the run started at.
-probe_step "eval.sh pins its baseline rev instead of reading HEAD live" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  rev="$(cd "$probe" && git rev-parse HEAD)" ||
-    { echo "error: cannot read the probe HEAD"; exit 1; }
-  mkdir -p "$probe/gitlog" ||
-    { echo "error: cannot make the git log dir"; exit 1; }
-  realgit="$(command -v git)" ||
-    { echo "error: cannot locate git"; exit 1; }
-  printf "%s\n" "#!/bin/bash" "printf \"%s\\n\" \"git \$*\" >> \"$probe/gitlog/calls\"" "exec \"$realgit\" \"\$@\"" > "$probe/gitlog/git" ||
-    { echo "error: cannot plant fake git"; exit 1; }
-  chmod +x "$probe/gitlog/git" || { echo "error: cannot chmod the fake git"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe/gitlog:$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed on a clean layer"; echo "$out"; exit 1; }
-  grep -q "show $rev:" "$probe/gitlog/calls" ||
-    { echo "error: the verdict never read its baseline at the pinned rev"; cat "$probe/gitlog/calls"; exit 1; }
-  if grep -q "show HEAD:" "$probe/gitlog/calls"; then
-    echo "error: the verdict read its baseline at live HEAD"; cat "$probe/gitlog/calls"; exit 1;
-  fi
-  python3 - "$probe/harness/evals/results.jsonl" "$rev" <<PYEOF ||
-import json
-import sys
-rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+# Eval runner in one copy: two runs prove lines, worktree, append, pin; then one spaced name, missing dir fails, empty suite skips.
+probe_step "eval runner" bash -c '
+PROBE_SCENARIO="eval runner"
+golden_probe || probe_fail "no golden fixture"
+top="$PWD"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" || probe_fail "cannot plant trivial steps"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) || probe_fail "probe init commit failed"
+fake="$probe/opencode"
+printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" || probe_fail "cannot plant fake opencode"
+chmod +x "$fake" || probe_fail "cannot chmod the fake"
+rev="$(cd "$probe" && git rev-parse HEAD)" || probe_fail "cannot read the probe HEAD"
+before=$(git -C "$probe" worktree list 2>/dev/null | wc -l | tr -d " ") || probe_fail "cannot list worktrees"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) || probe_fail "eval failed on a clean layer"
+n=$(echo "$out" | grep -c "^ok eval " || true)
+[ "$n" = "2" ] || probe_fail "want one ok line per case"
+after=$(git -C "$probe" worktree list 2>/dev/null | wc -l | tr -d " ") || probe_fail "cannot relist worktrees"
+[ "$after" = "$before" ] || probe_fail "eval left a worktree behind"
+rows=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+[ "$rows" = "2" ] || probe_fail "want 2 result rows"
+python3 - "$probe/harness/evals/results.jsonl" "$rev" <<PYEOF || probe_fail "stamped rev is not the pinned HEAD"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
 assert rows, "no rows stamped"
 assert all(row.get("harness_rev") == sys.argv[2] for row in rows), rows
 PYEOF
-    { echo "error: the stamped rev is not the pinned HEAD"; exit 1; }'
-
-# The behavioural lane end to end: a baseline eval committed green, a CLAUDE.md
-# change breaking a passing case failing the gate on the lane, and a benign
-# CLAUDE.md change going through. The fake keys on a BREAK marker in the
-# overlaid candidate layer — the same worktree the real agent would read.
-probe_step "a breaking CLAUDE.md change fails the behavioural lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    bad=False" "    try:" "        bad=\"BREAK\" in open(\"CLAUDE.md\").read()" "    except OSError:" "        bad=False" "    if bad:" "        open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    else:" "        open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^ok eval commit-bead" ||
-    { echo "error: baseline never passed commit-bead"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^ok eval verify-gate" ||
-    { echo "error: baseline never passed verify-gate"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  printf "%s\n" "BREAK the always-loaded layer for the probe" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot break CLAUDE.md"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) &&
-    { echo "error: the gate passed a breaking CLAUDE.md change"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge behavioural" ||
-    { echo "error: the failure never named the behavioural lane"; echo "$out"; exit 1; }
-  grep -v "BREAK the always-loaded layer" "$probe/CLAUDE.md" > "$probe/CLAUDE.md.tmp" ||
-    { echo "error: cannot strip BREAK"; exit 1; }
-  mv "$probe/CLAUDE.md.tmp" "$probe/CLAUDE.md" ||
-    { echo "error: cannot restore CLAUDE.md"; exit 1; }
-  printf "%s\n" "A benign probe line about nothing in particular." >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot plant the benign line"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
-    { echo "error: the gate failed a non-breaking change"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "FAIL  knowledge behavioural"; then
-    echo "error: behavioural failed a non-breaking change"; echo "$out"; exit 1;
-  fi
-  echo "$out" | grep -q "  ok    knowledge behavioural" ||
-    { echo "error: behavioural never passed the benign change"; echo "$out"; exit 1; }'
-
-# The behavioural error names the broken cases, never the totals line: a
-# breaking change failing every committed-green case prints a totals line
-# beside the case lines, and only the case lines reach the error summary.
-probe_step "the behavioural error names cases, never the totals line" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant bad fake opencode"; exit 1; }
-  printf "%s\n" "BREAK the always-loaded layer for the probe" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot break CLAUDE.md"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) &&
-    { echo "error: the gate passed a breaking layer"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge behavioural" ||
-    { echo "error: the failure never named the behavioural lane"; echo "$out"; exit 1; }
-  err=$(echo "$out" | grep "error: eval regression" || true)
-  [ -n "$err" ] ||
-    { echo "error: no eval regression error line"; echo "$out"; exit 1; }
-  echo "$err" | grep -q "commit-bead" ||
-    { echo "error: the error never named commit-bead"; echo "$out"; exit 1; }
-  echo "$err" | grep -q "verify-gate" ||
-    { echo "error: the error never named verify-gate"; echo "$out"; exit 1; }
-  if echo "$err" | grep -q "total passes"; then
-    echo "error: the error named the totals line as a case"; echo "$out"; exit 1;
-  fi'
-
-# The overlay mirrors deletions: a skill the cases depend on, committed then
-# removed, fails the behavioural lane naming the case — without the mirror
-# the worktree keeps the stale file and the gate stays green on a broken tree.
-probe_step "a deleted skill the cases depend on fails the behavioural lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  mkdir -p "$probe/.claude/skills/probe-victim" ||
-    { echo "error: cannot make the probe skill"; exit 1; }
-  printf "%s\n" "---" "description: probe victim skill the eval cases depend on" "---" "" "Probe victim body." > "$probe/.claude/skills/probe-victim/SKILL.md" ||
-    { echo "error: cannot plant the probe skill"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    good=os.path.isfile(\".claude/skills/probe-victim/SKILL.md\")" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\" if good else \"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\" if good else \"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  rm -rf "$probe/.claude/skills/probe-victim" ||
-    { echo "error: cannot delete the probe skill"; exit 1; }
-  mkdir -p "$probe/fakehome" ||
-    { echo "error: cannot make fakehome"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed"; echo "$out"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) &&
-    { echo "error: the gate passed a deleted skill the cases depend on"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "failed steps: .*knowledge behavioural" ||
-    { echo "error: the failure never named the behavioural lane"; echo "$out"; exit 1; }
-  row=$(python3 - "$probe/harness/evals/results.jsonl" <<PYEOF
-import json,sys
-rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
-print("bad" if [r for r in rows if r.get("case")=="commit-bead" and r.get("pass") is False] else "ok")
-PYEOF
-) ||
-    { echo "error: cannot read the probe results"; echo "$out"; exit 1; }
-  [ "$row" = "bad" ] ||
-    { echo "error: no failing commit-bead row recorded"; echo "$out"; exit 1; }'
-
-# A nested skill description change is overlaid and evaluated: the fake keys
-# on the new description in the worktree, so a stale base copy fails the
-# cases while the overlaid candidate passes — and the eval runs at all, which
-# is the lane triggering on the nested path.
-probe_step "a nested skill change is overlaid and evaluated" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  mkdir -p "$probe/.claude/skills/suite/probe-nested" ||
-    { echo "error: cannot make the nested skill"; exit 1; }
-  printf "%s\n" "---" "description: probe nested one" "---" "" "Probe nested body." > "$probe/.claude/skills/suite/probe-nested/SKILL.md" ||
-    { echo "error: cannot plant the nested skill"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    want=os.environ.get(\"EXPECTED\", \"probe nested one\")" "    try:" "        have=open(\".claude/skills/suite/probe-nested/SKILL.md\").read()" "    except OSError:" "        have=\"\"" "    ok=want in have" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\\n\" if ok else \"no bead here\\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\\n\" if ok else \"make check\\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^ok eval commit-bead" ||
-    { echo "error: baseline never passed commit-bead"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  printf "%s\n" "---" "description: probe nested two" "---" "" "Probe nested body." > "$probe/.claude/skills/suite/probe-nested/SKILL.md" ||
-    { echo "error: cannot change the nested description"; exit 1; }
-  rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" EXPECTED="probe nested two" "$probe/scripts/harness" verify 2>&1) ||
-    { echo "error: the gate failed a nested description change"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "  ok    knowledge behavioural" ||
-    { echo "error: behavioural never passed the nested change"; echo "$out"; exit 1; }
-  rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  [ "${rows1:-0}" -gt "${rows0:-0}" ] ||
-    { echo "error: no eval ran on the nested description change ($rows0 -> $rows1)"; echo "$out"; exit 1; }'
-
-# The eval baseline is a ratchet over history, not the latest row: a committed
-# red run keeps failing until a run passes, and a committed-green case with
-# no directory now fails naming it. Runs eval.sh directly, twice red with a
-# commit between, then with one passing case deleted.
-probe_step "a committed red run still fails and a deleted case fails naming it" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant bad fake opencode"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: eval passed a breaking layer"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
-    { echo "error: the red run never named the regression"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe red results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the red results"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: a committed red run went green"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
-    { echo "error: committed red stopped failing"; echo "$out"; exit 1; }
-  rm -rf "$probe/harness/evals/verify-gate" ||
-    { echo "error: cannot delete the probe case"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: eval passed a deleted passing case"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "verify-gate" ||
-    { echo "error: the deleted case was never named"; echo "$out"; exit 1; }'
-
-# An empty suite over a committed-green baseline fails naming every missing
-# case — the deleted-case ratchet with nothing left, not a quiet pass.
-probe_step "an empty evals dir fails naming its committed-green cases" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  rm -rf "$probe/harness/evals/commit-bead" "$probe/harness/evals/verify-gate" ||
-    { echo "error: cannot wipe the probe cases"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: eval passed an empty suite over a green baseline"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "commit-bead" ||
-    { echo "error: the empty run never named commit-bead"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "verify-gate" ||
-    { echo "error: the empty run never named verify-gate"; echo "$out"; exit 1; }'
-
-# An empty suite with no baseline behind it skips out loud naming the evals
-# dir — not a pass, not a fail — and writes no rows.
-probe_step "an empty evals suite with no baseline skips out loud" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  rm -rf "$probe/harness/evals/commit-bead" "$probe/harness/evals/verify-gate" ||
-    { echo "error: cannot wipe the probe cases"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed an empty suite with no baseline"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "SKIP" ||
-    { echo "error: the empty run never said SKIP"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "harness/evals" ||
-    { echo "error: the SKIP never named the evals dir"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "^FAIL eval "; then
-    echo "error: the empty skip failed a case"; echo "$out"; exit 1;
-  fi
-  [ ! -e "$probe/harness/evals/results.jsonl" ] ||
-    { echo "error: the empty skip wrote result rows"; exit 1; }'
-
-# A brand-new untracked skill repeating a committed sentence fires the static
-# lane: regular untracked files have no HEAD version, so they read as absent
-# from the baseline instead of duplicating themselves there.
-probe_step "an untracked new file duplicating committed text fails the static lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  printf "%s\n" "the probe layer sentence about harness budgets repeats here verbatim for the untracked duplicate check" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot plant the probe sentence"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  mkdir -p "$probe/.claude/skills/probe-new" ||
-    { echo "error: cannot make the probe skill"; exit 1; }
-  printf "%s\n" "---" "description: probe new skill for the untracked duplicate check" "---" "" "the probe layer sentence about harness budgets repeats here verbatim for the untracked duplicate check" > "$probe/.claude/skills/probe-new/SKILL.md" ||
-    { echo "error: cannot plant the probe skill"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
-    { echo "error: the gate passed an untracked duplicate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge static" ||
-    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "duplicate facts" ||
-    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "repeats here verbatim" ||
-    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
-
-# A sentence duplicated through a nested skill fails the static lane naming
-# the skill: the corpus reads skills at any depth, so a nested suit counts
-# like a top-level one.
-probe_step "a nested skill duplicating committed text fails the static lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  printf "%s\n" "# probe knowledge line" "The nested probe sentence about harness layering repeats here verbatim for the nested static check" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot plant the probe sentence"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  mkdir -p "$probe/.claude/skills/suite/probe-nested" ||
-    { echo "error: cannot make the nested skill"; exit 1; }
-  printf "%s\n" "---" "description: probe nested static skill" "---" "" "The nested probe sentence about harness layering repeats here verbatim for the nested static check" > "$probe/.claude/skills/suite/probe-nested/SKILL.md" ||
-    { echo "error: cannot plant the nested skill"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
-    { echo "error: the gate passed a nested duplicate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge static" ||
-    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "duplicate facts" ||
-    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "suite/probe-nested" ||
-    { echo "error: the failure never named the nested skill"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "nested probe sentence about harness layering" ||
-    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
-
-# A newline inside a skill path must not split the changed set: the worktree
-# sentence duplicating committed text fails the static lane naming it,
-# instead of the flattened filter missing both halves.
-probe_step "a newline skill path duplicating committed text fails the static lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  printf "%s\n" "# probe knowledge line" "The probe layer sentence about harness budgets repeats here verbatim for the newline path check" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot plant the probe sentence"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  nl="$(printf "\nX")"
-  nl="${nl%X}"
-  mkdir -p "$probe/.claude/skills/probe${nl}newline" ||
-    { echo "error: cannot make the newline skill"; exit 1; }
-  printf "%s\n" "---" "description: probe newline skill for the path check" "---" "" "The probe layer sentence about harness budgets repeats here verbatim for the newline path check" > "$probe/.claude/skills/probe${nl}newline/SKILL.md" ||
-    { echo "error: cannot plant the newline skill"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
-    { echo "error: the gate passed a duplicate through a newline path"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge static" ||
-    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "duplicate facts" ||
-    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "repeats here verbatim" ||
-    { echo "error: the failure never named the copied sentence"; echo "$out"; exit 1; }'
-# A breaking template counterpart is overlaid, not skipped: the fake keys on
-# a BREAK marker in template/AGENTS.md and the run must fail naming the case.
-probe_step "a breaking template counterpart is caught by the eval overlay" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  mkdir -p "$probe/template" ||
-    { echo "error: cannot make the probe template tree"; exit 1; }
-  printf "%s\n" "# probe template layer" "" "A benign probe line about the template layer and nothing else." > "$probe/template/AGENTS.md" ||
-    { echo "error: cannot plant the probe template layer"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    bad=False" "    try:" "        bad=\"BREAK\" in open(\"template/AGENTS.md\").read()" "    except OSError:" "        bad=False" "    if bad:" "        open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    else:" "        open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "        open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "2" ] ||
-    { echo "error: want two ok lines at baseline, got $n"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  printf "%s\n" "BREAK the always-loaded template layer for the probe" >> "$probe/template/AGENTS.md" ||
-    { echo "error: cannot break the probe template layer"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: eval passed a breaking template change"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^FAIL eval " ||
-    { echo "error: the template break never failed a case"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
-    { echo "error: the template break never named the regression"; echo "$out"; exit 1; }'
-
-# A symlink pointing outside any git repo reads as absent from the baseline:
-# live bytes would make the base depend on untracked state, so the committed
-# sentence repeated through the link still fires the static lane.
-probe_step "a link target outside any repo reads as absent from the baseline" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  printf "%s\n" "the probe layer sentence about harness budgets repeats here verbatim for the outside link check" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot plant the probe sentence"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  shared="$probe-shared.txt"
-  printf "%s\n" "---" "description: probe link skill for the outside target check" "---" "" "the probe layer sentence about harness budgets repeats here verbatim for the outside link check" > "$shared" ||
-    { echo "error: cannot plant the shared target"; exit 1; }
-  mkdir -p "$probe/.claude/skills/probe-link" ||
-    { echo "error: cannot make the probe skill"; exit 1; }
-  ln -s "$shared" "$probe/.claude/skills/probe-link/SKILL.md" ||
-    { echo "error: cannot link the probe skill"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) &&
-    { echo "error: the gate passed a duplicate through an outside link"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "FAIL  knowledge static" ||
-    { echo "error: the failure never named the static lane"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "duplicate facts" ||
-    { echo "error: the failure never said duplicate"; echo "$out"; exit 1; }
-  rm -f "$shared" ||
-    { echo "error: cannot clean the shared target"; exit 1; }'
-
-# A case name with a space runs once — one ok line, valid JSON rows — instead
-# of word-splitting into phantom FAILs.
-probe_step "eval.sh handles a spaced case name with one line and valid rows" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  mkdir -p "$probe/harness/evals/my case" ||
-    { echo "error: cannot make the spaced case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" ||
-    { echo "error: cannot seed the spaced case"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case "my case" 2>&1) ||
-    { echo "error: eval failed on a spaced case name"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "1" ] ||
-    { echo "error: want one ok line, got $n"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "^FAIL eval "; then
-    echo "error: the spaced name word-split into phantom FAILs"; echo "$out"; exit 1;
-  fi
-  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
-import json
-import sys
-rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
+cp "$probe/harness/evals/results.jsonl" "$probe/results-backup.jsonl" || probe_fail "cannot back up results"
+mkdir -p "$probe/gitlog" || probe_fail "cannot make the git log dir"
+realgit="$(command -v git)" || probe_fail "cannot locate git"
+printf "%s\n" "#!/bin/bash" "printf \"%s\\n\" \"git \$*\" >> \"$probe/gitlog/calls\"" "exec \"$realgit\" \"\$@\"" > "$probe/gitlog/git" || probe_fail "cannot plant fake git"
+chmod +x "$probe/gitlog/git" || probe_fail "cannot chmod the fake git"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe/gitlog:$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case commit-bead 2>&1) || probe_fail "second eval failed"
+echo "$out" | grep -q "^ok eval commit-bead" || probe_fail "second run never passed commit-bead"
+grep -q "show $rev:" "$probe/gitlog/calls" || probe_fail "verdict never read its baseline at the pinned rev"
+if grep -q "show HEAD:" "$probe/gitlog/calls"; then probe_fail "verdict read its baseline at live HEAD"; fi
+rows=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+[ "$rows" = "3" ] || probe_fail "second run never appended"
+n=$(wc -l < "$probe/results-backup.jsonl" | tr -d " ") || probe_fail "cannot count backup lines"
+head -n "$n" "$probe/harness/evals/results.jsonl" > "$probe/results-head.jsonl" || probe_fail "cannot slice the rerun"
+cmp -s "$probe/results-backup.jsonl" "$probe/results-head.jsonl" || probe_fail "second run rewrote earlier rows"
+rm -f "$probe/results-backup.jsonl" "$probe/results-head.jsonl" || probe_fail "cannot clean the comparison files"
+mkdir -p "$probe/harness/evals/my case" || probe_fail "cannot make the spaced case"
+cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" || probe_fail "cannot seed the spaced case"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case "my case" 2>&1) || probe_fail "eval failed on a spaced case name"
+n=$(echo "$out" | grep -c "^ok eval " || true)
+[ "$n" = "1" ] || probe_fail "want one ok line for the spaced case"
+python3 - "$probe/harness/evals/results.jsonl" <<PYEOF || probe_fail "no valid passing row for the spaced case"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
 assert any(row.get("case") == "my case" and row.get("pass") is True for row in rows), rows
 PYEOF
-    { echo "error: no valid passing row for the spaced case"; exit 1; }'
+rm -rf "$probe/harness/evals/my case" || probe_fail "cannot clean the spaced case"
+mv "$probe/harness/evals" "$probe/harness/evals-away" || probe_fail "cannot hide the probe evals"
+out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) && probe_fail "eval passed with no evals dir" || true
+echo "$out" | grep -q "no evals dir" || probe_fail "eval never named the missing dir"
+echo "$out" | grep -q "harness/evals" || probe_fail "eval never said which dir"
+mv "$probe/harness/evals-away" "$probe/harness/evals" || probe_fail "cannot restore the probe evals"
+rm -rf "$probe/harness/evals/commit-bead" "$probe/harness/evals/verify-gate" || probe_fail "cannot wipe the probe cases"
+rm -f "$probe/harness/evals/results.jsonl" || probe_fail "cannot clear the probe rows"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) || probe_fail "eval failed an empty suite with no baseline"
+echo "$out" | grep -q "SKIP" || probe_fail "empty run never said SKIP"
+echo "$out" | grep -q "harness/evals" || probe_fail "SKIP never named the evals dir"
+if echo "$out" | grep -q "^FAIL eval "; then probe_fail "empty skip failed a case"; fi
+[ ! -e "$probe/harness/evals/results.jsonl" ] || probe_fail "empty skip wrote result rows"
+'
 
-# A case name with a newline runs once on its raw directory: sanitised only
-# for the display rows, the name cannot re-split into phantom cases — three
-# ok lines under the spaced name, and valid JSON rows.
-probe_step "eval.sh handles a newline case name with one line and valid rows" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  nl="$(printf "\nX")"
-  nl="${nl%X}"
-  mkdir -p "$probe/harness/evals/my${nl}case" ||
-    { echo "error: cannot make the newline case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my${nl}case/" ||
-    { echo "error: cannot seed the newline case"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed on a seeded newline case"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "3" ] ||
-    { echo "error: want three ok lines, got $n"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "^FAIL eval "; then
-    echo "error: the newline case failed instead of running"; echo "$out"; exit 1;
-  fi
-  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
-import json
-import sys
-rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
-assert len(rows) == 3, rows
-assert any(row.get("case") == "my case" and row.get("pass") is True for row in rows), rows
-PYEOF
-    { echo "error: no valid passing row for the newline case"; exit 1; }'
-
-# Two raw names sanitising alike run both, with indexed rows — never silently
-# dropped through a sanitised sort.
-probe_step "eval.sh runs both cases when two names sanitise alike" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  nl="$(printf "\nX")"
-  nl="${nl%X}"
-  mkdir -p "$probe/harness/evals/my case" "$probe/harness/evals/my${nl}case" ||
-    { echo "error: cannot make the colliding cases"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" ||
-    { echo "error: cannot seed the spaced case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my${nl}case/" ||
-    { echo "error: cannot seed the newline case"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed on colliding case names"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "4" ] ||
-    { echo "error: want four ok lines, got $n"; echo "$out"; exit 1; }
-  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
-import json
-import sys
-rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
-assert len(rows) == 4, rows
-cases = sorted(row.get("case") for row in rows)
-assert "my case (1)" in cases and "my case (2)" in cases, cases
-assert all(row.get("pass") is True for row in rows), rows
-PYEOF
-    { echo "error: the collision dropped or merged a case"; exit 1; }'
-
-# Two sanitised names plus a literal of the suffixed form stay three cases:
-# a literal case name colliding with a generated suffix is skipped until a
-# free one, so no verdict entry collapses and no result is lost.
-probe_step "eval.sh keeps three names distinct when a literal suffix collides" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  nl="$(printf "\nX")"
-  nl="${nl%X}"
-  mkdir -p "$probe/harness/evals/my case" "$probe/harness/evals/my${nl}case" "$probe/harness/evals/my case (1)" ||
-    { echo "error: cannot make the colliding cases"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" ||
-    { echo "error: cannot seed the spaced case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my${nl}case/" ||
-    { echo "error: cannot seed the newline case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case (1)/" ||
-    { echo "error: cannot seed the literal case"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed on the triple collision"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "5" ] ||
-    { echo "error: want five ok lines, got $n"; echo "$out"; exit 1; }
-  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
-import json
-import sys
-rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
-assert len(rows) == 5, rows
-cases = [row.get("case") for row in rows]
-assert len(set(cases)) == 5, cases
-assert all(row.get("pass") is True for row in rows), rows
-PYEOF
-    { echo "error: the triple collision lost or merged a case"; exit 1; }'
-
-# A filtered --case run over a green baseline passes: the verdict scopes to
-# that case only, so unrelated committed-green cases read as neither deleted
-# nor dropping the totals.
-probe_step "a filtered --case run is judged against only that case" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed on a clean layer"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^ok eval commit-bead" ||
-    { echo "error: baseline never passed commit-bead"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^ok eval verify-gate" ||
-    { echo "error: baseline never passed verify-gate"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case commit-bead 2>&1) ||
-    { echo "error: a filtered run failed on a green baseline"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "^ok eval commit-bead" ||
-    { echo "error: the filtered run never passed commit-bead"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "but has no case now"; then
-    echo "error: the filtered run reported an unrelated case deleted"; echo "$out"; exit 1;
-  fi
-  if echo "$out" | grep -q "total passes dropped"; then
-    echo "error: the filtered run dropped totals over the full baseline"; echo "$out"; exit 1;
-  fi'
-
-# Through a symlinked project path the baseline still resolves: the verdict
-# names the committed-green regression instead of pleading no baseline.
-probe_step "eval.sh resolves its baseline through a symlinked project path" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  trap '"'"'rm -rf "$probe" "$probe-link"'"'"' EXIT
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  ln -s "$probe" "$probe-link" ||
-    { echo "error: cannot link the probe"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe-link" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe-link" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed through the symlink"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "2" ] ||
-    { echo "error: want two ok lines through the symlink, got $n"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant bad fake opencode"; exit 1; }
-  out=$(cd "$probe-link" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe-link" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: eval passed a breaking layer through the symlink"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "passed on the last committed harness, now fails" ||
-    { echo "error: the symlinked run never named the regression"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "no passing baseline yet"; then
-    echo "error: the symlinked run blinded the baseline"; echo "$out"; exit 1;
-  fi'
-
-# Deleting a costly skill credits its HEAD tokens: a delete-plus-add whose net
-# is negative passes the static lane instead of failing on the addition.
-probe_step "deleting a costly skill credits its cost in the static lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  mkdir -p "$probe/.claude/skills/probe-big" ||
-    { echo "error: cannot make the probe skill"; exit 1; }
-  desc=$(python3 -c "print(chr(120) * 12000)") ||
-    { echo "error: cannot size the probe description"; exit 1; }
-  printf "%s\n" "---" "description: $desc" "---" "" "Probe big body." > "$probe/.claude/skills/probe-big/SKILL.md" ||
-    { echo "error: cannot plant the probe skill"; exit 1; }
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  rm -rf "$probe/.claude/skills/probe-big" ||
-    { echo "error: cannot delete the probe skill"; exit 1; }
-  pad=$(python3 -c "print(chr(121) * 9000)") ||
-    { echo "error: cannot size the probe addition"; exit 1; }
-  printf "%s\n" "# probe costly line" "$pad" >> "$probe/CLAUDE.md" ||
-    { echo "error: cannot dirty CLAUDE.md"; exit 1; }
-  mkdir -p "$probe/fakehome" ||
-    { echo "error: cannot make fakehome"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed"; echo "$out"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
-    { echo "error: the gate failed a net-negative knowledge diff"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "  ok    knowledge static" ||
-    { echo "error: the static lane never passed the net-negative diff"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "tokens (-" ||
-    { echo "error: the cost line never showed the deletion credit"; echo "$out"; exit 1; }'
-
-# The behavioural trigger covers the whole always-loaded layer: an
-# AGENTS.local.md change fires it and passes, while body prose mentioning
-# description: in a skill does not fire it at all.
-probe_step "AGENTS.local.md fires the behavioural lane, skill body prose does not" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  mkdir -p "$probe/.claude/skills/probe-trigger" ||
-    { echo "error: cannot make the probe skill"; exit 1; }
-  printf "%s\n" "---" "description: probe trigger skill for the behavioural lane" "---" "" "Probe trigger body." > "$probe/.claude/skills/probe-trigger/SKILL.md" ||
-    { echo "error: cannot plant the probe skill"; exit 1; }
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the baseline results"; exit 1; }
-  mkdir -p "$probe/fakehome" ||
-    { echo "error: cannot make fakehome"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed"; echo "$out"; exit 1; }
-  printf "%s\n" "# probe local line" >> "$probe/AGENTS.local.md" ||
-    { echo "error: cannot dirty AGENTS.local.md"; exit 1; }
-  rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
-    { echo "error: the gate failed a benign AGENTS.local.md change"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "  ok    knowledge behavioural" ||
-    { echo "error: behavioural never passed the benign change"; echo "$out"; exit 1; }
-  rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  [ "${rows1:-0}" -gt "${rows0:-0}" ] ||
-    { echo "error: no eval ran on the AGENTS.local.md change ($rows0 -> $rows1) — lane detail lives in the swallowed probe log, so row growth is the signal"; echo "$out"; exit 1; }
-  (cd "$probe" && git add AGENTS.local.md harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe local change" >/dev/null 2>&1) ||
-    { echo "error: cannot commit the probe local change"; exit 1; }
-  printf "%s\n" "See the description: field above for the full contract." >> "$probe/.claude/skills/probe-trigger/SKILL.md" ||
-    { echo "error: cannot dirty the probe skill body"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify 2>&1) ||
-    { echo "error: the gate failed on skill body prose"; echo "$out"; exit 1; }
-  rows2=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  [ "$rows1" = "$rows2" ] ||
-    { echo "error: an eval ran on skill body prose ($rows1 -> $rows2)"; echo "$out"; exit 1; }'
-
-# Undecodable HEAD bytes never traceback the static lane, and the same byte
-# in a skill still triggers the behavioural lane: a committed cp1252 byte in
-# CLAUDE.md plus a benign AGENTS.md touch passes static with no traceback,
-# then a new skill carrying the byte runs the behavioural eval.
-probe_step "undecodable HEAD bytes never traceback the static lane" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  python3 - "$probe/CLAUDE.md" <<PYEOF ||
-import sys
-p = sys.argv[1]
-open(p, "ab").write(b"probe cp1252 line \x93 here\n")
-PYEOF
-    { echo "error: cannot plant cp1252 byte"; exit 1; }
-  (cd "$probe" && git add CLAUDE.md >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe cp1252 head" >/dev/null 2>&1) ||
-    { echo "error: cannot commit cp1252 head"; exit 1; }
-  mkdir -p "$probe/fakehome" ||
-    { echo "error: cannot make fakehome"; exit 1; }
-  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
-    { echo "error: bless failed"; echo "$out"; exit 1; }
-  printf "%s\n" "# probe benign line" >> "$probe/AGENTS.md" ||
-    { echo "error: cannot dirty AGENTS.md"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1) ||
-    { echo "error: static failed on undecodable HEAD"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "  ok    knowledge static" ||
-    { echo "error: static never passed undecodable HEAD"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: static traceback on undecodable HEAD"; echo "$out"; exit 1;
-  fi
-  (cd "$probe" && git checkout -- AGENTS.md >/dev/null 2>&1) ||
-    { echo "error: cannot restore AGENTS.md"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: baseline eval failed"; echo "$out"; exit 1; }
-  (cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) ||
-    { echo "error: cannot commit baseline"; exit 1; }
-  mkdir -p "$probe/.claude/skills/probe-cp1252" ||
-    { echo "error: cannot make probe skill"; exit 1; }
-  python3 - "$probe/.claude/skills/probe-cp1252/SKILL.md" <<PYEOF ||
-import sys
-p = sys.argv[1]
-open(p, "wb").write(b"---\ndescription: probe cp1252 \x93 skill\n---\n\nProbe body.\n")
-PYEOF
-    { echo "error: cannot plant cp1252 skill"; exit 1; }
-  rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" "$probe/scripts/harness" verify 2>&1) ||
-    { echo "error: gate failed on cp1252 skill"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "  ok    knowledge behavioural" ||
-    { echo "error: behavioural never passed cp1252 skill"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "Traceback"; then
-    echo "error: traceback on cp1252 skill"; echo "$out"; exit 1;
-  fi
-  rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
-  [ "${rows1:-0}" -gt "${rows0:-0}" ] ||
-    { echo "error: no eval ran on cp1252 skill"; echo "$out"; exit 1; }'
-
-# A carriage-return case name runs green with one valid row, and vertical-tab
-# and form-feed names survive the same pass: five ok lines, no FAIL, no
-# malformed rows, and valid passing JSON for every control name.
-probe_step "eval handles carriage-return and vertical-tab names" bash -c '
-  golden_probe || exit 1
-  top="$PWD"
-  root="$(probe_shared_root "$probe")" || exit 1
-  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
-    { echo "error: cannot plant trivial steps"; exit 1; }
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  cr="$(printf "\rX")"
-  cr="${cr%X}" ||
-    { echo "error: cannot shape carriage return"; exit 1; }
-  vt="$(printf "\vX")"
-  vt="${vt%X}" ||
-    { echo "error: cannot shape vertical tab"; exit 1; }
-  ff="$(printf "\fX")"
-  ff="${ff%X}" ||
-    { echo "error: cannot shape form feed"; exit 1; }
-  mkdir -p "$probe/harness/evals/bad${cr}case" ||
-    { echo "error: cannot make cr case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/bad${cr}case/" ||
-    { echo "error: cannot seed cr case"; exit 1; }
-  mkdir -p "$probe/harness/evals/vt${vt}case" "$probe/harness/evals/ff${ff}case" ||
-    { echo "error: cannot make control cases"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/vt${vt}case/" ||
-    { echo "error: cannot seed vt case"; exit 1; }
-  cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/ff${ff}case/" ||
-    { echo "error: cannot seed ff case"; exit 1; }
-  fake="$probe/opencode"
-  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
-    { echo "error: cannot plant fake opencode"; exit 1; }
-  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
-  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) ||
-    { echo "error: eval failed on control names"; echo "$out"; exit 1; }
-  n=$(echo "$out" | grep -c "^ok eval " || true)
-  [ "$n" = "5" ] ||
-    { echo "error: want five ok lines, got $n"; echo "$out"; exit 1; }
-  if echo "$out" | grep -q "^FAIL eval "; then
-    echo "error: control names failed instead of running"; echo "$out"; exit 1;
-  fi
-  if echo "$out" | grep -q "malformed"; then
-    echo "error: control names split into malformed rows"; echo "$out"; exit 1;
-  fi
-  python3 - "$probe/harness/evals/results.jsonl" <<PYEOF ||
-import json
-import sys
-rows = [json.loads(line) for line in open(sys.argv[1]) if line.strip() and not line.startswith("#")]
-assert len(rows) == 5, rows
-cases = [row.get("case") for row in rows]
-assert "bad case" in cases, cases
-assert "vt case" in cases, cases
-assert "ff case" in cases, cases
-assert all(row.get("pass") is True for row in rows), rows
-PYEOF
-    { echo "error: no valid rows for control names"; exit 1; }'
-
-# A project with no evals dir fails loudly naming it instead of writing rows
-# into the shared checkout, where no status shows them and no clone resolves
-# the baseline.
-probe_step "eval.sh fails loudly with no project evals dir" bash -c '
-  golden_probe || exit 1
-  root="$(probe_shared_root "$probe")" || exit 1
-  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
-    { echo "error: probe init commit failed"; exit 1; }
-  mv "$probe/harness/evals" "$probe/harness/evals-away" ||
-    { echo "error: cannot hide the probe evals"; exit 1; }
-  out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) &&
-    { echo "error: eval passed with no evals dir"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "no evals dir" ||
-    { echo "error: eval never named the missing dir"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "harness/evals" ||
-    { echo "error: eval never said which dir"; echo "$out"; exit 1; }'
+# Behavioural lane through the real gate lane: one case keeps each run cheap while the trigger and verdict prove memory-only skip, break naming the case, benign pass, body-prose skip and deleted skill fail.
+probe_step "knowledge behavioural lane" bash -c '
+PROBE_SCENARIO="knowledge behavioural lane"
+golden_probe || probe_fail "no golden fixture"
+top="$PWD"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+mkdir -p "$probe/.claude/skills/probe-victim" || probe_fail "cannot make the probe victim skill"
+mkdir -p "$probe/.claude/skills/probe-trigger" || probe_fail "cannot make the probe trigger skill"
+printf "%s\n" "---" "description: probe victim skill the eval cases depend on" "---" "" "Probe victim body." > "$probe/.claude/skills/probe-victim/SKILL.md" || probe_fail "cannot plant the probe victim skill"
+printf "%s\n" "---" "description: probe trigger skill for the behavioural lane" "---" "" "Probe trigger body." > "$probe/.claude/skills/probe-trigger/SKILL.md" || probe_fail "cannot plant the probe trigger skill"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) || probe_fail "probe init commit failed"
+rm -rf "$probe/harness/evals/verify-gate" || probe_fail "cannot trim to one case"
+# One case keeps each lane run cheap; the eval runner scenario covers the multi-case verdict.
+fake="$probe/opencode"
+printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    bad=False" "    try:" "        bad=\"BREAK\" in open(\"CLAUDE.md\").read()" "    except OSError:" "        bad=False" "    good=os.path.isfile(\".claude/skills/probe-victim/SKILL.md\")" "    ok=(not bad) and good" "    open(\"msg.txt\",\"w\").write(\"probe work for har-000\n\" if ok else \"no bead here\n\")" "    open(\"gate-cmd.txt\",\"w\").write(\"scripts/harness verify\n\" if ok else \"make check\n\")" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":\"probe reply\"},\"sessionID\":\"ses_probe\"}))" > "$fake" || probe_fail "cannot plant fake opencode"
+chmod +x "$fake" || probe_fail "cannot chmod the fake"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" 2>&1) || probe_fail "baseline eval failed on a clean layer"
+n=$(echo "$out" | grep -c "^ok eval " || true)
+[ "$n" = "1" ] || probe_fail "want one ok line at baseline"
+(cd "$probe" && git add harness/evals/results.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe baseline results" >/dev/null 2>&1) || probe_fail "cannot commit the baseline results"
+run_behavioural_lane() {
+(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" "$probe/scripts/harness" verify --lane knowledge-behavioural 2>&1)
+}
+(cd "$probe" && bd remember "probe memory trap for the behavioural lane" --key "probe-memory-trap" >/dev/null 2>&1) || probe_fail "cannot remember a probe memory"
+tries=0
+while ! (cd "$probe" && bd recall probe-memory-trap >/dev/null 2>&1); do tries=$((tries + 1)); [ "$tries" -ge 60 ] && probe_fail "probe memory never landed"; sleep 0.5; done
+(cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) || probe_fail "cannot regen the probe export"
+(cd "$probe" && git add .beads/issues.jsonl >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe memory export" >/dev/null 2>&1) || probe_fail "cannot commit the probe export"
+rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+out=$(run_behavioural_lane) || probe_fail "lane failed on a memory-only change"
+echo "$out" | grep -q "no always-loaded change" || probe_fail "lane never skipped on a memory-only change"
+rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+[ "$rows0" = "$rows1" ] || probe_fail "an eval ran on a memory-only change"
+printf "%s\n" "BREAK the always-loaded layer for the probe" >> "$probe/CLAUDE.md" || probe_fail "cannot break CLAUDE.md"
+out=$(run_behavioural_lane) && probe_fail "lane passed a breaking CLAUDE.md change" || true
+echo "$out" | grep -q "FAIL  knowledge behavioural" || probe_fail "failure never named the behavioural lane"
+echo "$out" | grep -q "commit-bead" || probe_fail "failure never named the case"
+(cd "$probe" && git checkout -- CLAUDE.md >/dev/null 2>&1) || probe_fail "cannot restore CLAUDE.md"
+printf "%s\n" "# probe local line" >> "$probe/AGENTS.local.md" || probe_fail "cannot dirty AGENTS.local.md"
+out=$(run_behavioural_lane) || probe_fail "lane failed a benign AGENTS.local.md change"
+echo "$out" | grep -q "  ok    knowledge behavioural" || probe_fail "lane never passed the benign change"
+(cd "$probe" && git checkout -- AGENTS.local.md >/dev/null 2>&1) || probe_fail "cannot restore AGENTS.local.md"
+printf "%s\n" "See the description: field above for the full contract." >> "$probe/.claude/skills/probe-trigger/SKILL.md" || probe_fail "cannot dirty the probe skill body"
+rows0=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+out=$(run_behavioural_lane) || probe_fail "lane failed on skill body prose"
+echo "$out" | grep -q "no always-loaded change" || probe_fail "lane never skipped skill body prose"
+rows1=$(grep -c "\"case\":" "$probe/harness/evals/results.jsonl" 2>/dev/null || true)
+[ "$rows0" = "$rows1" ] || probe_fail "an eval ran on skill body prose"
+(cd "$probe" && git checkout -- .claude/skills/probe-trigger/SKILL.md >/dev/null 2>&1) || probe_fail "cannot restore the probe skill"
+rm -rf "$probe/.claude/skills/probe-victim" || probe_fail "cannot delete the probe skill"
+out=$(run_behavioural_lane) && probe_fail "lane passed a deleted dependent skill" || true
+echo "$out" | grep -q "FAIL  knowledge behavioural" || probe_fail "failure never named the behavioural lane"
+echo "$out" | grep -q "commit-bead" || probe_fail "failure never named the case"
+'
 
 if [ "$mode" != "--quick" ]; then
   step "cli lists commands" bash -c 'bin/harness | grep -q "^  add"'
