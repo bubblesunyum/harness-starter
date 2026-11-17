@@ -49,6 +49,7 @@ HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 . "$HARNESS/scripts/lib/paths.sh"
+. "$HARNESS/scripts/lib/journal.sh"
 
 # Budget: the brief is capped so it can't quietly grow into another `bd prime`.
 # A long ready list is a planning problem, not a reason to print more. The one
@@ -495,6 +496,14 @@ $part"
 # that half is skipped rather than the whole brief failing.
 if [ -n "$prepend" ]; then graft before "$prepend"; fi
 if [ -n "$append" ]; then graft after "$append"; fi
+# Another session's unclosed journal, in at most one line: the check lives in
+# the journal lib so probes exercise the same path the brief prints. Silent
+# is the common case, which is what keeps the brief in budget.
+orphan_line="$(journal_orphan)"
+if [ -n "$orphan_line" ]; then
+  text="$text
+$orphan_line"
+fi
 [ -z "$text" ] && exit 0
 
 if [ "$hook" -eq 1 ]; then

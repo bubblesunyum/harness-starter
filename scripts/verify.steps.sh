@@ -630,6 +630,68 @@ probe_step "retired commands print their pointer and exit 2" bash -c '
   bin/harness 2>&1 | grep -q "retired" ||
     { echo "error: the listing never names the retired commands"; exit 1; }'
 
+# The session journal, through a reference install: two session ids write
+# separate live files, the live pattern is gitignored after link, the brief
+# names the unclosed journal, close removes only the closer's own file, and
+# the real commit hook closes the same way. Event writes go through the
+# shared lib directly — a full verify-in-a-probe would nest gates — while
+# ignore, brief, close and the hook run the paths a real session uses.
+probe_step "session journal" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  jl="$root/scripts/lib/journal.sh"
+  HARNESS_HOME="$PWD" "$probe/scripts/harness" link >/dev/null 2>&1 ||
+    { echo "error: link failed in the probe"; exit 1; }
+  (cd "$probe" && git check-ignore -q harness/handoffs/.live-probe-a.md) ||
+    { echo "error: live journal files are not gitignored after link"; exit 1; }
+  HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "FAILED probe-build" ||
+    { echo "error: session-a journal write failed"; exit 1; }
+  HARNESS_SESSION_ID=probe-b HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "passed" ||
+    { echo "error: session-b journal write failed"; exit 1; }
+  [ -f "$probe/harness/handoffs/.live-probe-a.md" ] ||
+    { echo "error: session-a live file missing"; exit 1; }
+  [ -f "$probe/harness/handoffs/.live-probe-b.md" ] ||
+    { echo "error: session-b live file missing — sessions share one file"; exit 1; }
+  grep -q "FAILED probe-build" "$probe/harness/handoffs/.live-probe-a.md" ||
+    { echo "error: the failing run never landed in the live file"; exit 1; }
+  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" HARNESS_SESSION_ID=probe-c "$probe/scripts/harness" brief 2>&1) ||
+    { echo "error: brief failed in the probe"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "probe-a" ||
+    { echo "error: brief never named the unclosed journal"; echo "$out"; exit 1; }
+  HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" close ||
+    { echo "error: session-a close failed"; exit 1; }
+  [ ! -e "$probe/harness/handoffs/.live-probe-a.md" ] ||
+    { echo "error: session-a live file survives its own close"; exit 1; }
+  [ -f "$probe/harness/handoffs/.live-probe-b.md" ] ||
+    { echo "error: session-a close removed the session-b live file"; exit 1; }
+  HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" event verify "passed" ||
+    { echo "error: session-a journal rewrite failed"; exit 1; }
+  printf "# probe note\n" > "$probe/harness/handoffs/note-probe.md" ||
+    { echo "error: cannot plant the probe handoff note"; exit 1; }
+  (cd "$probe" && git reset -q .beads/issues.jsonl 2>/dev/null || true; git add harness/handoffs/note-probe.md &&
+    printf "probe close\n" > .tmp-probe-msg &&
+    HARNESS_SESSION_ID=probe-a HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/hooks/commit-msg" .tmp-probe-msg; rc=$?; rm -f .tmp-probe-msg; [ $rc -eq 0 ]) ||
+    { echo "error: the close hook through the real hook failed"; exit 1; }
+  [ ! -e "$probe/harness/handoffs/.live-probe-a.md" ] ||
+    { echo "error: session-a live file survives its hook close"; exit 1; }
+  [ -f "$probe/harness/handoffs/.live-probe-b.md" ] ||
+    { echo "error: session-a hook close removed the session-b live file"; exit 1; }'
+
+# A review finding the session accepted, appended to harness/learning.jsonl
+# with its category — through the shared lib, read back as JSON.
+probe_step "findings log" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  jl="$root/scripts/lib/journal.sh"
+  HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$jl" finding --category probe-slug --reviewer reviewer-taste --bead probe-1 --outcome accepted --note "probe finding" ||
+    { echo "error: finding append failed"; exit 1; }
+  python3 - "$probe/harness/learning.jsonl" <<PYEOF ||
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
+assert rows and rows[-1].get("category") == "probe-slug", rows
+PYEOF
+    { echo "error: finding never landed with its category"; exit 1; }'
+
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
 # pattern from the reader.

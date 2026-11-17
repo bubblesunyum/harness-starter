@@ -940,6 +940,12 @@ def harness():
         nodes = []
         for pattern, origin, role, *cap in members:
             for path in resolve(pattern, cap[0] if cap else 0):
+                # Live session journals (.live-<id>.md) are scratch, never a
+                # closing note: pathlib's glob matches dotfiles, so without
+                # this the wake lane's handoffs/*.md would render an unclosed
+                # session as the last one.
+                if pattern == "harness/handoffs/*.md" and path.name.startswith(".live-"):
+                    continue
                 rel = str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
                 # A broad glob is written after the entries that call specific
                 # files out by name, so the stage that names a piece keeps it and

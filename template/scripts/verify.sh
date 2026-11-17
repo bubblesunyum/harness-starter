@@ -55,6 +55,7 @@ HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 . "$HARNESS/scripts/lib/paths.sh"
+. "$HARNESS/scripts/lib/journal.sh"
 
 # The ledger's bead prefix, asked of the ledger itself at runtime — baked into
 # this file once per install, which made every copy differ and un-updatable.
@@ -243,11 +244,12 @@ probe_step() {
   probe_names+=("$name")
 }
 
-# A path the ledger lane owns: the live export plus the capture locations a
-# bead close or a handoff note moves. Everything else widens the scope.
+# A path the ledger lane owns: the live export, the capture locations a
+# bead close or a handoff note moves, and the findings log sessions append
+# to. Everything else widens the scope.
 is_ledger_path() {
   case "$1" in
-    .beads|.beads/*|harness/handoffs|harness/handoffs/*|harness/laurels.jsonl) return 0;;
+    .beads|.beads/*|harness/handoffs|harness/handoffs/*|harness/laurels.jsonl|harness/learning.jsonl) return 0;;
     *) return 1;;
   esac
 }
@@ -551,4 +553,13 @@ if [ "$failed" -ne 0 ] && [ "${#failed_names[@]}" -gt 0 ]; then
 fi
 
 [ "$failed" -eq 0 ] && echo "verify: passed" || echo "verify: FAILED"
+# The session's live journal: one machine-written line per run, never model
+# prose. A failure and the pass that followed both land, so the journal shows
+# the loop, not just its end. Loud but never fatal — the verdict above stands
+# whatever the journal does.
+if [ "$failed" -eq 0 ]; then
+  journal_event "verify" "passed"
+else
+  journal_event "verify" "FAILED ${_failed_line:-$failed}"
+fi
 exit "$failed"

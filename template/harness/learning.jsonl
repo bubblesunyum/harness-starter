@@ -1,0 +1,3 @@
+# Review findings the session accepted or rejected, one JSON object per line.
+# Readers skip blank lines and lines starting with `#`, which is what this is.
+# {"kind":"finding","category":"<short-slug>","reviewer":"reviewer-taste|reviewer-correctness|reviewer-design","bead":"<bead-id>","outcome":"accepted|rejected","note":"<one line>"}

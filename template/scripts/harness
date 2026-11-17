@@ -293,6 +293,10 @@ cmd_link() {
   link_stacks
   link_contract
   link_codex
+  # The per-session live journal: gitignored, so one session's loop notes
+  # never show up as another session's diff. The target's .gitignore is the
+  # target's, so this is one line, not a file.
+  ensure_gitignore "$PROJECT/.gitignore" "harness/handoffs/.live-*.md"
 }
 
 # A name in harness/stacks.txt with no shared guidance: loud, never fatal.

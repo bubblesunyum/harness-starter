@@ -98,6 +98,7 @@ scripts/review.scope.sh
 dashboard.toml
 harness/diverged.txt
 harness/laurels.jsonl
+harness/learning.jsonl
 harness/handoffs/.gitkeep
 EOF
   if [ -n "$missing" ]; then

@@ -7,6 +7,7 @@
   scripts/agent.py
   scripts/brief.sh
   scripts/context.py
+  scripts/lib/journal.sh
   scripts/opencode-agents.py
   scripts/review.sh
   scripts/verify.sh
@@ -382,6 +383,24 @@ describes is, so no reviewer looking at the change will see it.
 This file is tracked. In the project it came from it went stale as an untracked
 note, claiming two reviewers and six skills long after there were four and
 seven, and no gate caught it because nothing was watching.
+
+## A session leaves a journal, and its findings stay searchable
+
+Loop boundaries write machine lines to a per-session live journal —
+`harness/handoffs/.live-<session-id>.md`, gitignored — so a failed gate, the
+pass that followed, the packet built for review, and the commit carrying its
+bead are all on record with zero model tokens. The session id comes from the
+tool first (`HARNESS_SESSION_ID` to override, else the tool's own session
+id); when none can be derived the scripts say so and write nothing rather
+than sharing one file. Committed handoff notes stay one immutable file per
+close; the close removes only its own live file, and the brief names another
+session's unclosed journal in one line.
+
+Review findings the session accepts or rejects land in
+`harness/learning.jsonl` as `{"kind":"finding","category":…}` — one object
+per line, category a short slug the session chose. The agentic-review skill
+says how; readers skip `#` and blank lines, which is what the seed's schema
+comment is.
 
 ## File the bead as planning begins
 

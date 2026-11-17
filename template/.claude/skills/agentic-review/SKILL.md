@@ -120,6 +120,25 @@ File anything worth doing but out of scope as a bead (`bd q "…"`) instead of
 expanding the change. Don't leave findings only in the conversation; that's the
 one place they're guaranteed to be lost.
 
+## Logging what you decided
+
+Each finding you accept or reject is a durable trap for the next session.
+Append one line per finding to `harness/learning.jsonl`:
+
+```bash
+root="$(scripts/harness root)"
+bash "$root/scripts/lib/journal.sh" finding --category <short-slug> \
+  --reviewer <role-that-found-it> --bead <bead-id> --outcome accepted --note "<one line>"
+```
+
+- `--category` is a short free-text slug you choose (`retain-cycle`,
+  `stale-seed`, `clipped-card`).
+- `--reviewer` is the role that found it (`reviewer-taste`,
+  `reviewer-correctness`, `reviewer-design`); `--bead` the work it belongs to.
+- `--outcome` is `accepted` (you fixed or filed it) or `rejected` (you left
+  it, and the note says why).
+- One line per finding; nothing to log when the review found nothing.
+
 ## Scaling it down
 
 Not every change earns three agents. A one-line fix, a comment, a test tweak —

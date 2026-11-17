@@ -17,6 +17,7 @@
 #   dashboard/vendor/*   third-party assets, copied whole, no substitution
 #   *.gitkeep            empty by definition
 #   harness/laurels.jsonl  a log the project appends to; the template ships it empty
+#   harness/learning.jsonl a log the project appends to; the template ships it with a schema comment
 #   harness/diverged.txt   the acknowledged-fork list; the project edits it,
 #                          the template ships it empty
 #   .claude/context.lock   doc hashes; the template's covers the shared docs,
@@ -27,7 +28,7 @@ harness_is_data() {
   # what this matches.
   harness_is_seed "$1" && return 1
   case "$1" in
-    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/diverged.txt|.claude/context.lock) return 0 ;;
+    dashboard/vendor/*|*/.gitkeep|.gitkeep|harness/laurels.jsonl|harness/learning.jsonl|harness/diverged.txt|.claude/context.lock) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -524,6 +525,7 @@ scripts/review.scope.sh
 dashboard.toml
 harness/diverged.txt
 harness/laurels.jsonl
+harness/learning.jsonl
 harness/handoffs/.gitkeep
 EOF
 }

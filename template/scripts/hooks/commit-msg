@@ -10,6 +10,28 @@ set -uo pipefail
 msg_file="$1"
 git_dir="$(git rev-parse --git-dir)"
 
+# The shared checkout, for the journal lib below: set by `scripts/harness
+# hook`, else the tree this hook file lives in. Guarded at use, so a checkout
+# without the lib journals nothing rather than failing the commit.
+HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)}"
+if [ -n "${HARNESS:-}" ] && [ -f "$HARNESS/scripts/lib/journal.sh" ]; then
+  . "$HARNESS/scripts/lib/journal.sh"
+fi
+
+# Whether the staged tree carries a committed handoff note: the close's own
+# record. Live journal files (.live-*.md) are the session's scratch, never a
+# close.
+staged_handoff_note() {
+  local path
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      harness/handoffs/.live-*.md) ;;
+      harness/handoffs/*.md) return 0;;
+    esac
+  done < <(git diff --cached --name-only --no-renames -z)
+  return 1
+}
+
 # A merge resolves other commits that already named their beads, and a bisect or
 # a cherry-pick is replaying someone else's message. Neither is new work.
 [ -e "$git_dir/MERGE_HEAD" ] && exit 0
@@ -57,6 +79,7 @@ artifact_only_commit() {
     count=$((count + 1))
     case "$path" in
       harness/laurels.jsonl) ;;
+      harness/handoffs/.live-*.md) return 1;;
       *)
         if [[ "$path" =~ ^harness/handoffs/[^/]+\.md$ ]]; then
           :
@@ -70,6 +93,15 @@ artifact_only_commit() {
 }
 
 if artifact_only_commit; then
+  # The close's own commit (or a laurels-only one): no bead to name, but the
+  # journal still records it — and a staged handoff note means this session
+  # is closing, so its own live file goes. Never another session's.
+  if command -v journal_event >/dev/null 2>&1; then
+    journal_event "commit" "artifact-only"
+    if staged_handoff_note; then
+      journal_close
+    fi
+  fi
   exit 0
 fi
 
@@ -108,6 +140,17 @@ if command -v bd >/dev/null 2>&1; then
     echo >&2
     exit 1
   fi
+fi
+
+# The session's live journal: one machine-written line naming the bead. Loud
+# but never blocking: a missing session id must not fail a commit. Never
+# closed here, even when this commit carries a handoff note: a mixed commit
+# (`git add -A` sweeping another session's note alongside bead work) is not a
+# close, and closing would delete this session's live file mid-session. The
+# missed close costs one cosmetic orphan line in the brief; a deleted active
+# journal is destroyed state.
+if command -v journal_event >/dev/null 2>&1; then
+  journal_event "commit" "$ids"
 fi
 
 exit 0

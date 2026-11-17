@@ -18,6 +18,7 @@ HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 . "$HARNESS/scripts/lib/paths.sh"
+. "$HARNESS/scripts/lib/journal.sh"
 
 # The per-role roster lives machine-locally in harness/models.json, and a
 # fresh clone has none. First review writes it, pinned and without prompting;
@@ -215,6 +216,7 @@ if [ -n "$binding_role" ]; then
     echo "refusing: packet is ~$tokens tokens, over $binding_role's ${binding_budget}-token budget." >&2
     echo "no reviewer is handed a packet it cannot read whole. $narrow_hint." >&2
     echo "packet left at $packet for inspection — do not hand it to a reviewer whole." >&2
+    journal_event "review" "refused: ~$tokens tokens over $binding_role budget" || true
     exit 1
   fi
 elif [ "$lines" -gt 3000 ]; then
@@ -225,3 +227,6 @@ elif [ "$lines" -gt 3000 ]; then
 fi
 
 echo "$packet ($label, $(echo "$files" | grep -c . ) files, $lines lines, ~$tokens tokens)"
+# One machine-written line for the session's live journal: the packet got
+# built. Loud but never fatal — a missing session id must not fail a review.
+journal_event "review" "packet built: $label" || true

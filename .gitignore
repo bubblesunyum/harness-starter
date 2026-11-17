@@ -31,3 +31,4 @@ __pycache__/
 .opencode/agent/reviewer-design.md
 .opencode/agent/reviewer-taste.md
 .harness-contract.md
+harness/handoffs/.live-*.md

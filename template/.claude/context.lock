@@ -5,21 +5,22 @@
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
     ".claude/skills/workflow/SKILL.md": "d696bb0a4c3720c6",
-    "doc": "1550ae5c8c227595",
+    "doc": "47deec37475a8cbd",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/brief.sh": "43ff2dd12f8f4c9a",
+    "scripts/brief.sh": "06c4a2dc23ea0a5b",
     "scripts/context.py": "10cc149551799da1",
+    "scripts/lib/journal.sh": "1f306ce3c5909e40",
     "scripts/opencode-agents.py": "93110656147263ba",
-    "scripts/review.sh": "46d38b77b101d31e",
-    "scripts/verify.sh": "713998502cb78adb"
+    "scripts/review.sh": "292618fa5324f976",
+    "scripts/verify.sh": "8aa612394c63fdc0"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "3c1250aa822d14fd",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
-    "doc": "933acd3c274914ae",
+    "doc": "b1fc459e187586a5",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/review.sh": "46d38b77b101d31e"
+    "scripts/review.sh": "292618fa5324f976"
   },
   ".claude/skills/delegate/SKILL.md": {
     "doc": "6e7593ae23e1fac0",
@@ -27,15 +28,15 @@
   },
   ".claude/skills/handoff/SKILL.md": {
     "doc": "3555abc4f08e7ee2",
-    "scripts/brief.sh": "43ff2dd12f8f4c9a",
+    "scripts/brief.sh": "06c4a2dc23ea0a5b",
     "scripts/wrap-up.sh": "0cfb7cf9dc8c45a4"
   },
   ".claude/skills/orchestrate/SKILL.md": {
     "doc": "0db2f2c316dffe8b",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/brief.sh": "43ff2dd12f8f4c9a",
-    "scripts/review.sh": "46d38b77b101d31e",
-    "scripts/verify.sh": "713998502cb78adb"
+    "scripts/brief.sh": "06c4a2dc23ea0a5b",
+    "scripts/review.sh": "292618fa5324f976",
+    "scripts/verify.sh": "8aa612394c63fdc0"
   },
   ".claude/skills/workflow/SKILL.md": {
     "doc": "d696bb0a4c3720c6",
