@@ -86,8 +86,8 @@ build command above for the session to run and review, and any memory merges or
 renames that would make the mechanical grouping (first slug segment of each key)
 land better. Rebuilding after any ledger change is the same command; deleting
 the directory and rebuilding must diff empty. A cap breach fails the build
-loudly instead of shipping a wiki bigger than its sources. Memory deletions stay
-user-gated with an archive copy, exactly like any other deletion you propose.
+loudly instead of shipping a wiki bigger than its sources. Memory deletions keep
+an archive copy, exactly like any other deletion you propose.
 
 If the project logs `bd recall` keys, weight by access — a memory nobody
 recalls in scope is a prune candidate, one recalled constantly is a promote
@@ -131,10 +131,10 @@ stale history in the file), so the next pass scopes from there.
 You propose. You do not edit files, close beads, or commit — the session that
 called you decides what to take.
 
-Deleting a memory is the one proposal that can't be reviewed after the fact:
-the memory directory lives outside the repo, so `rm` there has no `git revert`
-behind it. When you propose deleting one, quote enough of it that the decision
-can be made from your report alone. The session applying your proposals copies
-the file to `.claude/memory-archive/` and shows the user the deletions before
-removing anything.
+Deleting a memory has no `git revert` behind it: bd memories and the native
+memory directory both live outside the tree. When you propose deleting one,
+quote it in full. The session applying your proposals archives each deleted
+memory to `.claude/memory-archive/` (committed) and applies deletions, merges
+and moves without a separate user check — the archive is the undo, and the
+handoff note lists what went.
 """

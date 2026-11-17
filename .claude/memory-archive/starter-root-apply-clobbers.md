@@ -1,0 +1,1 @@
+harness update --apply in the starter's own root writes the template over root docs that carry starter-specific notes (HARNESS.md, agentic-review). Those are forks: keep them in harness/diverged.txt, and apply template edits to them by hand.

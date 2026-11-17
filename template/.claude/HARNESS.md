@@ -427,7 +427,7 @@ overlay, a delta to a skill or to `CLAUDE.md` — and every candidate lands in
 passes `--candidates-file` when it keeps from a reviewed list, so the indices
 mean what the session saw; without one a fresh run renumbers them. The
 calling session decides; the script never rewrites prose on its own. Memory
-deletions stay user-gated with an archive copy; lessons only add.
+deletions keep an archive copy; lessons only add.
 Orchestrated rounds reflect once per round, at the orchestrator's close, not
 per worker.
 
@@ -460,7 +460,8 @@ moves up a tier), correct (memories naming commands, paths, flags, and numbers
 checked against the repo, the handoffs, and the closed beads — false claims
 first), and prune. A finding category seen 3 times becomes a reviewer-trap
 proposal by rule. The librarian proposes only, exactly like the reflector;
-memory deletions stay user-gated with an archive copy. If the project logs
+memory deletions keep an archive copy, applied without a separate user
+check — the archive is the undo. If the project logs
 `bd recall` keys, later passes weight by access; otherwise they skip that —
 never new instrumentation on the hot path.
 
