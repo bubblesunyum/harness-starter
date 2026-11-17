@@ -89,10 +89,22 @@ rm -f "$LOGS/timings"
 
 mode="${1:---default}"
 failed=0
+# Every failure names its step for the summary before the verdict: report()
+# records serial steps here, drain_probes records failed probes.
+failed_names=()
+note_failed() {
+  failed=1
+  local want="$1" e
+  for e in ${failed_names[@]+"${failed_names[@]}"}; do
+    [ "$e" = "$want" ] && return 0
+  done
+  failed_names+=("$want")
+}
 started=$SECONDS
 probes_run=0
 probe_pids=()
 probe_bases=()
+probe_names=()
 
 # How many probes fly at once: the machine's CPUs, clamped 2..8. Probes are
 # subprocess-bound (bd, git, python in throwaway repos), so core count is the
@@ -118,11 +130,24 @@ report() {
   if [ "$status" -eq 0 ]; then
     echo "  ok    $name"
   else
-    failed=1
+    note_failed "$name"
     echo "  FAIL  $name"
     grep -E "(error|failed):" "$log" | sed -e 's/^/        /' | sort -u | head -8
     echo "        full log: $log"
   fi
+}
+
+# One capture path for the check-style failures below (context docs,
+# opencode agents, opencode pin, project steps): write the .log and .status,
+# echo the output, and report the FAIL line. Keeps the four call sites one
+# line each instead of a copied four-liner.
+capture_report() {
+  local name="$1" output="$2" status="$3"
+  local log="$LOGS/${name// /-}.log"
+  printf '%s\n' "$output" > "$log"
+  echo "$status" > "$log.status"
+  echo "$output"
+  report "$name" "$log" "$status"
 }
 
 # Wait out every probe still flying and print their one-liners in the order
@@ -140,8 +165,9 @@ drain_probes() {
     probe_pids=()
   fi
   if [ "${#probe_bases[@]}" -gt 0 ]; then
-    local base st
-    for base in "${probe_bases[@]}"; do
+    local base st i
+    for i in "${!probe_bases[@]}"; do
+      base="${probe_bases[$i]}"
       if [ -f "$LOGS/$base.report" ]; then
         cat "$LOGS/$base.report"
         rm -f "$LOGS/$base.report"
@@ -151,11 +177,12 @@ drain_probes() {
         st="$(cat "$LOGS/$base.log.status")"
       fi
       if [ "$st" != "0" ]; then
-        failed=1
+        note_failed "${probe_names[$i]}"
       fi
       probes_run=$((probes_run + 1))
     done
     probe_bases=()
+    probe_names=()
   fi
 }
 
@@ -208,6 +235,7 @@ probe_step() {
   ( trap - EXIT; PROBE_CHILD=1; step "$name" "$@" >"$LOGS/$base.report" 2>&1 ) &
   probe_pids+=("$!")
   probe_bases+=("$base")
+  probe_names+=("$name")
 }
 
 # A path the ledger lane owns: the live export plus the capture locations a
@@ -290,7 +318,9 @@ echo "verify: scope=$scope ($scope_reason)"
 if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
   echo "$export_out"
 else
-  failed=1
+  # The check's own output already carries its FAIL line naming the step; only
+  # record the name for the summary below.
+  note_failed "ledger export"
   echo "$export_out"
 fi
 
@@ -404,7 +434,9 @@ step "codex support" python3 "$(harness_script codex-support.py)" check
 # test-agent.py must not stand in for the gate's own probe. Real steps stay
 # project-first.
 step "codex regression" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-codex-support.py)"
-step "agent runner" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-agent.py)"
+# Flies with the probes in a full run; skipped in the --quick and ledger lanes
+# with them, per the lane contract above.
+probe_step "agent runner" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-agent.py)"
 step "model probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-models-probe.py)"
 step "opencode permissions" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-permissions.py)"
 step "opencode pin probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(harness_shared_script test-opencode-pin.py)"
@@ -416,8 +448,12 @@ step "opencode pin probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(har
 if context_out="$(python3 "$(harness_script context.py)" check 2>&1)"; then
   echo "$context_out"
 else
-  failed=1
-  echo "$context_out"
+  context_st=$?
+  # Routed through capture_report so the failure emits a FAIL line naming the
+  # step; the STALE detail stays in the echoed output above. context.py itself
+  # is harness-owned elsewhere, so the bless remedy lives here, beside the failure.
+  capture_report "context docs" "$context_out" "$context_st"
+  echo "        remedy: scripts/h context bless re-records hashes after updating the doc"
 fi
 
 # The reviewers exist twice — .claude/agents/ for Claude Code, .opencode/agent/
@@ -428,8 +464,8 @@ fi
 if agents_out="$(python3 "$(harness_script opencode-agents.py)" check 2>&1)"; then
   echo "$agents_out"
 else
-  failed=1
-  echo "$agents_out"
+  agents_st=$?
+  capture_report "opencode agents" "$agents_out" "$agents_st"
 fi
 
 # opencode runs on one model at one variant (scripts/h models), and every
@@ -439,8 +475,8 @@ fi
 if pin_out="$(python3 "$(harness_script opencode-pin.py)" check 2>&1)"; then
   echo "$pin_out"
 else
-  failed=1
-  echo "$pin_out"
+  pin_st=$?
+  capture_report "opencode pin" "$pin_out" "$pin_st"
 fi
 
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────
@@ -457,8 +493,8 @@ else
   # ran nothing — so a missing steps file fails loudly instead. `harness add`
   # installs it; a project from before the split recovers its steps from its
   # old verify.sh by hand.
-  failed=1
-  echo "  ! no scripts/verify.steps.sh — the gate has no project steps to run."
+  steps_msg="  ! no scripts/verify.steps.sh — the gate has no project steps to run."
+  capture_report "project steps" "$steps_msg" 1
 fi
 # ── END PROJECT STEPS ─────────────────────────────────────────────────────
 
@@ -495,6 +531,19 @@ fi
 # How long the gate takes is worth watching: it's the tax on every change, and
 # when it grows past the patience of whoever's waiting, it stops getting run.
 echo $((SECONDS - started)) > "$LOGS/elapsed"
+
+# Names, not just a count: a red gate should say which steps to re-run.
+if [ "$failed" -ne 0 ] && [ "${#failed_names[@]}" -gt 0 ]; then
+  _failed_line=""
+  for _failed_e in ${failed_names[@]+"${failed_names[@]}"}; do
+    if [ -z "$_failed_line" ]; then
+      _failed_line="$_failed_e"
+    else
+      _failed_line="$_failed_line, $_failed_e"
+    fi
+  done
+  echo "verify: failed steps: $_failed_line"
+fi
 
 [ "$failed" -eq 0 ] && echo "verify: passed" || echo "verify: FAILED"
 exit "$failed"

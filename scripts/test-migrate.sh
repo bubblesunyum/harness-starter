@@ -34,6 +34,11 @@ FAILS=0
 pass() { printf 'ok %s\n' "$1"; }
 failcase() { FAILS=$((FAILS + 1)); printf 'FAIL %s: %s\n' "$1" "$2"; }
 
+# Poll budget for the settle wait below: wakes every POLL_INTERVAL,
+# POLL_TRIES keeps today's 30s ceiling.
+POLL_TRIES=60
+POLL_INTERVAL=0.5
+
 # The shared tree before any fixture exists. Covers all of template/: a save
 # through a link would read as this probe writing through one.
 shared_hash() {
@@ -336,8 +341,8 @@ else
   tries=0
   while ! (cd "$FIX" && bd show "$BID2" >/dev/null 2>&1); do
     tries=$((tries + 1))
-    [ "$tries" -ge 15 ] && break
-    sleep 2
+    [ "$tries" -ge "$POLL_TRIES" ] && break
+    sleep "$POLL_INTERVAL"
   done
   echo "post-migrate source" > "$FIX/probe-refresh.txt" || { echo "FAIL setup: cannot dirty a probe file"; exit 1; }
   if ! (cd "$FIX" && git add -A >/dev/null 2>&1 && git -c commit.gpgsign=false commit -m "post-migrate refresh $BID" >/dev/null 2>&1); then

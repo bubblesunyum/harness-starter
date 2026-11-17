@@ -135,7 +135,16 @@ golden_probe() {
 }
 export -f golden_probe
 
-if [ "$mode" != "--quick" ]; then
+# Ledger-lane runs need no fixture: every serial step reads the tree or the
+# live ledger, and every golden_probe sits inside a probe_step that already
+# skips in this lane — so building the golden install here would pay a full
+# install for nothing. Only build_golden, golden_probe and the reap in
+# verify.sh name GOLDEN, and the reap only runs when this run built it.
+if [ "$mode" = "--quick" ]; then
+  : # quick lane builds nothing; its probes skip and its serial steps read the tree
+elif [ "${scope:-full}" = "ledger" ]; then
+  echo "  skip  golden fixture (ledger lane — no serial step reads GOLDEN)"
+else
   step "golden fixture" build_golden
   # step runs in this shell, so a good build leaves GOLDEN set on the install
   # and a bad one removed it above; every golden_probe then fails fast instead
@@ -164,14 +173,19 @@ probe_json_field() {
 }
 export -f probe_json_field
 
+# Polls wake every POLL_INTERVAL; POLL_TRIES keeps today's 30s ceiling.
+POLL_TRIES=60
+POLL_INTERVAL=0.5
+export POLL_TRIES POLL_INTERVAL
+
 await_bead_closed() {
   local dir="$1" bid="$2" tries=0 st=""
   while [ "$st" != "closed" ]; do
     st=$(probe_json_field "$dir" status) || return 1
     [ "$st" = "closed" ] && break
     tries=$((tries + 1))
-    [ "$tries" -ge 15 ] && { echo "error: the probe bead $bid never closed (status: $st)"; return 1; }
-    sleep 2
+    [ "$tries" -ge "$POLL_TRIES" ] && { echo "error: the probe bead $bid never closed (status: $st)"; return 1; }
+    sleep "$POLL_INTERVAL"
   done
 }
 export -f await_bead_closed
@@ -184,8 +198,8 @@ await_bead_gone() {
   local dir="$1" bid="$2" tries=0
   while (cd "$dir" && bd show "$bid" >/dev/null 2>&1); do
     tries=$((tries + 1))
-    [ "$tries" -ge 15 ] && { echo "error: the probe bead $bid still resolves after delete"; return 1; }
-    sleep 2
+    [ "$tries" -ge "$POLL_TRIES" ] && { echo "error: the probe bead $bid still resolves after delete"; return 1; }
+    sleep "$POLL_INTERVAL"
   done
 }
 export -f await_bead_gone
@@ -197,8 +211,8 @@ await_bead_ready() {
   local dir="$1" bid="$2" tries=0
   while ! (cd "$dir" && bd show "$bid" >/dev/null 2>&1); do
     tries=$((tries + 1))
-    [ "$tries" -ge 15 ] && { echo "error: the probe bead $bid never resolves"; return 1; }
-    sleep 2
+    [ "$tries" -ge "$POLL_TRIES" ] && { echo "error: the probe bead $bid never resolves"; return 1; }
+    sleep "$POLL_INTERVAL"
   done
 }
 export -f await_bead_ready
@@ -943,9 +957,10 @@ probe_step "the commit-msg hook rejects a bead-less commit" bash -c '
     { echo "error: the hook accepted mixed source and artifact without a bead"; echo "$out"; exit 1; }
   echo "$out" | grep -q "names no bead" ||
     { echo "error: mixed refusal never said why"; echo "$out"; exit 1; }
-  (cd "$probe" && bd q "probe bead for the hook" >/dev/null 2>&1) ||
+  # `bd q` prints only the new bead id: capturing it saves the full-list read
+  # a separate lookup would do, and never reads a pre-settle snapshot.
+  bid=$(cd "$probe" && bd q "probe bead for the hook" 2>/dev/null) ||
     { echo "error: cannot file a probe bead"; exit 1; }
-  bid=$(probe_json_field "$probe" id) || exit 1
   [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
   await_bead_ready "$probe" "$bid" || exit 1
   (cd "$probe" && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false -c "$hook" commit -m "probe commit for $bid" >/dev/null 2>&1) ||
@@ -1061,9 +1076,8 @@ probe_step "a fresh install hydrates the committed ledger export" bash -c '
 # commands too.
 probe_step "a stale ledger export fails the gate naming the bead" bash -c '
   golden_probe || exit 1
-  (cd "$probe" && bd q "probe bead for a stale export" >/dev/null 2>&1) ||
+  bid=$(cd "$probe" && bd q "probe bead for a stale export" 2>/dev/null) ||
     { echo "error: cannot file a probe bead"; exit 1; }
-  bid=$(probe_json_field "$probe" id) || exit 1
   [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot write the probe export"; exit 1; }
@@ -1110,9 +1124,8 @@ probe_step "a commit refreshes the ledger export without a manual regen" bash -c
     { echo "error: add never wired the pre-commit refresh into .beads/hooks"; exit 1; }
   [ -x "$probe/scripts/hooks/pre-commit" ] ||
     { echo "error: install produced no pre-commit hook logic"; exit 1; }
-  (cd "$probe" && bd q "probe bead for a hook refresh" >/dev/null 2>&1) ||
+  bid=$(cd "$probe" && bd q "probe bead for a hook refresh" 2>/dev/null) ||
     { echo "error: cannot file a probe bead"; exit 1; }
-  bid=$(probe_json_field "$probe" id) || exit 1
   [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
   await_bead_ready "$probe" "$bid" || exit 1
   (cd "$probe" && bd close "$bid" --reason "probe" >/dev/null 2>&1) ||
@@ -1147,9 +1160,8 @@ probe_step "a commit refreshes the ledger export without a manual regen" bash -c
 # with --force and polls until it stops resolving before asserting anything.
 probe_step "a deleted bead still exported fails the gate naming the bead" bash -c '
   golden_probe || exit 1
-  (cd "$probe" && bd q "probe bead for a deleted export" >/dev/null 2>&1) ||
+  bid=$(cd "$probe" && bd q "probe bead for a deleted export" 2>/dev/null) ||
     { echo "error: cannot file a probe bead"; exit 1; }
-  bid=$(probe_json_field "$probe" id) || exit 1
   [ -n "$bid" ] || { echo "error: the probe bead has no id"; exit 1; }
   (cd "$probe" && bd export --include-memories -o .beads/issues.jsonl >/dev/null 2>&1) ||
     { echo "error: cannot write the probe export"; exit 1; }

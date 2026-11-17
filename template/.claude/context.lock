@@ -11,7 +11,7 @@
     "scripts/context.py": "11897bcdc1e78f08",
     "scripts/opencode-agents.py": "bc83af1af2d898e8",
     "scripts/review.sh": "f45f70fd2fe228b5",
-    "scripts/verify.sh": "2a5f741765e485ee"
+    "scripts/verify.sh": "4dd975d93cb9413f"
   },
   ".claude/skills/agentic-review/SKILL.md": {
     ".claude/agents/reviewer-correctness.md": "65fb284553b04f42",
@@ -31,11 +31,11 @@
     "scripts/wrap-up.sh": "906e8be2a8e2cff7"
   },
   ".claude/skills/orchestrate/SKILL.md": {
-    "doc": "7ce8954ba2fc7812",
+    "doc": "cedd328e1432c27d",
     "scripts/agent.py": "02a95c9c8ac9c672",
     "scripts/brief.sh": "530bab9ec7b334d7",
     "scripts/review.sh": "f45f70fd2fe228b5",
-    "scripts/verify.sh": "2a5f741765e485ee"
+    "scripts/verify.sh": "4dd975d93cb9413f"
   },
   ".claude/skills/workflow/SKILL.md": {
     "doc": "9a875e3cb4bef45c",

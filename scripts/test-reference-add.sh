@@ -26,6 +26,11 @@ FAILS=0
 pass() { printf 'ok %s\n' "$1"; }
 failcase() { FAILS=$((FAILS + 1)); printf 'FAIL %s: %s\n' "$1" "$2"; }
 
+# Poll budget for the settle waits below: wakes every POLL_INTERVAL,
+# POLL_TRIES keeps today's 15s ceiling.
+POLL_TRIES=30
+POLL_INTERVAL=0.5
+
 # Every install below links into this checkout's template/. A tool that writes
 # into a linked path (bd init writes .agents/skills/beads/SKILL.md) lands in
 # the SHARED harness, so hash the tree now and prove nothing wrote through.
@@ -239,8 +244,8 @@ else
     tries=0
     while ! (cd "$PROJ" && bd show "$bid" >/dev/null 2>&1); do
       tries=$((tries + 1))
-      [ "$tries" -ge 15 ] && break
-      sleep 1
+      [ "$tries" -ge "$POLL_TRIES" ] && break
+      sleep "$POLL_INTERVAL"
     done
     if (cd "$PROJ" && git -c commit.gpgsign=false commit -m "probe with bead $bid" >"$TMP/accept.log" 2>&1); then
       pass "commit-msg accepts a commit naming a bead"
@@ -260,8 +265,8 @@ else
     tries=0
     while ! (cd "$PROJ" && bd show "$bid2" >/dev/null 2>&1); do
       tries=$((tries + 1))
-      [ "$tries" -ge 15 ] && break
-      sleep 1
+      [ "$tries" -ge "$POLL_TRIES" ] && break
+      sleep "$POLL_INTERVAL"
     done
     if ! (cd "$PROJ" && bd remember "probe precommit knowledge" >/dev/null 2>&1); then
       failcase "pre-commit lands a fresh export without a manual regen" "cannot remember probe knowledge"
