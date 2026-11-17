@@ -76,6 +76,11 @@ CONSOLIDATION_HOURS=24
 CONSOLIDATION_MAX_TRAPS=8
 CONSOLIDATION_LESSONS=3
 CONSOLIDATION_FINDINGS=3
+# The wiki takes over the memory-key line once keys outgrow it: above this
+# many memories the brief names topics from harness/wiki/index.md instead of
+# every key. The generator is scripts/build-wiki.sh; below the threshold the
+# brief reads exactly as before and the directory may not exist.
+WIKI_MAX_KEYS=24
 
 # The seat's name off the **Name:** line, on stdout: leading whitespace and
 # wrapping asterisks stripped, cut at the first em-dash (a descriptor after
@@ -157,7 +162,14 @@ consolidation_due() {
       return 0
     fi
   fi
-  traps_n="$(printf '%s' "${1:-}" | sed -n 's/^known traps (\([0-9][0-9]*\)).*/\1/p')" || traps_n=""
+  traps_n="$(printf '%s' "${1:-}" | sed -n 's/^wiki topics ([0-9][0-9]* topics, \([0-9][0-9]*\) keys).*/\1/p')" || traps_n=""
+  # The wiki line carries the key count once topics replace the flat list, so
+  # pressure keeps working above the threshold; without it, fall back to the
+  # flat key list the brief prints below it.
+  case "$traps_n" in ''|*[!0-9]*) traps_n="";; esac
+  if [ -z "$traps_n" ]; then
+    traps_n="$(printf '%s' "${1:-}" | sed -n 's/^known traps (\([0-9][0-9]*\)).*/\1/p')" || traps_n=""
+  fi
   case "$traps_n" in ''|*[!0-9]*) traps_n=0;; esac
   if [ "$traps_n" -gt "$CONSOLIDATION_MAX_TRAPS" ] 2>/dev/null; then
     say_due "$traps_n known traps over budget $CONSOLIDATION_MAX_TRAPS"
@@ -240,13 +252,14 @@ brief() {
   bd ready --exclude-label backlog --exclude-label needs-human --json \
     2>/dev/null > "$ready_json" || return 0
 
-  python3 - "$READY_SHOWN" "$ROOT" "$ready_json" "$HARNESS" <<'PY'
+  python3 - "$READY_SHOWN" "$ROOT" "$ready_json" "$HARNESS" "$WIKI_MAX_KEYS" <<'PY'
 import json, os, re, socket, subprocess, sys, glob, datetime
 
 shown = int(sys.argv[1])
 root = sys.argv[2]
 # The shared checkout, for sibling scripts the project does not shadow.
 harness = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else root
+wiki_max = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else 0
 
 sys.path.insert(0, os.path.join(harness, "scripts"))
 sys.path.insert(0, os.path.join(root, "scripts"))
@@ -431,8 +444,8 @@ def identity():
 def laurel():
     path = os.path.join(root, "harness", "laurels.jsonl")
     try:
-        lines = open(path).read().splitlines()
-    except OSError:
+        lines = open(path, errors="replace").read().splitlines()
+    except (OSError, UnicodeDecodeError):
         return None
     # Per line, so a half-written append costs that one laurel rather than
     # every laurel ever recorded.
@@ -459,8 +472,8 @@ def handoff():
     if not notes:
         return None
     try:
-        body = [l.strip() for l in open(notes[-1]) if l.strip() and not l.startswith("#")]
-    except OSError:
+        body = [l.strip() for l in open(notes[-1], errors="replace") if l.strip() and not l.startswith("#")]
+    except (OSError, UnicodeDecodeError):
         return None
     if not body:
         return None
@@ -572,9 +585,66 @@ if esc:
 # expensive as they accumulate; a list of what's known costs a few tokens and
 # solves the thing search alone can't — you can't look up a trap you don't know
 # exists. `bd recall <key>` fetches the one that turns out to matter.
+#
+# Above WIKI_MAX_KEYS the flat list becomes the index's topics instead: one
+# short line the sessions can hold, with every key one page-read away. The
+# index is built by scripts/build-wiki.sh and the brief never builds it — a
+# missing, torn or stale index falls back to the current flat list, capped to
+# WIKI_MAX_KEYS plus one more line so the brief stays in budget.
+def wiki_topics():
+    try:
+        text = open(os.path.join(root, "harness", "wiki", "index.md"),
+                    errors="replace").read()
+    except OSError:
+        return [], None
+    topics = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("- [[") and "]]" in s:
+            slug = s.split("[[", 1)[1].split("]]", 1)[0].strip()
+            if slug:
+                topics.append(slug)
+    m = re.search(r"<!--\s*wiki:\s*topics=(\d+)\s+keys=(\d+)\s*-->", text)
+    counts = (int(m.group(1)), int(m.group(2))) if m else None
+    return topics, counts
+
+# Max chars for the one-line topic list in the brief.
+TOPICS_LINE_CHARS = 300
+
+def stale_keys_lines():
+    keys = sorted(memories)
+    shown = keys[:wiki_max]
+    lines = [f"known traps ({len(keys)}) — bd recall <key>:",
+             "  " + "  ".join(shown)]
+    if len(keys) > len(shown):
+        lines.append(f"  …and {len(keys) - len(shown)} more (wiki unavailable — rebuild)")
+    return lines
+
+def memories_line():
+    topics, counts = wiki_topics()
+    if wiki_max and len(memories) > wiki_max:
+        fresh = bool(topics and counts and counts[0] == len(topics) and counts[1] == len(memories))
+        if fresh:
+            head = [f"wiki topics ({counts[0]} topics, {counts[1]} keys)"
+                    " — read harness/wiki/<topic>.md:"]
+            shown_topics, used = [], 0
+            for t in topics:
+                cost = len(t) + 2  # two-space separator between topics
+                if used + cost > TOPICS_LINE_CHARS:
+                    break
+                shown_topics.append(t)
+                used += cost
+            head.append("  " + "  ".join(shown_topics))
+            if len(shown_topics) < len(topics):
+                head.append(f"  …and {len(topics) - len(shown_topics)} more"
+                            " — read harness/wiki/index.md")
+            return head
+        return stale_keys_lines()
+    return ([f"known traps ({len(memories)}) — bd recall <key>:",
+             "  " + "  ".join(sorted(memories))] if memories else [])
+
 if memories:
-    out.append(f"known traps ({len(memories)}) — bd recall <key>:")
-    out.append("  " + "  ".join(sorted(memories)))
+    out += memories_line()
 
 out.append("`bd show <id>` for detail. The workflow skill has the rest.")
 print("\n".join(out))

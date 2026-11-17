@@ -920,6 +920,453 @@ probe_step "consolidation due signal" bash -c '
   done
   expect_due_once "trap pressure" "known traps over budget"'
 
+# The wiki's static shape: the generator carries its caps and its link check,
+# the brief carries the threshold and the topic display, the librarian carries
+# the proposal duties, context.py counts and watches the layer, and HARNESS.md
+# explains it with a tracks entry. The opencode translation stays in step
+# because it is generated, never hand-edited.
+step "wiki derived layer format" bash -c '
+  for w in WIKI_INDEX_MAX_PCT WIKI_TOTAL_MAX_PCT WIKI_EXCERPT_CHARS "tracks: scripts/build-wiki.sh" "exactly one page" "cap breach"; do
+    grep -q "$w" template/scripts/build-wiki.sh ||
+      { echo "error: build-wiki.sh never covers $w"; exit 1; }
+  done
+  for w in WIKI_MAX_KEYS "wiki topics" "harness/wiki/<topic>.md" "Tune here"; do
+    grep -q "$w" template/scripts/brief.sh ||
+      { echo "error: brief.sh never covers $w"; exit 1; }
+  done
+  if grep -q "FILL THIS IN" template/scripts/build-wiki.sh; then
+    echo "error: the generator carries a fill-in block — only seeds may"; exit 1;
+  fi
+  for w in "build-wiki.sh" "only writer" "propose" "WIKI_MAX_KEYS" "diff empty"; do
+    grep -q "$w" template/.claude/agents/librarian.md ||
+      { echo "error: librarian never covers $w"; exit 1; }
+  done
+  for w in "wiki index" "## Wiki" "wiki_pages" "wiki_threshold"; do
+    grep -q "$w" template/scripts/context.py ||
+      { echo "error: context.py never covers $w"; exit 1; }
+  done
+  grep -q "The wiki is derived" template/.claude/HARNESS.md ||
+    { echo "error: HARNESS.md never explains the wiki"; exit 1; }
+  grep -q "scripts/build-wiki.sh" template/.claude/HARNESS.md ||
+    { echo "error: HARNESS.md tracks comment lost build-wiki.sh"; exit 1; }
+  for w in "build-wiki.sh" "only writer"; do
+    grep -q "$w" template/.opencode/agent/librarian.md ||
+      { echo "error: opencode translation lost $w"; exit 1; }
+  done'
+
+# Below the wiki threshold the brief reads as it always did: the flat key
+# list, no topic names, and no directory. A build with no memories says so
+# and writes nothing.
+probe_step "below threshold the brief shows keys and builds nothing" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) || exit 1
+  echo "$out" | grep -q "nothing to build" ||
+    { echo "error: an empty build never said so"; echo "$out"; exit 1; }
+  [ ! -e "$probe/harness/wiki" ] ||
+    { echo "error: an empty build created harness/wiki"; exit 1; }
+  (cd "$probe" && bd remember "probe below-threshold one" --key "probe-below-one" >/dev/null 2>&1) ||
+    { echo "error: cannot remember probe memory one"; exit 1; }
+  (cd "$probe" && bd remember "probe below-threshold two" --key "probe-below-two" >/dev/null 2>&1) ||
+    { echo "error: cannot remember probe memory two"; exit 1; }
+  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
+    { echo "error: brief failed in the probe"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "known traps (2)" ||
+    { echo "error: brief lost the flat key list below threshold"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "wiki topics"; then
+    echo "error: brief named topics below threshold"; echo "$out"; exit 1;
+  fi
+  [ ! -e "$probe/harness/wiki" ] ||
+    { echo "error: harness/wiki exists below threshold"; exit 1; }'
+
+# Above the threshold the brief names topics instead of keys: the build groups
+# the probe memories, every key is reachable from its page, the budget counts
+# the index, and the digest carries the layer. Deleting the directory and
+# rebuilding diffs empty — the wiki holds nothing the ledger does not.
+probe_step "above threshold topics replace the key list and rebuild losslessly" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  for i in 1 2 3 4 5 6 7; do
+    (cd "$probe" && bd remember "probe wiki memory alpha $i" --key "alpha-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember probe memory alpha $i"; exit 1; }
+  done
+  for i in 1 2 3 4 5 6; do
+    (cd "$probe" && bd remember "probe wiki memory beta $i" --key "beta-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember probe memory beta $i"; exit 1; }
+    (cd "$probe" && bd remember "probe wiki memory gamma $i" --key "gamma-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember probe memory gamma $i"; exit 1; }
+    (cd "$probe" && bd remember "probe wiki filler memory $i" --key "filler-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember probe filler $i"; exit 1; }
+  done
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: build failed above threshold"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "4 topics, 25 keys" ||
+    { echo "error: build never reported its topics and keys"; echo "$out"; exit 1; }
+  [ -f "$probe/harness/wiki/index.md" ] ||
+    { echo "error: build wrote no index"; exit 1; }
+  for t in alpha beta filler gamma; do
+    [ -f "$probe/harness/wiki/$t.md" ] ||
+      { echo "error: build wrote no page for $t"; exit 1; }
+  done
+  for k in alpha-1 beta-6 filler-6 gamma-1 alpha-7; do
+    grep -rqF "$k" "$probe/harness/wiki/" ||
+      { echo "error: key $k reachable from no page"; exit 1; }
+  done
+  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
+    { echo "error: brief failed in the probe"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "wiki topics (4 topics, 25 keys)" ||
+    { echo "error: brief never switched to topics"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "known traps ("; then
+    echo "error: brief still printed the flat key list"; echo "$out"; exit 1;
+  fi
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" report 2>&1) ||
+    { echo "error: context report failed in the probe"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "wiki index" ||
+    { echo "error: the budget never counted the index"; echo "$out"; exit 1; }
+  pkt=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" digest 2>&1) ||
+    { echo "error: context digest failed in the probe"; echo "$pkt"; exit 1; }
+  grep -q "## Wiki" "$pkt" ||
+    { echo "error: the digest never carried the wiki"; exit 1; }
+  grep -q "alpha-1" "$pkt" ||
+    { echo "error: the digest wiki never reached a key"; exit 1; }
+  cp -R "$probe/harness/wiki" "$probe/wiki-backup" ||
+    { echo "error: cannot back up the probe wiki"; exit 1; }
+  rm -rf "$probe/harness/wiki" || { echo "error: cannot delete the probe wiki"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: rebuild failed"; echo "$out"; exit 1; }
+  diff -r "$probe/wiki-backup" "$probe/harness/wiki" ||
+    { echo "error: delete plus rebuild lost something"; exit 1; }'
+
+# Caps are enforced, and a breach fails loudly without publishing. A zero index
+# cap breaches on any wiki; a zero total cap breaches even after the build
+# prunes every excerpt — the message says which. A total cap between the two
+# sizes prunes the excerpts and still passes, with every key still reachable.
+probe_step "an oversize wiki fails loudly and pruning saves a close one" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  pad=""
+  i=0
+  while [ "$i" -lt 5 ]; do
+    pad="$pad padding-words-to-make-the-excerpt-dominate"
+    i=$((i + 1))
+  done
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    (cd "$probe" && bd remember "probe cap memory number $i $pad" --key "probe-cap-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember probe memory $i"; exit 1; }
+  done
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_INDEX_MAX_PCT=0 bash "$root/scripts/build-wiki.sh" 2>&1) &&
+    { echo "error: the build passed a zero index cap"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "cap breach" ||
+    { echo "error: the index breach never said cap"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "index" ||
+    { echo "error: the index breach never named the index"; echo "$out"; exit 1; }
+  [ ! -e "$probe/harness/wiki" ] ||
+    { echo "error: a breached build published a wiki"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_TOTAL_MAX_PCT=0 WIKI_INDEX_MAX_PCT=10000 bash "$root/scripts/build-wiki.sh" 2>&1) &&
+    { echo "error: the build passed a zero total cap"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "without excerpts" ||
+    { echo "error: the total breach never said it pruned first"; echo "$out"; exit 1; }
+  [ ! -e "$probe/harness/wiki" ] ||
+    { echo "error: a breached build published a wiki"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_TOTAL_MAX_PCT=25 WIKI_INDEX_MAX_PCT=10000 bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: the build failed a passable total cap"; echo "$out"; exit 1; }
+  if grep -q "^  > " "$probe"/harness/wiki/*.md; then
+    echo "error: the pruned wiki still carries excerpts"; exit 1;
+  fi
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    grep -rqF "probe-cap-$i" "$probe/harness/wiki/" ||
+      { echo "error: pruning dropped key probe-cap-$i"; exit 1; }
+  done'
+
+# Wiki pages carry tracks: into the staleness gate through a scratch harness —
+# the real checkout stays untouched. Bless, pass, move the generator, fail
+# naming the page, then prove a brand-new page only asks for a bless.
+probe_step "staleness watches wiki pages" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  fake="$probe/fakeharness"
+  mkdir -p "$fake/.claude" "$fake/scripts" "$probe/harness/wiki" "$probe/fakehome" ||
+    { echo "error: cannot shape the fake harness"; exit 1; }
+  printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe harness\n" > "$fake/.claude/HARNESS.md" ||
+    { echo "error: cannot plant the fake HARNESS.md"; exit 1; }
+  printf "#!/bin/bash\necho probe generator\n" > "$fake/scripts/build-wiki.sh" ||
+    { echo "error: cannot plant the fake generator"; exit 1; }
+  printf "<!-- tracks: scripts/build-wiki.sh -->\n<!-- wiki: topics=1 keys=1 -->\n# probe index\n" > "$probe/harness/wiki/index.md" ||
+    { echo "error: cannot plant the fake index"; exit 1; }
+  printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe topic\n" > "$probe/harness/wiki/probe.md" ||
+    { echo "error: cannot plant the fake page"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed over the fake harness"; echo "$out"; exit 1; }
+  grep -q "harness/wiki/index.md" "$probe/.claude/context.lock" ||
+    { echo "error: bless never recorded the wiki index"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) ||
+    { echo "error: blessed check failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^  ok " ||
+    { echo "error: blessed check never said ok"; echo "$out"; exit 1; }
+  printf "<!-- tracks: scripts/build-wiki.sh -->\n# another topic\n" > "$probe/harness/wiki/another.md" ||
+    { echo "error: cannot plant a new page"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) ||
+    { echo "error: check failed on a new page"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "new   harness/wiki/another.md" ||
+    { echo "error: the new page never asked for a bless"; echo "$out"; exit 1; }
+  rm "$probe/harness/wiki/another.md" ||
+    { echo "error: cannot clear the new page"; exit 1; }
+  printf "# probe generator, moved\n" >> "$fake/scripts/build-wiki.sh" ||
+    { echo "error: cannot move the fake generator"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) &&
+    { echo "error: check passed a moved generator"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "STALE" ||
+    { echo "error: the moved generator failed without a STALE line"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "harness/wiki/probe.md" ||
+    { echo "error: the STALE line never named the wiki page"; echo "$out"; exit 1; }'
+
+# Colliding topics share one sanitized filename: first wins, later ones take a
+# numeric suffix, compared case-insensitively — the build stays green and every
+# key stays reachable instead of the second overwriting the first.
+probe_step "colliding topics build green with both keys reachable" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  (cd "$probe" && bd remember "probe collision alpha one" --key "Alpha-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember Alpha-1"; exit 1; }
+  (cd "$probe" && bd remember "probe collision alpha two" --key "alpha-2" >/dev/null 2>&1) ||
+    { echo "error: cannot remember alpha-2"; exit 1; }
+  (cd "$probe" && bd remember "probe collision beta one" --key "Beta-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember Beta-1"; exit 1; }
+  (cd "$probe" && bd remember "probe collision beta two" --key "beta-2" >/dev/null 2>&1) ||
+    { echo "error: cannot remember beta-2"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: build failed on colliding topics"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "4 topics, 4 keys" ||
+    { echo "error: build never reported 4 topics 4 keys"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "broken link"; then
+    echo "error: colliding build reported broken links"; echo "$out"; exit 1;
+  fi
+  for k in Alpha-1 alpha-2 Beta-1 beta-2; do
+    grep -rqF "$k" "$probe/harness/wiki/" ||
+      { echo "error: key $k reachable from no page"; exit 1; }
+  done
+  n=$(ls "$probe"/harness/wiki/*.md 2>/dev/null | wc -l | tr -d " ") ||
+    { echo "error: cannot count wiki pages"; exit 1; }
+  [ "$n" = "5" ] ||
+    { echo "error: want 5 wiki files with dedupe, got $n"; exit 1; }'
+
+# A breached rebuild publishes nothing and removes the stale wiki, so the brief
+# falls back to the current flat list instead of serving last good topics.
+probe_step "a breached rebuild removes the stale wiki" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  (cd "$probe" && bd remember "probe breach base one" --key "probe-breach-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember base one"; exit 1; }
+  (cd "$probe" && bd remember "probe breach base two" --key "probe-breach-2" >/dev/null 2>&1) ||
+    { echo "error: cannot remember base two"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: base build failed"; echo "$out"; exit 1; }
+  [ -d "$probe/harness/wiki" ] ||
+    { echo "error: base build wrote no wiki"; exit 1; }
+  for i in 3 4 5 6 7 8 9 10 11 12; do
+    (cd "$probe" && bd remember "probe breach filler number $i" --key "probe-breach-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember filler $i"; exit 1; }
+  done
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" WIKI_INDEX_MAX_PCT=0 bash "$root/scripts/build-wiki.sh" 2>&1) &&
+    { echo "error: breached rebuild passed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "cap breach" ||
+    { echo "error: breach never said cap"; echo "$out"; exit 1; }
+  [ ! -e "$probe/harness/wiki" ] ||
+    { echo "error: breached rebuild left the stale wiki"; exit 1; }'
+
+# A stale index is ignored: the brief compares live memory count against the
+# index machine comment and falls back to the current capped key list.
+probe_step "a stale index is ignored for the current key list" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+    (cd "$probe" && bd remember "probe stale memory $i" --key "c4-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember c4 $i"; exit 1; }
+  done
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: stale base build failed"; echo "$out"; exit 1; }
+  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
+    { echo "error: brief failed on fresh index"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "wiki topics" ||
+    { echo "error: brief never switched to topics"; echo "$out"; exit 1; }
+  for i in 26 27 28 29 30 31 32 33 34 35; do
+    (cd "$probe" && bd remember "probe stale memory $i" --key "c4-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember c4 $i"; exit 1; }
+  done
+  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
+    { echo "error: brief failed on stale index"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "known traps (35)" ||
+    { echo "error: brief never showed the current 35 keys"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "wiki topics"; then
+    echo "error: brief served stale topics"; echo "$out"; exit 1;
+  fi
+  echo "$out" | grep -q "wiki unavailable" ||
+    { echo "error: stale fallback never capped with rebuild line"; echo "$out"; exit 1; }'
+
+# A blessed-but-deleted page is reported missing instead of staying silent.
+probe_step "a deleted wiki page is reported missing" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  (cd "$probe" && bd remember "probe missing alpha" --key "c5a-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember c5a"; exit 1; }
+  (cd "$probe" && bd remember "probe missing beta" --key "c5b-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember c5b"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: missing base build failed"; echo "$out"; exit 1; }
+  mkdir -p "$probe/fakehome" ||
+    { echo "error: cannot make fakehome"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed"; echo "$out"; exit 1; }
+  victim=$(ls "$probe"/harness/wiki/c5*.md 2>/dev/null | head -1) ||
+    { echo "error: cannot list wiki pages"; exit 1; }
+  [ -n "$victim" ] ||
+    { echo "error: no c5 page to delete"; exit 1; }
+  rm "$victim" ||
+    { echo "error: cannot delete the page"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) &&
+    { echo "error: check passed a deleted page"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "missing" ||
+    { echo "error: check never said missing"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "harness/wiki/" ||
+    { echo "error: missing line never named the page"; echo "$out"; exit 1; }'
+
+# A bad byte in a wiki page is diagnosed, never a traceback.
+probe_step "a bad byte in a wiki page is diagnosed not crashed" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  fake="$probe/fakeharness"
+  mkdir -p "$fake/.claude" "$fake/scripts" "$probe/harness/wiki" "$probe/fakehome" ||
+    { echo "error: cannot shape the fake harness"; exit 1; }
+  printf "<!-- tracks: scripts/build-wiki.sh -->\n# probe harness\n" > "$fake/.claude/HARNESS.md" ||
+    { echo "error: cannot plant fake HARNESS"; exit 1; }
+  printf "#!/bin/bash\necho probe generator\n" > "$fake/scripts/build-wiki.sh" ||
+    { echo "error: cannot plant fake generator"; exit 1; }
+  printf "<!-- tracks: scripts/build-wiki.sh -->\n<!-- wiki: topics=1 keys=1 -->\n# probe index\n" > "$probe/harness/wiki/index.md" ||
+    { echo "error: cannot plant fake index"; exit 1; }
+  python3 - "$probe/harness/wiki/probe.md" <<PYEOF ||
+import sys
+open(sys.argv[1], "wb").write(b"<!-- tracks: scripts/build-wiki.sh -->\n# probe topic\n\xff\n")
+PYEOF
+    { echo "error: cannot plant bad byte page"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless crashed on bad byte"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: bless traceback on bad byte"; echo "$out"; exit 1;
+  fi
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" check 2>&1) ||
+    { echo "error: check crashed on bad byte"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: check traceback on bad byte"; echo "$out"; exit 1;
+  fi
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$fake" python3 "$root/scripts/context.py" report 2>&1) ||
+    { echo "error: report crashed on bad byte"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: report traceback on bad byte"; echo "$out"; exit 1;
+  fi'
+
+# A bad byte outside the wiki is diagnosed, never a traceback: the budget
+# counts an unreadable file as 0 loudly, and report, check and digest print
+# their normal lines with rc 0/1 instead of a traceback.
+probe_step "a bad byte outside the wiki is diagnosed not crashed" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  mkdir -p "$probe/fakehome" "$probe/.claude/skills/probe-skill" ||
+    { echo "error: cannot shape the probe skills"; exit 1; }
+  python3 - "$probe/CLAUDE.md" <<PYEOF ||
+import sys
+p = sys.argv[1]
+open(p, "wb").write(open(p, "rb").read() + b"\xff")
+PYEOF
+    { echo "error: cannot plant bad byte CLAUDE"; exit 1; }
+  python3 - "$probe/.claude/skills/probe-skill/SKILL.md" <<PYEOF ||
+import sys
+open(sys.argv[1], "wb").write(b"---\ndescription: probe skill\n---\n\nbody\n\xff\n")
+PYEOF
+    { echo "error: cannot plant bad byte skill"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" report 2>&1) ||
+    { echo "error: report crashed on a bad byte outside the wiki"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: report traceback on a bad byte outside the wiki"; echo "$out"; exit 1;
+  fi
+  echo "$out" | grep -q "  cost " ||
+    { echo "error: report never printed the cost line"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "^  ok " ||
+    { echo "error: report never printed the ok line"; echo "$out"; exit 1; }
+  rc=0
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) || rc=$?
+  case "$rc" in 0|1) ;; *) echo "error: check crashed rc=$rc"; echo "$out"; exit 1;; esac
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: check traceback on a bad byte outside the wiki"; echo "$out"; exit 1;
+  fi
+  pkt=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" digest 2>&1) ||
+    { echo "error: digest crashed on a bad byte outside the wiki"; echo "$pkt"; exit 1; }
+  if echo "$pkt" | grep -q "Traceback"; then
+    echo "error: digest traceback on a bad byte outside the wiki"; echo "$pkt"; exit 1;
+  fi
+  grep -q "probe skill" "$pkt" ||
+    { echo "error: digest lost the probe skill"; exit 1; }'
+
+# A bad byte in laurels and the newest handoff costs those two lines, never
+# the brief: the summary still prints the ledger, ready and traps lines.
+probe_step "a bad byte in laurels and handoff still briefs" bash -c '
+  golden_probe || exit 1
+  bid=$(cd "$probe" && bd create "probe brief work" --design d --acceptance a --silent 2>/dev/null) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  await_bead_ready "$probe" "$bid" || exit 1
+  (cd "$probe" && bd remember "probe brief trap" --key "probe-brief-trap" >/dev/null 2>&1) ||
+    { echo "error: cannot remember a probe memory"; exit 1; }
+  printf "%s\n" "{\"quote\": \"probe praise\", \"date\": \"2026-01-01\"}" > "$probe/harness/laurels.jsonl" ||
+    { echo "error: cannot plant the probe laurel"; exit 1; }
+  printf "\xff" >> "$probe/harness/laurels.jsonl" ||
+    { echo "error: cannot plant bad byte laurel"; exit 1; }
+  printf "%s\n" "# probe note" "" "stood where the probe stood" > "$probe/harness/handoffs/note-probe.md" ||
+    { echo "error: cannot plant the probe handoff"; exit 1; }
+  printf "\xff" >> "$probe/harness/handoffs/note-probe.md" ||
+    { echo "error: cannot plant bad byte handoff"; exit 1; }
+  out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
+    { echo "error: brief failed on bad bytes"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "Traceback"; then
+    echo "error: brief traceback on bad bytes"; echo "$out"; exit 1;
+  fi
+  for w in "ledger:" "ready:" "known traps"; do
+    echo "$out" | grep -q "$w" ||
+      { echo "error: brief lost $w under bad bytes"; echo "$out"; exit 1; }
+  done'
+
+# A wiki page losing its tracks line is a ghost lock entry: check names it
+# until a re-bless prunes it, instead of staying green over a stale hash.
+probe_step "a wiki page losing its tracks fails check until re-blessed" bash -c '
+  golden_probe || exit 1
+  root="$(probe_shared_root "$probe")" || exit 1
+  (cd "$probe" && bd remember "probe untracked alpha" --key "c6a-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember c6a"; exit 1; }
+  (cd "$probe" && bd remember "probe untracked beta" --key "c6b-1" >/dev/null 2>&1) ||
+    { echo "error: cannot remember c6b"; exit 1; }
+  out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) ||
+    { echo "error: untracked base build failed"; echo "$out"; exit 1; }
+  mkdir -p "$probe/fakehome" ||
+    { echo "error: cannot make fakehome"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: bless failed"; echo "$out"; exit 1; }
+  victim=$(ls "$probe"/harness/wiki/c6*.md 2>/dev/null | head -1) ||
+    { echo "error: cannot list wiki pages"; exit 1; }
+  [ -n "$victim" ] ||
+    { echo "error: no c6 page to strip"; exit 1; }
+  grep -v "tracks:" "$victim" > "$victim.tmp" ||
+    { echo "error: cannot strip the tracks line"; exit 1; }
+  mv "$victim.tmp" "$victim" ||
+    { echo "error: cannot write the stripped page"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) &&
+    { echo "error: check passed a page that lost its tracks"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "untracked" ||
+    { echo "error: check never said untracked"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "harness/wiki/" ||
+    { echo "error: the untracked line never named the page"; echo "$out"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" bless 2>&1) ||
+    { echo "error: re-bless failed"; echo "$out"; exit 1; }
+  out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" python3 "$root/scripts/context.py" check 2>&1) ||
+    { echo "error: check failed after re-bless"; echo "$out"; exit 1; }'
+
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
 # pattern from the reader.

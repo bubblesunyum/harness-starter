@@ -7,6 +7,7 @@
   .claude/skills/workflow/SKILL.md
   scripts/agent.py
   scripts/brief.sh
+  scripts/build-wiki.sh
   scripts/context.py
   scripts/lib/journal.sh
   scripts/opencode-agents.py
@@ -461,6 +462,46 @@ proposal by rule. The librarian proposes only, exactly like the reflector;
 memory deletions stay user-gated with an archive copy. If the project logs
 `bd recall` keys, later passes weight by access; otherwise they skip that —
 never new instrumentation on the hot path.
+
+## The wiki is derived, never primary
+
+The brief's memory-key line grows with every trap the sessions keep, and a flat
+list of fifty keys abstracts nothing — nobody can hold it, so nobody reads it.
+Past a threshold (`WIKI_MAX_KEYS` in `scripts/brief.sh`, beside the
+consolidation numbers) the brief prints topic names from
+`harness/wiki/index.md` instead, and the pages load on demand. A stale index
+(counts not matching the live ledger) is ignored for the current capped key list. Below the
+threshold nothing changes: the brief reads exactly as before and the directory
+may not exist.
+
+`harness/wiki/` holds the index plus one page per topic, generated from bd
+memories, closed-bead reasons and committed handoff notes by
+`scripts/build-wiki.sh` — the pattern is the managed-agents knowledge wiki
+(extract, resolve gaps, consolidate; provenance on every fact, conflicts kept
+as conflicts), reimplemented with local files and bd instead of a hosted
+store. The topic of a key is the first slug segment before `-` or `_`, which
+keeps the grouping mechanical: there is no judgment in it to drift. Distinct topics
+sanitizing to one filename share it by suffix (first wins, case-insensitively). Pages link
+to bead ids and memory keys and quote facts verbatim with their source; they
+never copy bodies. The generator is the only writer, and it checks its own
+links as a second pass before publishing — every key on exactly one page,
+every index entry backed by a page and vice versa. The librarian proposes the
+build (and the merges or renames that would make the grouping land better); the
+session runs it and reviews the diff.
+
+Deleting the directory and rebuilding diffs empty, because everything in it is
+re-derivable — that is also why generated pages are project-owned data, like
+`harness/learning.jsonl`: installed never (the script creates the directory),
+compared never, converged never. Hand-editing a page is pointless; the next
+rebuild overwrites it.
+
+Two caps keep the summary smaller than what it summarises: the index may not
+exceed half the source bytes, the whole wiki may not exceed them. Over the
+total cap the build prunes excerpt and bead quotes first — key links always survive,
+because reachability is load-bearing — and a breach past that fails loudly,
+removes any published wiki, and publishes nothing (swapped atomically when it does publish). `context.py` counts the index in the always-loaded budget,
+includes the wiki in the librarian's digest, and watches pages carrying
+`tracks:` through the staleness gate like any other doc, reporting a blessed-but-deleted page as missing and pruning a lock entry whose page lost its tracks.
 
 ## File the bead as planning begins
 

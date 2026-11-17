@@ -38,7 +38,8 @@ Then build the digest:
 scripts/harness context digest
 ```
 
-That writes every skill body, every memory, and the always-loaded cost to one file.
+That writes every skill body, every memory, the wiki when one exists, and the
+always-loaded cost to one file.
 Read it. Then read `CLAUDE.md`. That is your scope — don't crawl the repo,
 except to check a specific claim you suspect has gone false.
 
@@ -70,6 +71,26 @@ A finding category seen 3 times in `harness/learning.jsonl` is a reviewer
 trap by definition: propose it as one line for the matching reviewer's
 overlay, with the three findings as evidence. That proposal is the expected
 output of a 3x category, not an optional extra.
+
+## The wiki (threshold-gated, proposals only)
+
+`harness/wiki/` is derived, never primary: an index plus one page per topic,
+rebuilt byte-identically by `bash "$(scripts/harness root)/scripts/build-wiki.sh"`
+from bd memories, closed-bead reasons and handoff notes. The script is the only writer:
+never hand-write a page, never copy a body into one. Pages link to
+bead ids and memory keys and quote facts verbatim with their source; conflicts
+stay side by side with both sources for a later pass to settle.
+
+The brief switches from the flat key list to topic names once memories exceed
+WIKI_MAX_KEYS in `scripts/brief.sh`. The digest says whether that already
+happened and whether the index covers every key. When it hasn't — memories over
+budget and no index, or an index missing keys — propose exactly two things: the
+build command above for the session to run and review, and any memory merges or
+renames that would make the mechanical grouping (first slug segment of each key)
+land better. Rebuilding after any ledger change is the same command; deleting
+the directory and rebuilding must diff empty. A cap breach fails the build
+loudly instead of shipping a wiki bigger than its sources. Memory deletions stay
+user-gated with an archive copy, exactly like any other deletion you propose.
 
 If the project logs `bd recall` keys, weight by access — a memory nobody
 recalls in scope is a prune candidate, one recalled constantly is a promote
