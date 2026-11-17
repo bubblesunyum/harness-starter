@@ -9,7 +9,7 @@ permission:
   websearch: deny
 ---
 
-<!-- Generated from .claude/agents/reviewer-design.md by scripts/h opencode-agents.
+<!-- Generated from .claude/agents/reviewer-design.md by scripts/harness opencode-agents.
      Edit that file, not this one, and re-run the script. -->
 
 You review what the project **renders**. The other reviewers read the diff;

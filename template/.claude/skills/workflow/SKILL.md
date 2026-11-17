@@ -12,7 +12,7 @@ screen at every step, and without spending the account's tokens on ceremony.
 ## The loop
 
 ```
-bd ready → claim → build → scripts/h verify → review → commit → close → capture
+bd ready → claim → build → scripts/harness verify → review → commit → close → capture
      ↑                                                                       │
      └──────────── bd q "<discovery>" ·  bd remember "<trap>" ───────────────┘
 ```
@@ -36,12 +36,12 @@ bd ready → claim → build → scripts/h verify → review → commit → clos
    when the user says so, via `bd label remove <id> <label>`.
 2. **Claim it.** `bd update <id> --claim`. This is what makes the dashboard and
    the next session show the work as live rather than available.
-3. **Build it.** Normal work, under the taste in CLAUDE.md — `orchestrate` is the baseline for everything: bead-spanning work runs as a multi-worker round, small work as a one-worker round under the same contract (a one-line fix may be done by hand). Nested opencode runs go through `scripts/h agent`, never a bare `opencode run` — the runner carries the timeouts, and `agent.py ps` / `stop` cover the stuck ones.
-4. **Prove it.** `scripts/h verify` — the build and the tests behind one exit
+3. **Build it.** Normal work, under the taste in CLAUDE.md — `orchestrate` is the baseline for everything: bead-spanning work runs as a multi-worker round, small work as a one-worker round under the same contract (a one-line fix may be done by hand). Nested opencode runs go through `scripts/harness agent`, never a bare `opencode run` — the runner carries the timeouts, and `agent.py ps` / `stop` cover the stuck ones.
+4. **Prove it.** `scripts/harness verify` — the build and the tests behind one exit
    code; `scripts/verify.steps.sh` defines any `--full`-only checks. Don't ask the user to look at
    something you can check yourself: if the project has a way to drive the real
    app and screenshot it, that is the step, and it belongs in its own skill.
-5. **Review it.** `bd label add <id> review`, then `scripts/h review` builds
+5. **Review it.** `bd label add <id> review`, then `scripts/harness review` builds
    the packet and the `agentic-review` skill runs it past agents that didn't
    write it.
    `bd label remove <id> review` when the findings are dealt with.
@@ -62,12 +62,12 @@ the `handoff` skill covers that narrow exception. That link is what lets a later
 does and get an answer, and it's how the staging lane knows what's sitting
 unpushed. Nothing filed yet? `bd q "…"` takes one line and hands back an id.
 
-The board at `scripts/h dashboard` (localhost:7391) shows all of this live, and
+The board at `scripts/harness dashboard` (localhost:7391) shows all of this live, and
 its buttons run the gate and the push. It opens in Claude Code's browser pane
 and nowhere else — `preview_start harness-dashboard`, or navigate to the URL the
 hook printed. The pane is the only browser you can read back, so a board you
 opened is a board you can check your own work against. Starting it is
-`scripts/h dashboard`, which backgrounds and returns; `serve` is the form that
+`scripts/harness dashboard`, which backgrounds and returns; `serve` is the form that
 blocks, and you almost never want it.
 
 ## Capture — the step that pays for the next session
@@ -112,17 +112,17 @@ Capture only adds. Without something that subtracts, the knowledge layer grows
 until it's expensive and, worse, until some of it is quietly false.
 
 ```bash
-scripts/h context          # is it still true, is it still small
-scripts/h context bless    # after updating a doc, re-record what it tracks
+scripts/harness context          # is it still true, is it still small
+scripts/harness context bless    # after updating a doc, re-record what it tracks
 ```
 
 **Staleness is checked by the gate.** A doc declares what it describes with a
 `<!-- tracks: … -->` comment; when a tracked source changes and the doc doesn't,
-`scripts/h verify` fails. This catches the one thing review can't: the stale
+`scripts/harness verify` fails. This catches the one thing review can't: the stale
 file isn't in the diff, the thing it describes is. When you change a doc on
 purpose, `bless` it.
 
-**Always-loaded cost is reported, not capped.** `scripts/h verify` prints what
+**Always-loaded cost is reported, not capped.** `scripts/harness verify` prints what
 a session pays before it does anything. Nothing fails on the number — it's a
 trend line. When it climbs, the fix is still to move something behind a skill
 rather than to let the preamble grow, but that's a judgment call for the
@@ -166,7 +166,7 @@ is invisible to `bd ready` and will still be there in a year.
 
 ## Token discipline
 
-The whole harness is shaped by having one account. `scripts/h context spend`
+The whole harness is shaped by having one account. `scripts/harness context spend`
 prints what recent sessions actually cost, and the shape it shows is the reason
 for every rule below: measured on one project, a session opens at ~54k tokens
 before it has done anything, and that opening context is re-sent on every
@@ -192,7 +192,7 @@ lands matters more than how big it is.
 
 The rules that follow from that:
 
-- **The session brief is capped.** `scripts/h brief` prints ~500 tokens: the
+- **The session brief is capped.** `scripts/harness brief` prints ~500 tokens: the
   seat and what it's for, the ready list and the memory keys. Don't run
   `bd prime` — it prints the whole command reference and every memory in full.
   For the full `bd` surface, the `beads` skill has it, on demand.
@@ -232,7 +232,7 @@ by hand.
 A session ends clean when: claimed beads are closed with a reason or returned to
 open with a note (`bd note <id> "<where it stands>"`), discoveries are filed,
 anything that surprised you is remembered, the tree is committed, and
-`scripts/h verify` passed. Then leave the note that structured fields can't
+`scripts/harness verify` passed. Then leave the note that structured fields can't
 hold — the `handoff` skill has the shape of it. The next session's brief then
 reads as the truth instead of a guess.
 

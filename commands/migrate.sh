@@ -4,7 +4,7 @@
 #   harness migrate [--apply] [path]
 #
 # A copy install carries the whole harness; a reference install keeps the
-# contract in the shared checkout and reaches it through scripts/h. This
+# contract in the shared checkout and reaches it through scripts/harness. This
 # classifies every file the copy carries and converts it:
 #
 #   remove  an unedited copy of the shared file — today's or any older starter
@@ -21,7 +21,7 @@
 #           into AGENTS.local.md or upstream to the starter
 #
 # Dry run by default: every file with its fate, nothing written. --apply
-# writes, then runs `scripts/h link` (after any bd command — this runs none,
+# writes, then runs `scripts/harness link` (after any bd command — this runs none,
 # so the order holds trivially). A second --apply is a no-op. Never touches
 # a repo with uncommitted changes: names them and exits 1.
 set -euo pipefail
@@ -42,9 +42,9 @@ Converts a copy install of the harness into a reference install.
 Dry run by default: lists every carried file with its fate and writes
 nothing. --apply converts: unedited copies go (today's or any older starter
 revision's), reviewer lines lift into harness/reviewers/, stubs replace the
-contract, missing reference files are installed — then scripts/h link runs.
+contract, missing reference files are installed — then scripts/harness link runs.
 A file that differs is left in place and named: a project-specific change to
-a shared script stays as a same-path shadow (scripts/h and the shared scripts
+a shared script stays as a same-path shadow (scripts/harness and the shared scripts
 already resolve project-first); project answers in reviewer prompts belong in
 harness/reviewers/<role>.md; anything else, move into AGENTS.local.md or
 upstream it to the starter. Files listed in harness/diverged.txt stay as
@@ -119,7 +119,7 @@ if [ "$apply" -eq 1 ]; then
     exit 1
   fi
   # The harness has to resolve before anything is written: the run ends with
-  # scripts/h link, and a link that cannot resolve is a half-migrated tree.
+  # scripts/harness link, and a link that cannot resolve is a half-migrated tree.
   resolved_root="$(migrate_reference_root "$target")" || exit 1
   # Stubs come from this checkout's template/ and links from whatever the
   # finder resolves; two different checkouts would be a version-skewed install
@@ -232,6 +232,35 @@ migrate_classify_stub() {
   fi
 }
 
+# The old finder path, now a shim. A project with the old scripts/h and no
+# scripts/harness is a pre-rename tree: the harness write installs the finder
+# and the shim takes this path. Already-migrated trees carry the shim and
+# keep it. Historic blobs are looked up under both finder paths: the rename
+# moved the file, so newer history answers under scripts/harness and older
+# history only under scripts/h.
+migrate_classify_shim() {
+  local rel="$1" histsha
+  harness_render "$TEMPLATE/$rel" > "$rendered"
+  if harness_same "$rel" "$rendered" "$target/$rel"; then
+    migrate_plan_add "keep" "$rel" "already the shim"
+    return
+  fi
+  if [ ! -e "$target/scripts/harness" ]; then
+    harness_render "$TEMPLATE/scripts/harness" > "$rendered" 2>/dev/null || : > "$rendered"
+    if [ -s "$rendered" ] && harness_same "scripts/harness" "$rendered" "$target/$rel"; then
+      migrate_plan_add "stub" "$rel" "old finder; the shim takes its place"
+    elif histsha="$(migrate_historic_sha "$HERE" "scripts/harness" "$target/$rel" "$histcache")"; then
+      migrate_plan_add "stub" "$rel" "old finder from an older starter revision ($histsha); the shim takes its place"
+    elif histsha="$(migrate_historic_sha "$HERE" "scripts/h" "$target/$rel" "$histcache")"; then
+      migrate_plan_add "stub" "$rel" "old finder from an older starter revision ($histsha); the shim takes its place"
+    else
+      migrate_plan_add "name" "$rel" "customised — kept; it runs the final link below"
+    fi
+  else
+    migrate_plan_add "name" "$rel" "customised — kept; it runs the final link below"
+  fi
+}
+
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
   dst="$target/$rel"
@@ -286,7 +315,7 @@ while IFS= read -r rel; do
   case " $MIGRATE_STUBS " in
     *" $rel "*) migrate_classify_stub "$rel"; continue ;;
   esac
-  if [ "$rel" = "scripts/h" ]; then
+  if [ "$rel" = "scripts/harness" ]; then
     harness_render "$TEMPLATE/$rel" > "$rendered"
     if harness_same "$rel" "$rendered" "$dst"; then
       migrate_plan_add "keep" "$rel" "already the finder"
@@ -294,6 +323,11 @@ while IFS= read -r rel; do
       migrate_plan_add "name" "$rel" "customised — kept; it runs the final link below"
     fi
     continue
+  fi
+  # The old finder path, now a shim: already-migrated trees carry it, and a
+  # pre-rename tree takes it when nothing customised is in the way.
+  if [ "$rel" = "scripts/h" ]; then
+    migrate_classify_shim "$rel"; continue
   fi
   harness_render "$TEMPLATE/$rel" > "$rendered"
   if harness_same "$rel" "$rendered" "$dst"; then
@@ -377,7 +411,7 @@ migrate_classify_generated() {
 # A file matching what the shared generator produces goes; anything else is
 # named and kept — migrating must never delete what it cannot reproduce. The
 # opencode marker matches both vintages: older generated agents name
-# scripts/opencode-agents.py, newer ones scripts/h opencode-agents.
+# scripts/opencode-agents.py, newer ones scripts/harness opencode-agents.
 migrate_classify_generated ".opencode/agent" "md" "opencode-agents"
 migrate_classify_generated ".codex/agents" "toml" "scripts/codex-support.py"
 
@@ -579,7 +613,7 @@ fi
 
 # Derived Codex output is gitignored in a reference install, never committed.
 migrate_append_ignore "$target" '.codex/agents/' \
-  'Codex agents generated from the shared prompts — scripts/h link regenerates them.' || exit 1
+  'Codex agents generated from the shared prompts — scripts/harness link regenerates them.' || exit 1
 migrate_append_ignore "$target" '.claude/launch.json' \
   'The live dashboard port, rewritten on every bind — machine-local.' || exit 1
 migrate_append_ignore "$target" 'dashboard/state.json' \
@@ -597,8 +631,8 @@ harness_wire_all "$target"
 # shared checkout, so links must never predate a bd command. This runs none,
 # and the link still lands after all of them.
 echo "  linking the shared skills"
-if ! "$target/scripts/h" link </dev/null; then
-  echo "✗ scripts/h link failed in $target — run it yourself and read the error." >&2
+if ! "$target/scripts/harness" link </dev/null; then
+  echo "✗ scripts/harness link failed in $target — run it yourself and read the error." >&2
   exit 1
 fi
 # A .gitignore line does not untrack: the copies the links replaced are still

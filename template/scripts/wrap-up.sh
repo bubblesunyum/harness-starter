@@ -9,7 +9,7 @@
 # never block the commit. Every stage announces itself as it starts, so a
 # long run never looks hung.
 #
-#   scripts/h wrap-up -m "lowercase terse message" --bead fol-xxx
+#   scripts/harness wrap-up -m "lowercase terse message" --bead fol-xxx
 #     [--close fol-yyy --reason "..."] [--note fol-yyy "stands at ..."]
 #     [--remember "..."] [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 #

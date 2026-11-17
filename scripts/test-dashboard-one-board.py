@@ -4,7 +4,7 @@ checkouts, and viewed projects stay untouched.
 
     python3 scripts/test-dashboard-one-board.py
 
-A reference project (the scripts/h finder plus a ledger, no dashboard of its
+A reference project (the scripts/harness finder plus a ledger, no dashboard of its
 own) appears in the board's switcher and is switch-capable; switching to it
 then building state creates no file inside it — the page comes from the
 board's own checkout and the runtime snapshot lives there too. Copied
@@ -69,10 +69,16 @@ class OneBoardTests(unittest.TestCase):
         (self.copy / "scripts").mkdir(parents=True)
         (self.copy / "scripts" / "dashboard.py").write_text("# fake checkout\n")
         # A reference install: the finder plus a ledger, no dashboard at all.
+        # The pre-rename shape carries the old scripts/h resolver; the current
+        # shape carries scripts/harness, with or without the shim beside it.
         self.ref = parent / "referenced"
         (self.ref / "scripts").mkdir(parents=True)
         (self.ref / "scripts" / "h").write_text("# fake finder\n")
         (self.ref / ".beads").mkdir()
+        self.ref_new = parent / "referenced-new"
+        (self.ref_new / "scripts").mkdir(parents=True)
+        (self.ref_new / "scripts" / "harness").write_text("# fake finder\n")
+        (self.ref_new / ".beads").mkdir()
         # A directory that runs no harness: never listed, never switchable.
         self.plain = parent / "plain"
         self.plain.mkdir()
@@ -89,6 +95,7 @@ class OneBoardTests(unittest.TestCase):
         roots = dashboard.sibling_roots()
         self.assertIn(self.copy, roots)
         self.assertIn(self.ref, roots)
+        self.assertIn(self.ref_new, roots)
         self.assertNotIn(self.plain, roots)
 
     def test_both_install_shapes_are_switch_capable(self):
@@ -124,7 +131,7 @@ class OneBoardTests(unittest.TestCase):
         self.assertEqual(json.loads(out.read_text())["root"], str(self.ref))
 
     def test_template_shaped_harness_snapshot_lands_in_board_root(self):
-        # Dispatched through scripts/h, HARNESS is <checkout>/template: a
+        # Dispatched through scripts/harness, HARNESS is <checkout>/template: a
         # HARNESS-anchored snapshot would land untracked in the shared checkout
         # (dashboard/state.json only ignores the checkout root's own).
         checkout = self.parent / "checkout"
@@ -292,7 +299,7 @@ class StubSettingsTests(unittest.TestCase):
             self.assertNotIn("dashboard", cmd)
 
     def test_session_hook_survives(self):
-        self.assertIn('cd "$CLAUDE_PROJECT_DIR" && scripts/h session --hook',
+        self.assertIn('cd "$CLAUDE_PROJECT_DIR" && scripts/harness session --hook',
                       self.hook_commands())
 
 

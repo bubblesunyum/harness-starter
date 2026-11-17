@@ -132,7 +132,7 @@ class InstallPolicyTests(unittest.TestCase):
                 self.assertIn("copied install", result.stdout + result.stderr)
                 self.assertIn("harness migrate", result.stdout + result.stderr)
                 self.assertFalse((target / "AGENTS.md").exists())
-                self.assertFalse((target / "scripts/h").exists())
+                self.assertFalse((target / "scripts/harness").exists())
 
     def test_fresh_and_existing_install_preserve_memories(self):
         self.add()

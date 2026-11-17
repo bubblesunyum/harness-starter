@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """The harness dashboard: what the development system is doing, as a live picture.
 
-    scripts/h dashboard            # start it in the background if nothing is serving
-    scripts/h dashboard up          # the same thing, spelled the way the hooks call it
-    scripts/h dashboard serve      # stay in the foreground instead (ctrl-c to stop)
-    scripts/h dashboard snapshot   # just write dashboard/state.json
-    scripts/h dashboard shot [png] [state ...]  # photograph it, for the design review pass
-    scripts/h dashboard --port N   # serve somewhere else
+    scripts/harness dashboard            # start it in the background if nothing is serving
+    scripts/harness dashboard up          # the same thing, spelled the way the hooks call it
+    scripts/harness dashboard serve      # stay in the foreground instead (ctrl-c to stop)
+    scripts/harness dashboard snapshot   # just write dashboard/state.json
+    scripts/harness dashboard shot [png] [state ...]  # photograph it, for the design review pass
+    scripts/harness dashboard --port N   # serve somewhere else
 
 Backgrounding is the default because of who runs this: a hook at the end of a
 turn, or an agent that has other work to get to. A foreground server there is a
@@ -889,7 +889,7 @@ SYSTEM = [
         # issues.jsonl only exists when the ledger's JSONL export is enabled
         # (bd ships it disabled); it is a readable copy for diffs, never the
         # transport — git carries the ledger as the Dolt ref, pushed by
-        # scripts/h ledger-push. A row for a file that isn't there is simply
+        # scripts/harness ledger-push. A row for a file that isn't there is simply
         # not drawn (see resolve), so this never sends anyone looking for one.
         (".beads/issues.jsonl", "harness", "the issue graph, as a readable export"),
         (".claude/skills/beads/SKILL.md", "harness", "the bd surface, on demand"),
@@ -1527,7 +1527,7 @@ def close_bead(payload):
 # the last good table and says so on stderr. Either way the page never waits.
 DEFAULT_TASKS = {
     "verify": {
-        "command": ["scripts/h", "verify"],
+        "command": ["scripts/harness", "verify"],
         "label": "run",
         "busy": "running…",
         "where": "gate",
@@ -2358,9 +2358,13 @@ SWITCH_MARKER = "dashboards/switch"
 def _is_checkout(d):
     """A directory that runs this harness, by copy or by reference: a copied
     install carries its own scripts/dashboard.py, a reference install the
-    scripts/h finder. The ledger is not required — a fresh `add --reference`
+    scripts/harness finder. The ledger is not required — a fresh `add --reference`
     project lists before its first bead exists."""
     if (d / "scripts" / "dashboard.py").is_file():
+        return True
+    # The current finder name, with the pre-rename one beside it: old trees
+    # carry the scripts/h resolver until migrate converts them.
+    if (d / "scripts" / "harness").is_file():
         return True
     return (d / "scripts" / "h").is_file()
 
@@ -3152,7 +3156,7 @@ def main():
     explicit_port = "--port" in args
     port = int(args[args.index("--port") + 1]) if explicit_port else free_port(PORT)
 
-    # Named so `scripts/h review` picks it up with the app's own captures.
+    # Named so `scripts/harness review` picks it up with the app's own captures.
     # Extra positionals name states (see SHOT_STATES): one png per state,
     # written beside the path. A first positional that names a state keeps
     # the default path, so `shot gate` captures just the gate popover.

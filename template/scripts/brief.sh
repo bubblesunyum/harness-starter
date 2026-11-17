@@ -8,13 +8,13 @@
 # in the `beads` and `workflow` skills instead, where it costs a description
 # line until something actually needs it.
 #
-#   scripts/h brief          # the brief, as text
-#   scripts/h brief --hook   # wrapped as Claude Code SessionStart JSON
-#   scripts/h brief --hook --prepend <file> [--append <file>]
+#   scripts/harness brief          # the brief, as text
+#   scripts/harness brief --hook   # wrapped as Claude Code SessionStart JSON
+#   scripts/harness brief --hook --prepend <file> [--append <file>]
 #                           # contract first, brief, skill note last — one JSON
 set -euo pipefail
 
-# --prepend/--append exist for `scripts/h session`, which prints the shared
+# --prepend/--append exist for `scripts/harness session`, which prints the shared
 # contract before the brief (and a fresh-link skill note after) as one
 # SessionStart object. The JSON wrapper stays here so its python-missing
 # fallback has a single home; without these flags the script behaves exactly
@@ -103,7 +103,7 @@ preflight() {
     echo "gate: scripts/verify.steps.sh is still the placeholder — replace 'step \"build\" false' with real commands"
   fi
   [ -f "$ROOT/harness/models.json" ] || \
-    echo "models: no harness/models.json — run scripts/h models ensure to write it"
+    echo "models: no harness/models.json — run scripts/harness models ensure to write it"
 }
 
 brief() {

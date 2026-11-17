@@ -85,15 +85,15 @@ harness_is_overlay() {
 # Whether a target project carries a copied install of the harness: full
 # contract files where a reference install keeps only the finder, the stubs,
 # and the seeds. scripts/brief.sh and scripts/verify.sh never ship in a
-# reference install — the shared copies arrive through scripts/h dispatch —
+# reference install — the shared copies arrive through scripts/harness dispatch —
 # and .claude/HARNESS.md is template-only. Any one of them as a real file
 # (not a link into the shared checkout) means copies, so a re-run would print
 # "already there" for every stub and leave the stale contract looking done.
-# Unless the finder is there: a reference install always has scripts/h, and
+# Unless the finder is there: a reference install always has scripts/harness, and
 # its own scripts/brief.sh is a deliberate shadow, not a copy.
 harness_is_copy_install() {
   local target="$1" path
-  [ -f "$target/scripts/h" ] && return 1
+  [ -f "$target/scripts/harness" ] && return 1
   for path in scripts/brief.sh scripts/verify.sh .claude/HARNESS.md; do
     if [ -e "$target/$path" ] && [ ! -L "$target/$path" ]; then
       return 0
@@ -474,7 +474,7 @@ harness_render() {
 
 # The shared checkout an `add --reference` install points at, on stdout.
 # HARNESS_HOME first, then ~/.harness, each needing template/.harness-root —
-# the same two sources scripts/h resolves from, minus its fetch fallback: a
+# the same two sources scripts/harness resolves from, minus its fetch fallback: a
 # reference install never clones the network on its own, so an unresolvable
 # harness fails here, before anything is written, naming the fix.
 harness_reference_root() {
@@ -503,9 +503,10 @@ harness_reference_root() {
 
 # Everything an `add --reference` install writes, as project-relative paths,
 # one per line: the stubs, the seeds and harness data files as today, and the
-# scripts/h finder. No shared scripts, no skills, no agents, no HARNESS.md,
+# scripts/harness finder plus the scripts/h shim that execs it. No shared
+# scripts, no skills, no agents, no HARNESS.md,
 # no stacks guidance — those stay in the shared checkout and arrive through
-# `scripts/h link` and dispatch instead.
+# `scripts/harness link` and dispatch instead.
 harness_reference_files() {
   cat <<'EOF'
 AGENTS.md
@@ -514,6 +515,7 @@ opencode.json
 .codex/hooks.json
 scripts/hooks/commit-msg
 scripts/hooks/pre-commit
+scripts/harness
 scripts/h
 harness/seat.md
 AGENTS.local.md

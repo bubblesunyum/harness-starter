@@ -6,7 +6,7 @@ prove it works in your environment (see the Codex section of the contract).
 Use `AGENTS.md` for the workflow and `CLAUDE.md` for project standards. The
 shared procedures live in `.claude/skills/`; use their Beads and handoff steps.
 
-Run `scripts/h brief` if its output has not arrived through the startup
+Run `scripts/harness brief` if its output has not arrived through the startup
 hook. The brief supplies project state; generic `bd prime` and `bd codex-hook`
 instructions are not part of this harness. Changed project hooks require local
 trust in Codex before they run; the manual brief works without hooks.
@@ -23,15 +23,15 @@ existing ledger-sync policy.
 
 Read shared skills through `.agents/skills/`, whose relative directory links
 point to `.claude/skills/`. Edit the shared source when changing the procedure.
-`scripts/h codex-support write` refreshes links and reviewer TOML from
+`scripts/harness codex-support write` refreshes links and reviewer TOML from
 `.claude/agents/`; `check` detects drift. The writer leaves project hooks alone
 and refuses to replace a copied skill until its contents have been reconciled.
 
-For the review pass, run each configured reviewer through `scripts/h agent`.
+For the review pass, run each configured reviewer through `scripts/harness agent`.
 Start the applicable roles together so they independently inspect the same
 packet through OpenCode, which runs every role on the one pinned model in
-`scripts/h models` — never choose or pass another. A visual review requires
-that model to accept images; `scripts/h agent` checks before running it.
+`scripts/harness models` — never choose or pass another. A visual review requires
+that model to accept images; `scripts/harness agent` checks before running it.
 If it refuses, or an OpenCode run exits non-zero, run the role as a
 Codex subagent; a failed run is not a clean review. If a native role is
 unavailable, give a default subagent its `.claude/agents/<role>.md` prompt and

@@ -27,7 +27,7 @@
 # "lane:<key>" (a board lane's header, e.g. "lane:staging").
 [[task]]
 name = "verify"
-command = ["scripts/h", "verify"]
+command = ["scripts/harness", "verify"]
 label = "run"
 busy = "running…"
 where = "gate"

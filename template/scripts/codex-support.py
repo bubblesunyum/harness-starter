@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generate Codex agents and skill links from the shared harness.
 
-    scripts/h codex-support write
-    scripts/h codex-support check   # read-only drift check
+    scripts/harness codex-support write
+    scripts/harness codex-support check   # read-only drift check
 
 Agent prompts and skills stay in .claude/. Codex inherits its host's model;
 Claude model aliases and tool allowlists are not Codex configuration fields.
@@ -62,7 +62,7 @@ def orphan_links(root, links):
 
 def _is_reference(root):
     # A reference install has no scripts/codex-support.py of its own: this
-    # check only runs there through `scripts/h`, with HARNESS_PROJECT naming
+    # check only runs there through `scripts/harness`, with HARNESS_PROJECT naming
     # the project and this file living in the shared checkout outside it.
     # The starter, copied installs, and these unit tests run the file inside
     # the tree being checked, so their check stays a read-only drift check.
@@ -115,7 +115,7 @@ def check(root=ROOT):
         print(f"  CODEX {problem}")
     if problems:
         if _is_reference(root):
-            print("        run scripts/h codex-support write")
+            print("        run scripts/harness codex-support write")
         else:
             print("        run python3 scripts/codex-support.py write")
         return 1

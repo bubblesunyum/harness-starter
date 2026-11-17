@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h session --hook",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/harness session --hook",
             "timeout": 60
           },
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard up",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/harness dashboard up",
             "timeout": 30,
             "statusMessage": "bringing up the harness dashboard"
           }
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard up",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/harness dashboard up",
             "async": true,
             "timeout": 120,
             "statusMessage": "bringing up the harness dashboard"
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h dashboard down",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/harness dashboard down",
             "timeout": 15,
             "statusMessage": "stopping the harness dashboard"
           }
@@ -46,6 +46,6 @@
     ]
   },
   "permissions": {
-    "allow": ["Bash(scripts/h:*)"]
+    "allow": ["Bash(scripts/harness:*)"]
   }
 }

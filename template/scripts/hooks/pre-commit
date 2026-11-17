@@ -45,7 +45,7 @@ tmp="$(mktemp .beads/.harness-precommit-XXXXXX)" || exit 0
 trap 'rm -f "$tmp"' EXIT
 if ! bd export --include-memories -o "$tmp" >/dev/null 2>&1; then
   rm -f "$tmp"
-  echo "  ! ledger export failed — committing without a refresh; scripts/h verify names the drift." >&2
+  echo "  ! ledger export failed — committing without a refresh; scripts/harness verify names the drift." >&2
   exit 0
 fi
 # An empty fresh ledger has nothing to transport. Creating the export here

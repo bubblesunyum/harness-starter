@@ -12,10 +12,10 @@ Use Beads as the shared project task system. Local plans, scratch files, and per
 Run the project brief if its output has not arrived through the startup hook:
 
 ```bash
-scripts/h brief
+scripts/harness brief
 ```
 
-In this harness `scripts/h brief` is the session start — prefer it over `bd prime`, which is the generic fallback.
+In this harness `scripts/harness brief` is the session start — prefer it over `bd prime`, which is the generic fallback.
 
 If the brief fails, check the workspace below and report the failure. Follow the repository workflow rather than loading generic Beads context:
 

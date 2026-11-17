@@ -192,7 +192,7 @@ class AgentTests(unittest.TestCase):
                 self.roster.write_text(json.dumps({"reviewer-taste": entry}))
                 out = self.agent("reviewer-taste", "go do it", events=text_event("ok"))
                 self.assertEqual(out.returncode, 1)
-                self.assertIn("scripts/h models ensure", out.stderr)
+                self.assertIn("scripts/harness models ensure", out.stderr)
                 self.assertNotIn("run", [c["argv"][0] for c in self.calls()])
 
     def test_visual_reviewer_runs_only_with_an_image_capable_model(self):

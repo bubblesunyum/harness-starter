@@ -76,7 +76,7 @@ class ContextBudgetTests(unittest.TestCase):
         (root / "scripts").mkdir(parents=True)
         (root / "scripts/brief.sh").write_text(FAKE_BRIEF)
         marker = root / "H_WAS_RUN"
-        (root / "scripts/h").write_text(
+        (root / "scripts/harness").write_text(
             "#!/bin/bash\ntouch %s\n" % marker)
         (root / "AGENTS.md").write_text("copy stub agents words here\n")
         (root / "CLAUDE.md").write_text("copy claude words here\n")
@@ -99,7 +99,7 @@ class ContextBudgetTests(unittest.TestCase):
                 + tokens_of(brief_out))
         self.assertEqual(dict(parts)["session brief"], tokens_of(brief_out))
         self.assertEqual(total, want, "the outside harness contract must not count")
-        self.assertFalse(marker.exists(), "scripts/h ran during a read-only check")
+        self.assertFalse(marker.exists(), "scripts/harness ran during a read-only check")
         self.assertEqual(snapshot(root), before, "budget created a file or link")
 
     def test_reference_shape_counts_contract_once_and_runs_no_finder(self):
@@ -116,7 +116,7 @@ class ContextBudgetTests(unittest.TestCase):
             "---\ndescription: demo skill for budget\n---\n\nbody\n")
         (root / "scripts").mkdir(parents=True)
         marker = root / "H_WAS_RUN"
-        (root / "scripts/h").write_text(
+        (root / "scripts/harness").write_text(
             "#!/bin/bash\ntouch %s\n" % marker)
         self.assertFalse((root / "scripts/brief.sh").exists())
         (root / "AGENTS.md").write_text("thin stub words here\n")
@@ -146,7 +146,7 @@ class ContextBudgetTests(unittest.TestCase):
             self.assertIn(name, names, "missing budget part: %s" % name)
             self.assertEqual(dict(parts)[name], want, "wrong count for %s" % name)
         self.assertEqual(total, sum(want_parts.values()))
-        self.assertFalse(marker.exists(), "scripts/h ran during a read-only check")
+        self.assertFalse(marker.exists(), "scripts/harness ran during a read-only check")
         self.assertEqual(snapshot(root), before, "budget created a file or link")
 
 

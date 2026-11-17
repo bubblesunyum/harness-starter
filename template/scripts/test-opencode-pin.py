@@ -25,7 +25,7 @@ from models import OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT, ROLES
 
 PINNED = {"model": OPENCODE_MODEL, "variant": OPENCODE_VARIANT}
 AGENT = (f"---\ndescription: x\nmodel: {OPENCODE_MODEL_ARG}\nmode: subagent\n---\n\n"
-         f"<!-- Generated from .claude/agents/x.md by scripts/h opencode-agents. -->\n")
+         f"<!-- Generated from .claude/agents/x.md by scripts/harness opencode-agents. -->\n")
 
 
 class PinCheckTests(unittest.TestCase):

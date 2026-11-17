@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regenerates .opencode/agent/*.md from .claude/agents/*.md, and pins opencode.json.
 
-    scripts/h opencode-agents          # write agents and pin opencode.json pins
-    scripts/h opencode-agents check    # exit 1 if any agent is stale, write nothing
+    scripts/harness opencode-agents          # write agents and pin opencode.json pins
+    scripts/harness opencode-agents check    # exit 1 if any agent is stale, write nothing
 
 One prompt, two frontmatter dialects. The prompt body is the expensive part and
 there is exactly one copy of it, in .claude/agents/; this translates the header
@@ -10,17 +10,17 @@ around it into the shape opencode accepts and writes the result beside it.
 
 The same run merge-writes the model pins in opencode.json and
 template/stubs/opencode.json from OPENCODE_MODEL and OPENCODE_VARIANT in
-scripts/h models: top-level model, small_model, and every agent/mode entry.
+scripts/harness models: top-level model, small_model, and every agent/mode entry.
 Unknown user keys (permissions, instructions, extra settings) are kept;
 only the pin fields are set. A hand edit that names another model is
-restored by re-running this script. scripts/h opencode-pin stays the gate
+restored by re-running this script. scripts/harness opencode-pin stays the gate
 that holds every file to the pin.
 
 In the starter the shared side is generated too: template/.claude/agents/
 → template/.opencode/agent/, so a project running by reference can link its
 .opencode/agent/ entries at `h link` time instead of generating them. A link
 that resolves passes check as-is; a dangling one fails it — the shared agent
-it pointed at is gone, and `scripts/h link` prunes it. Entries are never
+it pointed at is gone, and `scripts/harness link` prunes it. Entries are never
 written through — writing through a link would edit the shared checkout.
 
 **Not a symlink, and that is the whole point.** opencode reads a symlinked
@@ -31,7 +31,7 @@ agent picker. It looks installed and fails at spawn, which is the worst place to
 find out.
 
 Every generated agent carries `model: OPENCODE_MODEL#OPENCODE_VARIANT` from
-scripts/h models — the one model opencode runs on. Claude's tier names
+scripts/harness models — the one model opencode runs on. Claude's tier names
 (haiku, sonnet) are aliases opencode doesn't resolve, so the source's own
 `model:` line is never translated.
 
@@ -113,7 +113,7 @@ GUARDED = {
     "task": ("Task", "Agent"),
 }
 
-GENERATED_BY = "scripts/h opencode-agents"
+GENERATED_BY = "scripts/harness opencode-agents"
 
 
 def frontmatter(text):
@@ -347,7 +347,7 @@ def check():
     every time and never tell anyone the two had drifted. A link that resolves
     passes without regenerating — by reference it is the shared agent — but a
     dangling one fails: the shared agent it pointed at is gone, and
-    `scripts/h link` prunes it."""
+    `scripts/harness link` prunes it."""
     stale = []
     total = 0
     for claude_dir, opencode_dir, base in pairs():
@@ -364,7 +364,7 @@ def check():
                     continue
                 stale.append(path)
                 print(f"  AGENT {display_path(path)} is a dangling link — "
-                      f"run 'scripts/h link' to prune it")
+                      f"run 'scripts/harness link' to prune it")
                 continue
             try:
                 ok = path.is_file() and path.read_text() == text
@@ -378,7 +378,7 @@ def check():
             stale.append(path)
             if path.is_symlink():
                 print(f"  AGENT {display_path(path)} is a dangling link — "
-                      f"run 'scripts/h link' to prune it")
+                      f"run 'scripts/harness link' to prune it")
                 continue
             try:
                 path.read_text()

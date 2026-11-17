@@ -10,10 +10,10 @@
 # and it's the first thing the closing instructions ask for.
 #
 # A reference install keeps the contract in the shared checkout: this writes
-# the stubs in template/stubs/, the seeds, CLAUDE.md and scripts/h — and no
-# other contract file — then runs `<target>/scripts/h link` so the shared
+# the stubs in template/stubs/, the seeds, CLAUDE.md and scripts/harness — and no
+# other contract file — then runs `<target>/scripts/harness link` so the shared
 # skills exist before the first session. The shared skills, agents and scripts
-# stay in the checkout and arrive through `scripts/h link` and dispatch.
+# stay in the checkout and arrive through `scripts/harness link` and dispatch.
 #
 # Never overwrites a file that already exists in the target, and prints what it
 # skipped, so a re-run is a safe way to pick up pieces added since.
@@ -46,8 +46,8 @@ project that already has a ledger keeps the prefix it already has. Needs beads
 before writing anything. A copied install converts with 'harness migrate'.
 
 A reference install keeps the contract in the shared checkout: add writes the
-stubs in template/stubs/, the seeds, CLAUDE.md and scripts/h — and no other
-contract file — then runs '<target>/scripts/h link' so the shared skills exist
+stubs in template/stubs/, the seeds, CLAUDE.md and scripts/harness — and no other
+contract file — then runs '<target>/scripts/harness link' so the shared skills exist
 before the first session.
 
 Never overwrites a file that already exists, so re-running is a safe way to
@@ -224,9 +224,9 @@ append_ignore 'dashboard/state.json' \
 append_ignore '.tmp/' \
   'Agent scratch — created here, removed when done, never committed.'
 # Derived, not committed: the shared prompts are the source of truth, and
-# `scripts/h link` regenerates these from them on every session.
+# `scripts/harness link` regenerates these from them on every session.
 append_ignore '.codex/agents/' \
-  'Codex agents generated from the shared prompts — scripts/h link regenerates them.'
+  'Codex agents generated from the shared prompts — scripts/harness link regenerates them.'
 
 # Claude Code auto-loads CLAUDE.md and nothing else; opencode auto-loads
 # AGENTS.md. The import is what makes the contract always-loaded in both, rather
@@ -439,9 +439,9 @@ if codex.exists():
             hooks.pop(event)
     starts = hooks.setdefault("SessionStart", [])
     # A reference install points its hooks at the finder, never at installed
-    # scripts: the Codex brief entry names scripts/h.
-    want_pat = r"scripts/h(?![\w/-])"
-    want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/h" session --hook'
+    # scripts: the Codex brief entry names scripts/harness.
+    want_pat = r"scripts/harness(?![\w/-])"
+    want_cmd = 'bash "$(git rev-parse --show-toplevel)/scripts/harness" session --hook'
     added = not any(re.search(want_pat, h.get("command", ""))
                     for g in starts for h in g.get("hooks", []))
     if added:
@@ -589,7 +589,7 @@ Do these now, in this order. They are the parts no script can infer.
    harness contract and CLAUDE.md imports it, so don't repeat any of it here.
 
 3. scripts/verify.steps.sh — this project's real build and test commands, going
-   through `step`. scripts/h verify runs the gate from the shared checkout.
+   through `step`. scripts/harness verify runs the gate from the shared checkout.
 
 4. harness/reviewers/{taste,correctness,design}.md — this project's own
    reviewer checks: the language, framework, and actual recurring bugs.
@@ -599,7 +599,7 @@ Do these now, in this order. They are the parts no script can infer.
    harness/stacks/ — check that harness/stacks.txt named the right stacks
    above.
 
-Then run scripts/h doctor and scripts/h session, and open the starter's
+Then run scripts/harness doctor and scripts/harness session, and open the starter's
 dashboard — the starter's dashboard shows this project, and nothing is
 installed here for it.
 Read .claude/HARNESS.md before rearranging any of it.
@@ -617,15 +617,15 @@ fi
 # bd init writes .agents/skills/beads/SKILL.md, and with the links already in
 # place that write lands through them in the SHARED checkout's beads skill.
 echo "  linking the shared skills"
-"$target/scripts/h" link || {
-  echo "✗ scripts/h link failed in $target — run it yourself and read the error." >&2
+"$target/scripts/harness" link || {
+  echo "✗ scripts/harness link failed in $target — run it yourself and read the error." >&2
   exit 1
 }
 
 # Shared sources are linked before Codex discovery links are generated: a
 # reference install runs the shared generator through the finder — its
 # .codex/agents and .agents/skills are per-project output either way.
-if ! (cd "$target" && ./scripts/h codex-support write); then
+if ! (cd "$target" && ./scripts/harness codex-support write); then
   echo "  ! Codex setup needs reconciliation; shared sources were preserved." >&2
   exit 1
 fi

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Guards the knowledge layer: is it still true, and is it still small.
 
-    scripts/h context            # report both
-    scripts/h context check      # exit 1 if a doc is stale or the budget is blown
-    scripts/h context bless      # re-record hashes after updating a doc
-    scripts/h context digest     # everything the librarian pass needs to read
-    scripts/h context spend      # what recent sessions actually cost, per session
+    scripts/harness context            # report both
+    scripts/harness context check      # exit 1 if a doc is stale or the budget is blown
+    scripts/harness context bless      # re-record hashes after updating a doc
+    scripts/harness context digest     # everything the librarian pass needs to read
+    scripts/harness context spend      # what recent sessions actually cost, per session
 
 Two failures this catches, both of which shipped before it existed:
 
@@ -104,13 +104,13 @@ SETTINGS = [Path.home() / ".claude/settings.json",
 # every time it runs. Matched by name rather than executed; a checker that ran
 # whatever it found configured would be a worse idea than the drift it catches.
 OWN_HOOKS = ("scripts/brief.sh", "scripts/dashboard.py",
-             "scripts/h session", "scripts/h dashboard")
+             "scripts/harness session", "scripts/harness dashboard")
 
 
 def _is_own_hook(command):
     """Whether a SessionStart command is one the harness installed. Matched by
-    path with boundaries, not substring: a custom `scripts/h session-extra`
-    or `my-scripts/h session` is foreign cost the budget must not hide."""
+    path with boundaries, not substring: a custom `scripts/harness session-extra`
+    or `my-scripts/harness session` is foreign cost the budget must not hide."""
     for own in OWN_HOOKS:
         if re.search(r"(?<![\w-])" + re.escape(own) + r"(?![\w/-])", command):
             return True
@@ -259,7 +259,7 @@ def is_reference():
     """Whether this project runs by reference: the harness lives outside the
     checkout and the project carries no copy of its own.
 
-    scripts/h ships in every install now, so its presence no longer tells the
+    scripts/harness ships in every install now, so its presence no longer tells the
     two apart. The copy's own brief.sh does: a reference install keeps no
     shared scripts."""
     try:
@@ -302,19 +302,19 @@ def skill_description_tokens(skills_dir):
 def run_brief():
     """The brief's stdout, via the project-first sibling resolution.
 
-    Never the finder: context.py is a read-only check, and `scripts/h session`
+    Never the finder: context.py is a read-only check, and `scripts/harness session`
     links, rewrites .gitignore and may clone. A failed brief is reported on
     stderr rather than silently scored as 0 tokens."""
     try:
         proc = subprocess.run(["bash", str(harness_script("brief.sh"))],
                               capture_output=True, text=True)
     except OSError as exc:
-        print(f"  ! brief failed ({exc}) — run scripts/h brief and read the error",
+        print(f"  ! brief failed ({exc}) — run scripts/harness brief and read the error",
               file=sys.stderr)
         return ""
     if proc.returncode != 0:
         print(f"  ! brief failed (exit {proc.returncode}) — "
-              f"run scripts/h brief and read the error", file=sys.stderr)
+              f"run scripts/harness brief and read the error", file=sys.stderr)
     return proc.stdout
 
 
@@ -543,7 +543,7 @@ def report(strict):
         print(f"  {line}")
 
     for doc in unblessed:
-        print(f"  new   {doc.relative_to(ROOT)} — run 'scripts/h context bless'")
+        print(f"  new   {doc.relative_to(ROOT)} — run 'scripts/harness context bless'")
 
     # Reported, never enforced. A threshold here only ever measured how long it
     # had been since someone argued with the layer, and the librarian does that

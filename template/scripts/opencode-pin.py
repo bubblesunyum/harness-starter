@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Fails when anything here would run opencode on a model other than the pin.
 
-    scripts/h opencode-pin check          # this checkout
-    scripts/h opencode-pin check <root>   # another tree — the planted tests use it
+    scripts/harness opencode-pin check          # this checkout
+    scripts/harness opencode-pin check <root>   # another tree — the planted tests use it
 
-opencode runs on OPENCODE_MODEL at OPENCODE_VARIANT (scripts/h models) and
+opencode runs on OPENCODE_MODEL at OPENCODE_VARIANT (scripts/harness models) and
 nothing else. This holds every place a model could be chosen to that:
 
   harness/models.json    every entry names the pin (absent is fine: it applies anyway)
@@ -21,8 +21,8 @@ nothing else. This holds every place a model could be chosen to that:
 
 The prose rule came first and failed: a session with no terminal hand-wrote a
 roster of paid models and nothing checked it (bloomerang-mcp, 2026-11-03).
-Reported, never fixed: `scripts/h models ensure` and
-`scripts/h opencode-agents` rewrite what they own; anything else is a person's
+Reported, never fixed: `scripts/harness models ensure` and
+`scripts/harness opencode-agents` rewrite what they own; anything else is a person's
 edit and gets a person's attention.
 """
 
@@ -46,7 +46,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from models import (OPENCODE_MODEL, OPENCODE_MODEL_ARG, OPENCODE_VARIANT,
                     model_is_pinned, pin_problem)
 
-GENERATED_BY = "scripts/h opencode-agents"
+GENERATED_BY = "scripts/harness opencode-agents"
 CONFIGS = ("opencode.json", "opencode.jsonc",
            ".opencode/opencode.json", ".opencode/opencode.jsonc")
 # Config subtrees that hold agent definitions — where a `model` key picks what
@@ -92,15 +92,15 @@ def roster_problems(root):
     roster = root / "harness/models.json"
     if not roster.exists():
         # Absent stays passing: checkouts from before the roster was tracked
-        # have no file, and the pin applies without one. `scripts/h models
+        # have no file, and the pin applies without one. `scripts/harness models
         # ensure` backfills it; the gate must not fail first.
         return []
     try:
         data = json.loads(roster.read_text())
     except ValueError:
-        return [f"{roster.relative_to(root)}: unreadable — run scripts/h models ensure"]
+        return [f"{roster.relative_to(root)}: unreadable — run scripts/harness models ensure"]
     if not isinstance(data, dict):
-        return [f"{roster.relative_to(root)}: not a JSON object — run scripts/h models ensure"]
+        return [f"{roster.relative_to(root)}: not a JSON object — run scripts/harness models ensure"]
     return [f"{roster.relative_to(root)}: {problem}" for role, entry in sorted(data.items())
             if (problem := pin_problem(role, entry))]
 
@@ -367,7 +367,7 @@ def check(root):
         print(f"  PIN   {problem}")
     if problems:
         print(f"        opencode runs only on {OPENCODE_MODEL_ARG} — "
-              f"scripts/h models ensure and {GENERATED_BY} rewrite what they own")
+              f"scripts/harness models ensure and {GENERATED_BY} rewrite what they own")
         return 1
     print(f"  ok    opencode pinned to {OPENCODE_MODEL_ARG}")
     return 0
@@ -376,7 +376,7 @@ def check(root):
 if __name__ == "__main__":
     args = sys.argv[1:]
     if args[:1] != ["check"] or len(args) > 2:
-        print("usage: scripts/h opencode-pin check [root]", file=sys.stderr)
+        print("usage: scripts/harness opencode-pin check [root]", file=sys.stderr)
         sys.exit(2)
     root = Path(args[1]).resolve() if len(args) == 2 else ROOT
     if not root.is_dir():

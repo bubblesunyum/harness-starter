@@ -204,7 +204,7 @@ for name in (".codex/hooks.json", ".claude/settings.json"):
             entries = [h for h in group.get("hooks", [])
                        if not isinstance(h, dict) or not re.search(r"\bbd\s+(?:codex-hook|prime)\b"
                                         r"|scripts/dashboard\.py\s+(?:up|down)\b"
-                                        r"|scripts/h\s+dashboard\b",
+                                        r"|scripts/harness\s+dashboard\b",
                                         str(h.get("command", "")))]
             removed |= len(entries) != len(group.get("hooks", []))
             if entries:

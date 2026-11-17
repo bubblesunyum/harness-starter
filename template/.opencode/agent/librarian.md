@@ -9,7 +9,7 @@ permission:
   websearch: deny
 ---
 
-<!-- Generated from .claude/agents/librarian.md by scripts/h opencode-agents.
+<!-- Generated from .claude/agents/librarian.md by scripts/harness opencode-agents.
      Edit that file, not this one, and re-run the script. -->
 
 You keep the project's knowledge layer honest and small. Capture is somebody
@@ -19,7 +19,7 @@ deciding what stops earning its place.
 Start by building the digest:
 
 ```bash
-scripts/h context digest
+scripts/harness context digest
 ```
 
 That writes every skill body, every memory, and the always-loaded cost to one file.

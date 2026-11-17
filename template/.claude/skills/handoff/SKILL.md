@@ -20,7 +20,7 @@ writes and zero file edits. Anything that moves afterwards is not finishing
 the round — it is starting a new one, and it gets its own bead and its own
 gate.
 
-Prefer `scripts/h wrap-up` over hand-ordering the steps below — it runs them
+Prefer `scripts/harness wrap-up` over hand-ordering the steps below — it runs them
 in the order that stays clean (ledger writes, export, verify, commit, push).
 The pre-commit hook stages a fresh export on every commit, so the order is
 belt and braces; the manual export is the fast path and the gate check the
@@ -28,7 +28,7 @@ backstop. The script proves the promise itself (wrap-up's step 7 fails a dirty
 tree), so a green run already means the rule held:
 
 ```bash
-scripts/h wrap-up -m "lowercase terse message" --bead <id> \
+scripts/harness wrap-up -m "lowercase terse message" --bead <id> \
   [--close <id> --reason "..."] [--note <id> "..."] [--remember "..."] \
   [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 ```
@@ -47,11 +47,11 @@ proof at the end:
    `bd note <id> "<where it stands>"`. Discoveries filed with `bd q`.
    Anything that surprised you written with `bd remember`. Write the handoff
    note file now, before anything commits.
-2. **Prove the tree and commit.** `scripts/h verify` passes; commit the work
+2. **Prove the tree and commit.** `scripts/harness verify` passes; commit the work
    (leaving the note file out), then commit the note file on its own as the
    capture — that capture commit is the ending commit, and nothing moves
    after it.
-3. **Push the ledger, after the commit.** `scripts/h ledger-push`, best-effort:
+3. **Push the ledger, after the commit.** `scripts/harness ledger-push`, best-effort:
    a failed push warns and the commit stands. The beads are not in the commit
    you just made — they ride their own git ref, and nothing moves it for you. A
    session that skips this leaves the whole ledger on one disk.
@@ -75,7 +75,7 @@ echo "harness/handoffs/$(date +%Y%m%d-%H%M%S).md"    # write to this path
 One file per closing session, never overwritten — two sessions running at once
 would otherwise clobber each other, and the point of a note is that it survives.
 
-`scripts/h brief` reads **the newest note's first three lines** at wake-up, so
+`scripts/harness brief` reads **the newest note's first three lines** at wake-up, so
 put what matters first and keep it to a few lines. What belongs here is what the
 structured fields can't hold: what you were mid-thought on, the approach you
 rejected and why it still tempts you, the thing that felt wrong but that you

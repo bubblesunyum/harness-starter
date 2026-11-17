@@ -6,12 +6,12 @@ The harness installs this file once and never compares or overwrites it.
 
 ## Wrap-up: run the script, don't hand-order the steps
 
-`scripts/h wrap-up` closes out work in the one order that stays clean —
+`scripts/harness wrap-up` closes out work in the one order that stays clean —
 ledger writes, push, export, verify, commit — because every `bd` write after
 the export (including `bd close`) re-dirties it, and the gate's first check
 then fails and forces a second full run:
 
-  scripts/h wrap-up -m "lowercase terse message" --bead <id> \
+  scripts/harness wrap-up -m "lowercase terse message" --bead <id> \
     [--close <id> --reason "..."] [--note <id> "..."] [--remember "..."] \
     [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 
@@ -20,13 +20,13 @@ commit hook; closed ids resolve). The push is best-effort, never blocking: on
 failure it warns and commits anyway, and `--check` keeps nagging until a later
 push lands. A failed gate aborts before any commit — reopen, fix, rerun.
 Ledger-only changes after a green gate need just the export check
-(`scripts/h verify --quick` runs it first), not a full re-gate.
+(`scripts/harness verify --quick` runs it first), not a full re-gate.
 
 ## Working on the starter
 
 This checkout runs the harness exactly as every project does — by reference —
-except that `scripts/h` resolves its own `template/` first. So there are no
-root copies to keep in step: edit `template/`, and the next `scripts/h <cmd>`
+except that `scripts/harness` resolves its own `template/` first. So there are no
+root copies to keep in step: edit `template/`, and the next `scripts/harness <cmd>`
 here, and in every project on this machine, runs the edit. That is also the
 risk: a half-finished edit to `template/` is live everywhere at once, so keep
 `template/` working between commits, and check `git status template/` after

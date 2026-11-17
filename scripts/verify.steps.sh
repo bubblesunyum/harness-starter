@@ -10,7 +10,7 @@
 # probes, heavy suites — goes through `probe_step` instead: same contract,
 # but skipped in the --quick lane, which is what keeps iteration fast.
 
-# The gate usually arrives through `scripts/h verify`, which exports the
+# The gate usually arrives through `scripts/harness verify`, which exports the
 # dispatch environment for the shared scripts. Every probe below builds its
 # own fixture and must resolve its own project and harness, so none inherits it.
 unset HARNESS_PROJECT HARNESS_ROOT HARNESS_SOURCE
@@ -20,7 +20,7 @@ unset HARNESS_PROJECT HARNESS_ROOT HARNESS_SOURCE
 # that there's no excuse for skipping it.
 
 # Reference probes resolve the harness through the finder — installs, the
-# commit-msg shim, and scripts/h dispatch all go through it — so they need the
+# commit-msg shim, and scripts/harness dispatch all go through it — so they need the
 # checkout. The gate runs here, in the starter itself, hence one export rather
 # than an inline assignment on every probe command.
 export HARNESS_HOME="$PWD"
@@ -33,7 +33,7 @@ probe_step "reference install" bash scripts/test-reference-add.sh
 probe_step "migrate a copied install" bash scripts/test-migrate.sh
 
 # The starter runs by reference: its finder resolves to its own template/
-# first, so editing a template file takes effect in the next `scripts/h`
+# first, so editing a template file takes effect in the next `scripts/harness`
 # command with no copy step. Proved with a probe-only marker in a scratch
 # starter checkout — isolated, so the gate never dirties its own template —
 # resolved with no HARNESS_HOME, so only the starter-first path can find it.
@@ -46,9 +46,9 @@ probe_step "editing template takes effect immediately" bash -c '
     { echo "error: cannot copy marker"; exit 1; }
   cp "$PWD/template/scripts/models.py" "$scratch/template/scripts/models.py" ||
     { echo "error: cannot copy models"; exit 1; }
-  cp "$PWD/scripts/h" "$scratch/scripts/h" ||
+  cp "$PWD/scripts/harness" "$scratch/scripts/harness" ||
     { echo "error: cannot copy finder"; exit 1; }
-  chmod +x "$scratch/scripts/h" || { echo "error: cannot chmod finder"; exit 1; }
+  chmod +x "$scratch/scripts/harness" || { echo "error: cannot chmod finder"; exit 1; }
   python3 - "$scratch/template/scripts/models.py" <<PYEOF ||
 import sys
 p = sys.argv[1]
@@ -60,15 +60,15 @@ PYEOF
     { echo "error: cannot plant marker"; exit 1; }
   # models with no args prints usage and exits 2 — expected, so || true keeps
   # the output for the grep below rather than failing here.
-  out="$(env -u HARNESS_HOME HOME="$scratch/no-home" HARNESS_URL="file:///nonexistent-probe" "$scratch/scripts/h" models 2>&1 || true)"
+  out="$(env -u HARNESS_HOME HOME="$scratch/no-home" HARNESS_URL="file:///nonexistent-probe" "$scratch/scripts/harness" models 2>&1 || true)"
   echo "$out" | grep -q "probe-marker-12345" ||
     { echo "error: edited template did not take effect"; echo "$out"; exit 1; }'
 
 step "shell parses" bash -c '
   set -e
   for f in bin/harness commands/*.sh commands/lib/*.sh scripts/*.sh scripts/hooks/* \
-           scripts/h template/scripts/*.sh template/scripts/hooks/* \
-           template/scripts/lib/*.sh template/scripts/h template/stubs/scripts/hooks/*; do
+           scripts/harness template/scripts/*.sh template/scripts/hooks/* \
+           template/scripts/lib/*.sh template/scripts/harness template/stubs/scripts/hooks/*; do
     [ -f "$f" ] || continue
     bash -n "$f" || { echo "error: $f"; exit 1; }
   done'
@@ -224,7 +224,7 @@ export -f await_bead_ready
 # probe's copy import the shared module instead — resolved the way a real
 # session resolves it, never hardcoded to this checkout.
 probe_shared_root() {
-  HARNESS_HOME="$PWD" "$1/scripts/h" root 2>/dev/null || {
+  HARNESS_HOME="$PWD" "$1/scripts/harness" root 2>/dev/null || {
     echo "error: the probe finder cannot resolve the harness"; return 1; }
 }
 export -f probe_shared_root
@@ -287,7 +287,7 @@ probe_step "placeholders substitute" bash -c '
   # nothing to complain about, and the gate would pass vacuously — which is the
   # silent success this project exists to avoid, in the check meant to catch it.
   golden_probe || exit 1
-  [ -f "$probe/scripts/h" ] || { echo "error: install produced no finder"; exit 1; }
+  [ -f "$probe/scripts/harness" ] || { echo "error: install produced no finder"; exit 1; }
   left=$(grep -rl "{{" "$probe" --include="*.sh" --include="*.py" --include="*.md" \
                 --include="*.html" --include="*.json" 2>/dev/null || true)
   [ -z "$left" ] || { echo "error: placeholders survived in: $left"; exit 1; }
@@ -700,15 +700,15 @@ EOF
   # An empty catalog cache, so the default is OPENCODE_CONTEXT rather than
   # whatever this machine has cached for the pinned model.
   export XDG_CACHE_HOME="$probe/no-cache"
-  [ "$(HARNESS_HOME="$PWD" "$probe/scripts/h" models budget reviewer-taste)" = "12345" ] ||
+  [ "$(HARNESS_HOME="$PWD" "$probe/scripts/harness" models budget reviewer-taste)" = "12345" ] ||
     { echo "error: explicit context not honored"; exit 1; }
-  [ "$(HARNESS_HOME="$PWD" "$probe/scripts/h" models budget reviewer-design)" = "1048576" ] ||
+  [ "$(HARNESS_HOME="$PWD" "$probe/scripts/harness" models budget reviewer-design)" = "1048576" ] ||
     { echo "error: default is not the pin window"; exit 1; }
   # if-form, not trailing &&: a failed && as the last line exits the step 1.
-  if HARNESS_HOME="$PWD" "$probe/scripts/h" models budget nobody >/dev/null 2>&1; then
+  if HARNESS_HOME="$PWD" "$probe/scripts/harness" models budget nobody >/dev/null 2>&1; then
     echo "error: budget passed for an unknown role"; exit 1;
   fi
-  if HARNESS_HOME="$PWD" "$probe/scripts/h" models budget librarian >/dev/null 2>&1; then
+  if HARNESS_HOME="$PWD" "$probe/scripts/harness" models budget librarian >/dev/null 2>&1; then
     echo "error: budget passed for a foreign roster entry"; exit 1;
   fi'
 
@@ -726,11 +726,11 @@ EOF
     { echo "error: cannot write test roster"; exit 1; }
   echo "# change" >> "$probe/AGENTS.md" ||
     { echo "error: cannot dirty a tracked file"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" "$probe/scripts/h" review 2>&1) &&
+  out=$(HARNESS_HOME="$PWD" "$probe/scripts/harness" review 2>&1) &&
     { echo "error: review passed an over-budget packet"; echo "$out"; exit 1; }
   echo "$out" | grep -q "reviewer-taste" ||
     { echo "error: refusal never named the binding role"; echo "$out"; exit 1; }
-  echo "$out" | grep -q "scripts/h review <commit>" ||
+  echo "$out" | grep -q "scripts/harness review <commit>" ||
     { echo "error: refusal never said how to narrow"; echo "$out"; exit 1; }'
 
 # A packet within budget still prints its path — the refusal must not fire on
@@ -745,7 +745,7 @@ EOF
     { echo "error: cannot write test roster"; exit 1; }
   echo "# change" >> "$probe/AGENTS.md" ||
     { echo "error: cannot dirty a tracked file"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" "$probe/scripts/h" review 2>&1) || {
+  out=$(HARNESS_HOME="$PWD" "$probe/scripts/harness" review 2>&1) || {
     echo "error: review refused a fitting packet"; echo "$out"; exit 1; }
   echo "$out" | grep -q "review-packet" ||
     { echo "error: review never printed the packet"; echo "$out"; exit 1; }'
@@ -772,7 +772,7 @@ EOF
     grep -qxF "model: $pin#xhigh" "$agent" ||
       { echo "error: $agent does not carry the pin"; exit 1; }
   done
-  (HARNESS_HOME="$PWD" "$probe/scripts/h" models ensure </dev/null >/dev/null 2>&1) ||
+  (HARNESS_HOME="$PWD" "$probe/scripts/harness" models ensure </dev/null >/dev/null 2>&1) ||
     { echo "error: ensure failed without a terminal"; exit 1; }
   python3 - "$probe/harness/models.json" "$pin" <<EOF ||
 import json, sys
@@ -827,17 +827,52 @@ probe_step "add refuses a copied install and points at migrate" bash -c '
     { echo "error: the refusal never named the copied install"; echo "$out"; exit 1; }
   echo "$out" | grep -q "harness migrate" ||
     { echo "error: the refusal never pointed at migrate"; echo "$out"; exit 1; }
-  if [ -e "$probe/AGENTS.md" ] || [ -e "$probe/scripts/h" ]; then
+  if [ -e "$probe/AGENTS.md" ] || [ -e "$probe/scripts/harness" ]; then
     echo "error: add wrote reference files into the refused copy"; exit 1;
   fi'
 
-# A target that is already a reference install — scripts/h, no copies —
+# A target that is already a reference install — scripts/harness, no copies —
 # re-runs idempotently instead of refusing.
 probe_step "add re-runs idempotently over a reference install" bash -c '
   golden_probe || exit 1
   out=$(bin/harness add "$probe" 2>&1) || { echo "error: re-add failed"; echo "$out"; exit 1; }
   if echo "$out" | grep -q "copied install"; then
     echo "error: re-add mistook a reference install for a copy"; echo "$out"; exit 1;
+  fi'
+
+# A pre rename tree carries the old finder at scripts/h with no harness.
+# Migrate writes the finder and leaves the shim in its place, and a second
+# apply changes nothing.
+probe_step "migrate converts a project with scripts/h" bash -c '
+  fresh_probe || exit 1
+  mkdir -p "$probe/scripts" || { echo "error: cannot make scripts"; exit 1; }
+  # Genuinely old finder text: the newest historic blob under either finder
+  # path that matches neither the current finder nor the current shim, so the
+  # probe exercises the historic-stub branches instead of the harness-bytes one.
+  harness_txt="$PWD/template/scripts/harness"
+  shim_txt="$PWD/template/scripts/h"
+  cands="$(git -C "$PWD" log --all --format="%H" --follow -- template/scripts/harness 2>/dev/null)"
+  [ -n "$cands" ] || cands="$(git -C "$PWD" log --all --format="%H" -- template/scripts/h 2>/dev/null)"
+  old_found=""
+  for c in $cands; do
+    for p in template/scripts/harness template/scripts/h; do
+      if git -C "$PWD" show "$c:$p" >"$probe/scripts/h" 2>/dev/null; then
+        if ! cmp -s "$probe/scripts/h" "$harness_txt" && ! cmp -s "$probe/scripts/h" "$shim_txt"; then old_found="$c:$p"; break 2; fi
+      fi
+    done
+  done
+  [ -n "$old_found" ] || { echo "error: no genuinely old finder text in history - shallow clone?"; exit 1; }
+  chmod +x "$probe/scripts/h" || { echo "error: cannot chmod old finder"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "seed old finder" >/dev/null 2>&1) || { echo "error: cannot commit old finder"; exit 1; }
+  out=$(bin/harness migrate --apply "$probe" 2>&1) || { echo "error: migrate failed"; echo "$out"; exit 1; }
+  [ -f "$probe/scripts/harness" ] || { echo "error: migrate never wrote the finder"; exit 1; }
+  [ -x "$probe/scripts/harness" ] || { echo "error: finder not executable"; exit 1; }
+  [ -x "$probe/scripts/h" ] || { echo "error: shim not executable"; exit 1; }
+  cmp -s "$shim_txt" "$probe/scripts/h" || { echo "error: scripts/h is not the shim"; exit 1; }
+  (cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "migrate old finder" >/dev/null 2>&1) || { echo "error: cannot commit migration"; exit 1; }
+  out2=$(bin/harness migrate --apply "$probe" 2>&1) || { echo "error: second migrate failed"; echo "$out2"; exit 1; }
+  if [ -n "$(git -C "$probe" status --porcelain)" ]; then
+    echo "error: second migrate dirtied an already migrated tree"; exit 1;
   fi'
 
 # A plugin-only .opencode/opencode.json shadows the root one — opencode reads
@@ -985,7 +1020,7 @@ probe_step "doctor names edited seeds as overlays, not shadows" bash -c '
     { echo "error: cannot edit the steps file"; exit 1; }
   echo "# local scope" >> "$probe/scripts/review.scope.sh" ||
     { echo "error: cannot edit the scope file"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" "$probe/scripts/h" doctor 2>&1) ||
+  out=$(HARNESS_HOME="$PWD" "$probe/scripts/harness" doctor 2>&1) ||
     { echo "error: doctor failed"; echo "$out"; exit 1; }
   echo "$out" | grep -q "overlay: scripts/verify.steps.sh" ||
     { echo "error: doctor never named the steps overlay"; echo "$out"; exit 1; }
@@ -1010,7 +1045,7 @@ probe_step "review honors the scope overlay" bash -c '
   echo "scoped" >> "$probe/scoped.py" || { echo "error: cannot dirty a tracked source"; exit 1; }
   { printf "%s\n" "SCOPE=(\"*.py\")" "CAPTURES=\"no-captures-here-*.png\"" > "$probe/scripts/review.scope.sh"; } ||
     { echo "error: cannot narrow the scope file"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" "$probe/scripts/h" review </dev/null 2>&1) ||
+  out=$(HARNESS_HOME="$PWD" "$probe/scripts/harness" review </dev/null 2>&1) ||
     { echo "error: review failed"; echo "$out"; exit 1; }
   packet=$(printf "%s" "$out" | grep -o "/tmp/[^ )]*" | head -1)
   [ -n "$packet" ] || { echo "error: review never printed the packet"; echo "$out"; exit 1; }
@@ -1025,7 +1060,7 @@ probe_step "review honors the scope overlay" bash -c '
 probe_step "a missing steps overlay fails the gate loudly" bash -c '
   golden_probe || exit 1
   rm "$probe/scripts/verify.steps.sh" || { echo "error: cannot remove the steps file"; exit 1; }
-  out=$(HARNESS_HOME="$PWD" "$probe/scripts/h" verify --quick 2>&1) &&
+  out=$(HARNESS_HOME="$PWD" "$probe/scripts/harness" verify --quick 2>&1) &&
     { echo "error: the gate passed with no project steps"; echo "$out"; exit 1; }
   echo "$out" | grep -q "verify.steps.sh" ||
     { echo "error: the failure never named the missing file"; echo "$out"; exit 1; }'

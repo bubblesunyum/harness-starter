@@ -46,7 +46,7 @@ Every round starts with three answers, from the user or your judgment:
 
 ## Phase 1 — Select and claim
 
-1. `scripts/h brief` first — the `scripts/brief.sh` preflight. It is the state: ready work, memory keys,
+1. `scripts/harness brief` first — the `scripts/brief.sh` preflight. It is the state: ready work, memory keys,
    last session's note. Do not re-derive it by hand.
 2. Select from `bd ready` inside the focus areas, minus the excludes.
    Prefer beads whose acceptance is already written; the next step specs
@@ -75,7 +75,7 @@ else. One message per worker:
 - OWNED paths vs FORBIDDEN paths (its partition, and everything outside it);
 - known traps (from memory keys and the bead);
 - acceptance criteria and only the scoped checks that prove them —
-  never `scripts/h verify` (the gate runs once, on the frozen tree,
+  never `scripts/harness verify` (the gate runs once, on the frozen tree,
   by the orchestrator);
 - bless check — if the brief touches a file named in a `tracks` comment
   or a tracked doc itself, report it and leave the bless to the orchestrator,
@@ -87,26 +87,26 @@ else. One message per worker:
 Spawn one implementer per partition, in parallel, all on opencode — the same
 rule reviewers already follow. Inside opencode, spawn native background
 subagents. From Claude Code or Codex, run them through the opencode CLI
-(`scripts/h agent implement` — never the host-native Task/agent
+(`scripts/harness agent implement` — never the host-native Task/agent
 mechanism for a round). Every worker runs on the one pinned opencode model
-(`scripts/h models`): never choose, pass or configure another, and never
+(`scripts/harness models`): never choose, pass or configure another, and never
 reach for a cheaper "bulk" model to afford a wider round — narrow the round
 instead. The parallel same-tree contract below travels in every brief
 regardless of tool; pass it through in the brief as-is — do not duplicate
 the contract here — this skill *is* it.
 
-Every nested tool run goes through `scripts/h agent` (which carries the wall
+Every nested tool run goes through `scripts/harness agent` (which carries the wall
 cap, the idle watchdog, heartbeats and `ps`/`stop`) or carries an explicit
 timeout — never a bare `opencode run` with no bound. A worker silent past
 the idle limit is killed with exit 5; check a quiet round with
-`scripts/h agent ps` (live runs and their age) rather than waiting blind,
-and end a stuck one with `scripts/h agent stop <run-id>`.
+`scripts/harness agent ps` (live runs and their age) rather than waiting blind,
+and end a stuck one with `scripts/harness agent stop <run-id>`.
 
 **Parallel same-tree contract** (in every brief, no exceptions):
 
 - edit only OWNED paths; read anything, touch nothing else;
-- no `bd` commands, no commits, no `scripts/h verify`,
-  no `scripts/h review`, no reviewers;
+- no `bd` commands, no commits, no `scripts/harness verify`,
+  no `scripts/harness review`, no reviewers;
 - **fix things as you go** rather than filing beads — a broken import
   on the path to done gets fixed, not filed. File a bead only for
   something significant enough to be its own bead: out of scope,
@@ -117,7 +117,7 @@ and end a stuck one with `scripts/h agent stop <run-id>`.
 1. Collect reports. **A report is a claim, not evidence**: re-read
    every diff yourself before believing any of it.
 2. Freeze the tree — no edits until the gate reports — and run
-   `scripts/h verify` once. One gate per round: a gate per worker
+   `scripts/harness verify` once. One gate per round: a gate per worker
    multiplies slow probe runs for no new signal, and editing mid-run
    manufactures phantom failures (a probe split across an edit reads
    as drift that isn't there).
@@ -129,7 +129,7 @@ as long as it verifies the result itself afterwards.
 
 ## Phase 5 — Review
 
-1. `scripts/h review` builds the packet; run `reviewer-taste` and
+1. `scripts/harness review` builds the packet; run `reviewer-taste` and
    `reviewer-correctness` against it in parallel, plus
    `reviewer-design` whenever anything on screen moved.
 2. **Packets are static — rebuild before each round.** A packet built
@@ -170,7 +170,7 @@ file the rest as beads, and say plainly what you left and why.
 - Round accounting: per-worker spend vs cap, round total vs budget,
   filed in the same note or a memory so the next round's budget is a
   measurement, not a guess.
-- Close with `scripts/h wrap-up` — it settles the ledger, runs the gate,
+- Close with `scripts/harness wrap-up` — it settles the ledger, runs the gate,
   and leaves the handoff note for the next session. The close ends on the
   commit, period: all closes, notes, and remembers go through wrap-up's
   flags, the note rides `--note-file`, and zero `bd` writes and zero file

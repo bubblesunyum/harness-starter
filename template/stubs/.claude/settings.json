@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/h session --hook",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/harness session --hook",
             "timeout": 60
           }
         ]
@@ -14,6 +14,6 @@
     ]
   },
   "permissions": {
-    "allow": ["Bash(scripts/h:*)"]
+    "allow": ["Bash(scripts/harness:*)"]
   }
 }

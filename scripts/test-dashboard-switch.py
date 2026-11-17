@@ -95,7 +95,7 @@ class SwitchRootTests(unittest.TestCase):
         # sibling_roots() lists children of ROOT.parent holding the harness,
         # so every fake checkout needs its install shape to be seen at all:
         # copied installs carry scripts/dashboard.py, reference installs the
-        # scripts/h finder — with or without a ledger yet.
+        # scripts/harness finder — with or without a ledger yet.
         for r in (self.root, self.markerless, self.peer):
             (r / "scripts").mkdir(parents=True)
             (r / "scripts" / "dashboard.py").write_text("# fake checkout\n")
@@ -200,7 +200,7 @@ class SwitchRootTests(unittest.TestCase):
         self.assertTrue(reads[0].endswith("dashboard/index.html"))
 
     def test_dispatched_switch_hands_children_the_new_project(self):
-        # A board started through scripts/h carries HARNESS_PROJECT, which its
+        # A board started through scripts/harness carries HARNESS_PROJECT, which its
         # children (brief, verify, task buttons) read instead of the globals.
         with mock.patch.dict(os.environ, {"HARNESS_PROJECT": str(self.root)}):
             self.assertEqual(dashboard.switch_root({"root": str(self.peer)}), {"ok": True})

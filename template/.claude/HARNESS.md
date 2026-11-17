@@ -27,7 +27,7 @@ how the pieces fit together.
   discoveries go there, not into TodoWrite or markdown TODOs. It is the thing
   that survives a session ending, so a bead that's still `open` mid-implementation
   is a ledger that's lying.
-  `scripts/h ledger-push` regenerates the tracked `.beads/issues.jsonl` (with
+  `scripts/harness ledger-push` regenerates the tracked `.beads/issues.jsonl` (with
   memories) on every push — the Dolt ref is the primary transport, the JSONL is
   what a fresh clone hydrates from, so the file stays committed, never ignored.
 - **Skills:** `.claude/skills/` — `workflow` (the hub), `agentic-review`,
@@ -37,7 +37,7 @@ how the pieces fit together.
 - **Reviewers:** `.claude/agents/` — `reviewer-taste`,
   `reviewer-correctness` and `reviewer-design`, each on the model its
   frontmatter names, run against a
-  packet from `scripts/h review`. Design reads screenshots rather than the
+  packet from `scripts/harness review`. Design reads screenshots rather than the
   diff, because a diff can't show you clipping. The packet carries untracked
   files too, and stages nothing to do it; its captures are dated from the
   working tree's first edit, so an unrelated session's screenshots stay out.
@@ -46,9 +46,9 @@ how the pieces fit together.
   session decides.
 - **opencode:** `opencode.json` names the always-loaded files, and
   `.opencode/agent/` holds the reviewers translated into opencode's dialect by
-  `scripts/h opencode-agents`. See below — two of the obvious moves here are
+  `scripts/harness opencode-agents`. See below — two of the obvious moves here are
   traps.
-- **Gate:** `scripts/h verify` — build, tests, optional smoke, plus doc
+- **Gate:** `scripts/harness verify` — build, tests, optional smoke, plus doc
   staleness. Tiny output on purpose. The default lane is diff-scoped: only
   ledger paths changed (`.beads/`, `harness/handoffs/`,
   `harness/laurels.jsonl`) runs just the ledger export check and finishes in
@@ -68,14 +68,14 @@ how the pieces fit together.
   earlier would heal the drift under test and report a match on resurrected
   state. The close runs ledger writes, export, verify, commit, push: the push
   goes last, best-effort, never blocking the commit.
-- **Dashboard:** `scripts/h dashboard` serves a live diagram at localhost:7391.
+- **Dashboard:** `scripts/harness dashboard` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in
   Claude Code's browser pane — the one browser the agent can read back and
   screenshot, and the one that doesn't land behind whatever window the human was
   already in. It backgrounds by default — the callers are hooks and
   agents, and a foreground server there is a terminal nobody gets back;
-  `scripts/h dashboard serve` is the form that blocks. If Portside knows the port it
+  `scripts/harness dashboard serve` is the form that blocks. If Portside knows the port it
   also prints the alias, matched on the launch directory too so a stale map
   can't name the board after someone else's server.
 
@@ -89,7 +89,7 @@ refresher watches for polls: a browser that asked for state in the last 30s
 gets the `REFRESH` cadence, nobody gets `IDLE_REFRESH`, and a poll after a
 quiet spell wakes the thread rather than waiting out the rest. Past
 `EXIT_AFTER` with no poll at all the server stops itself, and the SessionEnd
-hook calls `scripts/h dashboard down` to stop it properly first — the timeout
+hook calls `scripts/harness dashboard down` to stop it properly first — the timeout
 is the backstop for a session that dies without running its hooks.
 
 `harness add` also turns bd's telemetry off (`metrics.disabled`). Every `bd`
@@ -103,15 +103,15 @@ global to the user, so turning it off once covers every project.
 ## How a project reaches the harness
 
 A project keeps no copy of the harness. It commits one small finder —
-`scripts/h`, a copy of `template/scripts/h` — and reaches everything else
+`scripts/harness`, a copy of `template/scripts/harness` — and reaches everything else
 through it. The finder resolves the harness root — the `template/` tree
 holding `.harness-root` — in order: the starter checkout's own `template/`
 when run inside it, `$HARNESS_HOME`, `~/.harness`, then a fetched copy it
 clones into a gitignored `.harness/`. Resolution itself is silent; every
 failure is one line on stderr naming the fix.
 
-`scripts/h` dispatches the shared scripts with `HARNESS_PROJECT` and
-`HARNESS_ROOT` set, so a project never names a path outside itself. `scripts/h
+`scripts/harness` dispatches the shared scripts with `HARNESS_PROJECT` and
+`HARNESS_ROOT` set, so a project never names a path outside itself. `scripts/harness
 link` symlinks the shared skills, agents, stacks guidance and contract into
 the project, one link per shared entry, each gitignored: a real file or dir
 at the same path wins silently. That is how a project keeps its own skills
@@ -120,7 +120,7 @@ beside the shared ones, and how a same-name entry shadows the shared one
 
 The stubs in `template/stubs/` are what `harness add` writes in place of the
 shared files — `AGENTS.md`, `opencode.json`, the hook configs, the
-commit-msg hook — plus `scripts/h` itself and the seeds. No shared scripts,
+commit-msg hook — plus `scripts/harness` itself and the seeds. No shared scripts,
 no skills, no agents: those stay in the checkout and arrive through the
 finder instead.
 
@@ -132,7 +132,7 @@ So the split is by ownership, not by freshness. **Seeds** — the files
 all: the project's own answers live there while the shared reviewer prompts
 stay byte-identical. Everything else is the starter's, reached by link or
 dispatch. A same-path project file that differs is a **shadow**: it wins
-over the shared one, `scripts/h doctor` lists it, and nothing ever
+over the shared one, `scripts/harness doctor` lists it, and nothing ever
 converges it — a project-specific change to a shared script stays as a
 shadow; anything else moves into `AGENTS.local.md` or upstream to the
 starter.
@@ -208,7 +208,7 @@ preserving unrelated hooks. Re-running it does not restore `bd prime` policy.
 Codex hook trust remains local; run the brief manually until the hook is trusted.
 Claude and OpenCode keep their existing startup configuration.
 
-The gate and ledger-only probes share `scripts/h ledger-export-check`, so a
+The gate and ledger-only probes share `scripts/harness ledger-export-check`, so a
 probe proves export integrity without running unrelated checks. Project gate
 lanes live in `scripts/verify.steps.sh`; additive guidance in `AGENTS.local.md`
 is never touched after install. Installation disables memory-less auto-export and
@@ -220,7 +220,7 @@ session-only handoff and laurel commits use a narrow path-based exception.
 One account, not a team of thirteen agents, so the whole design is
 token-budgeted: progressive disclosure over always-loaded context, cheap
 Claude tiers for bulk reading, diff-scoped review. The stock beads SessionStart hook
-(`bd prime`, ~1900 tokens every session) is replaced by `scripts/h brief`
+(`bd prime`, ~1900 tokens every session) is replaced by `scripts/harness brief`
 (~500) — see below, because that replacement does not stay done on its own.
 
 ## The brief overrides `bd setup claude`, and has to be re-applied
@@ -252,7 +252,7 @@ report a clean session while the hook ran from the user's home directory.
 New procedures become skills, new work becomes beads — the instinct to add one
 more paragraph to CLAUDE.md is the thing this design exists to resist.
 
-`scripts/h context` reports what a session pays before it does anything —
+`scripts/harness context` reports what a session pays before it does anything —
 both instruction files, the brief, `MEMORY.md`, and skill descriptions. It
 counts `AGENTS.md` as well as `CLAUDE.md` because both are always-loaded, and
 counting only one would let a session move text into the other and watch the
@@ -294,16 +294,16 @@ then corrupts. `model: haiku` parses as provider "haiku" with an empty model id,
 the comma-separated `tools:` string resolves to invalid, and `mode: all` puts
 each reviewer in the primary agent picker beside build and plan. It looks like
 it worked and fails at spawn. So the prompt body has one home,
-`.claude/agents/`, and `scripts/h opencode-agents` writes the other dialect's
+`.claude/agents/`, and `scripts/harness opencode-agents` writes the other dialect's
 header around it into `.opencode/agent/`. The gate checks the two match, because
 nothing about editing the source makes opencode complain.
 
 **opencode runs on one model at one variant, and the harness enforces it.**
-`OPENCODE_MODEL` and `OPENCODE_VARIANT` in `scripts/h models` are the only
-definition. `scripts/h agent` sends them as `-m model#variant` and refuses to
+`OPENCODE_MODEL` and `OPENCODE_VARIANT` in `scripts/harness models` are the only
+definition. `scripts/harness agent` sends them as `-m model#variant` and refuses to
 spawn on anything else; the generator bakes them onto every agent's `model:`
 line; `opencode.json` pins the session model and every built-in agent to them;
-`scripts/h opencode-pin` fails the gate on any roster entry, agent file,
+`scripts/harness opencode-pin` fails the gate on any roster entry, agent file,
 config, script or doc example that names another. `harness/models.json` only
 records the pin per role plus an optional packet budget, and `ensure` writes
 it without prompting.
@@ -318,7 +318,7 @@ choose is checked.
 Two paths to a model: the `.claude/agents/` frontmatter names Claude Code's
 reviewers; the pin names everything opencode runs. Codex inherits the host's.
 
-**`scripts/h agent` is how every tool except opencode reaches opencode.**
+**`scripts/harness agent` is how every tool except opencode reaches opencode.**
 
 It runs one role through `opencode run` — so Claude Code can put its
 reviewers, and orchestrated implementation, on another provider's bill without
@@ -351,7 +351,7 @@ messages back out of `opencode session export`, so there is no counter file to l
 `tool.execute.before/after`, `auth`, `config`, and `permission.*`. None of them
 can inject context at session start — `event` is a notification sink with no
 return channel. So the dynamic half of the brief has no automatic path here, and
-AGENTS.md's "run `scripts/h session` yourself" line is the fallback that covers
+AGENTS.md's "run `scripts/harness session` yourself" line is the fallback that covers
 it. Don't build the plugin.
 
 `opencode.json`'s `instructions` list is `AGENTS.md` and `CLAUDE.md` — exactly

@@ -69,7 +69,7 @@ class SharedAgentsTests(unittest.TestCase):
             dest = base / ".opencode/agent" / f"{name}.md"
             self.assertTrue(dest.is_file(), f"missing {dest}")
             text = dest.read_text()
-            self.assertIn("scripts/h opencode-agents", text)
+            self.assertIn("scripts/harness opencode-agents", text)
             self.assertIn("model: ", text)
         out = run_script("check", root, harness)
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -137,7 +137,7 @@ class SharedAgentsTests(unittest.TestCase):
         out = run_script("check", root, harness)
         self.assertNotEqual(out.returncode, 0, "dangling linked agent passed")
         self.assertIn("a.md", out.stdout)
-        self.assertIn("scripts/h link", out.stdout)
+        self.assertIn("scripts/harness link", out.stdout)
 
     def test_dangling_claude_source_fails_check(self):
         harness = self.base / "harness"

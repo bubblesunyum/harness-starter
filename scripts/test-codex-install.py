@@ -56,13 +56,13 @@ elif sys.argv[1] == 'init':
             self.assertIn('echo local-start', commands)
             self.assertIn('echo local-stop', commands)
             # A reference install points its hooks at the finder, never at
-            # installed scripts: the Codex brief entry names scripts/h.
-            brief = [c for c in commands if 'scripts/h' in c]
+            # installed scripts: the Codex brief entry names scripts/harness.
+            brief = [c for c in commands if 'scripts/harness' in c]
             self.assertEqual(len(brief), 1)
             self.assertNotIn('BEGIN BEADS', (project / 'AGENTS.md').read_text())
             # The stub points at the finder; the contract lives in the shared
             # checkout, not in a project copy.
-            self.assertIn('scripts/h session', (project / 'AGENTS.md').read_text())
+            self.assertIn('scripts/harness session', (project / 'AGENTS.md').read_text())
             self.assertFalse((project / 'harness/codex.md').exists())
             beads = (project / '.claude/skills/beads/SKILL.md').read_text()
             self.assertNotIn('\nbd prime\n', beads)
@@ -80,7 +80,7 @@ elif sys.argv[1] == 'init':
             custom_commands = [h['command'] for groups in custom_hooks.values()
                                for g in groups for h in g['hooks']]
             self.assertIn('echo custom-only', custom_commands)
-            self.assertEqual(sum('scripts/h' in c for c in custom_commands), 1)
+            self.assertEqual(sum('scripts/harness' in c for c in custom_commands), 1)
             # A project copy shadows the shared brief: the finder prefers it,
             # so a shadowing brief.sh answers the hook.
             (project / 'scripts/brief.sh').write_text('test "$1" = --hook && echo fixture-brief\n')

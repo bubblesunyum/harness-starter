@@ -9,7 +9,7 @@ deciding what stops earning its place.
 Start by building the digest:
 
 ```bash
-scripts/h context digest
+scripts/harness context digest
 ```
 
 That writes every skill body, every memory, and the always-loaded cost to one file.

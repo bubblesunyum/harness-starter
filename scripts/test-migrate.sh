@@ -289,8 +289,10 @@ stub_miss=""
 for stub in AGENTS.md opencode.json .codex/hooks.json scripts/hooks/commit-msg scripts/hooks/pre-commit; do
   cmp -s "$REPO/template/stubs/$stub" "$FIX/$stub" || stub_miss="$stub_miss $stub"
 done
+[ -x "$FIX/scripts/harness" ] || stub_miss="$stub_miss scripts/harness(not executable)"
 [ -x "$FIX/scripts/h" ] || stub_miss="$stub_miss scripts/h(not executable)"
-grep -q "scripts/h session" "$FIX/.claude/settings.json" 2>/dev/null || stub_miss="$stub_miss .claude/settings.json(no session hook)"
+cmp -s "$REPO/template/scripts/h" "$FIX/scripts/h" 2>/dev/null || stub_miss="$stub_miss scripts/h(not the shim)"
+grep -q "scripts/harness session" "$FIX/.claude/settings.json" 2>/dev/null || stub_miss="$stub_miss .claude/settings.json(no session hook)"
 if ! grep -qF 'scripts/hooks/pre-commit' "$FIX/.beads/hooks/pre-commit" 2>/dev/null; then
   stub_miss="$stub_miss .beads/hooks/pre-commit(no pre-commit delegate)"
 fi
@@ -324,10 +326,10 @@ else
 fi
 
 # --- the gate passes on the converted tree ---
-if "$FIX/scripts/h" verify >"$TMP/verify.log" 2>&1; then
-  pass "h verify passes afterwards"
+if "$FIX/scripts/harness" verify >"$TMP/verify.log" 2>&1; then
+  pass "harness verify passes afterwards"
 else
-  failcase "h verify passes afterwards" "non-zero exit: $(grep -m1 -E '^\s*(FAIL|!|✗)' "$TMP/verify.log" 2>/dev/null || tail -1 "$TMP/verify.log" 2>/dev/null)"
+  failcase "harness verify passes afterwards" "non-zero exit: $(grep -m1 -E '^\s*(FAIL|!|✗)' "$TMP/verify.log" 2>/dev/null || tail -1 "$TMP/verify.log" 2>/dev/null)"
 fi
 
 # --- a commit on the converted tree refreshes the export without a regen ---

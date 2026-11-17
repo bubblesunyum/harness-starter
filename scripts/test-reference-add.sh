@@ -46,10 +46,10 @@ blocked() { printf 'BLOCKED %s: %s\n' "$1" "$2"; }
 # that rather than failing on another worker's half.
 hook_supported=0
 session_supported=0
-if grep -qE '^[[:space:]]*hook\)' "$REPO/template/scripts/h" 2>/dev/null; then
+if grep -qE '^[[:space:]]*hook\)' "$REPO/template/scripts/harness" 2>/dev/null; then
   hook_supported=1
 fi
-if grep -qE '^[[:space:]]*session\)' "$REPO/template/scripts/h" 2>/dev/null; then
+if grep -qE '^[[:space:]]*session\)' "$REPO/template/scripts/harness" 2>/dev/null; then
   session_supported=1
 fi
 
@@ -89,6 +89,7 @@ opencode.json
 .codex/hooks.json
 scripts/hooks/commit-msg
 scripts/hooks/pre-commit
+scripts/harness
 scripts/h
 harness/seat.md
 AGENTS.local.md
@@ -109,15 +110,15 @@ import sys
 settings = json.load(open(sys.argv[1]))
 codex = json.load(open(sys.argv[2]))
 starts = settings["hooks"]["SessionStart"][0]["hooks"]
-assert starts[0]["command"] == 'cd "$CLAUDE_PROJECT_DIR" && scripts/h session --hook', starts[0]
+assert starts[0]["command"] == 'cd "$CLAUDE_PROJECT_DIR" && scripts/harness session --hook', starts[0]
 assert starts[0]["timeout"] == 60, starts[0]
 cmds = [h["command"] for group in settings["hooks"].values() for entry in group for h in entry["hooks"]]
-assert 'cd "$CLAUDE_PROJECT_DIR" && scripts/h session --hook' in cmds, cmds
+assert 'cd "$CLAUDE_PROJECT_DIR" && scripts/harness session --hook' in cmds, cmds
 assert not [c for c in cmds if "dashboard" in c], "a dashboard hook survived in the stubs: %s" % (cmds,)
-assert settings["permissions"] == {"allow": ["Bash(scripts/h:*)"]}, settings.get("permissions")
+assert settings["permissions"] == {"allow": ["Bash(scripts/harness:*)"]}, settings.get("permissions")
 assert "bd prime" not in open(sys.argv[1]).read(), "bd prime survived in settings.json"
 centries = [h["command"] for group in codex["hooks"]["SessionStart"] for h in group["hooks"]]
-assert 'bash "$(git rev-parse --show-toplevel)/scripts/h" session --hook' in centries, centries
+assert 'bash "$(git rev-parse --show-toplevel)/scripts/harness" session --hook' in centries, centries
 assert "codex-hook" not in open(sys.argv[2]).read(), "bd codex-hook survived in hooks.json"
 assert "bd prime" not in open(sys.argv[2]).read(), "bd prime survived in hooks.json"
 PYEOF
@@ -127,15 +128,18 @@ PYEOF
     scripts="$(cd "$PROJ" && find scripts | sort)"
     want_scripts="scripts
 scripts/h
+scripts/harness
 scripts/hooks
 scripts/hooks/commit-msg
 scripts/hooks/pre-commit
 scripts/review.scope.sh
 scripts/verify.steps.sh"
     if [ "$scripts" != "$want_scripts" ]; then
-      failcase "reference writes stubs seeds and finder" "scripts/ holds more than h, hooks/ and the seeds"
-    elif [ ! -x "$PROJ/scripts/h" ] || [ ! -x "$PROJ/scripts/hooks/commit-msg" ] || [ ! -x "$PROJ/scripts/hooks/pre-commit" ]; then
-      failcase "reference writes stubs seeds and finder" "h or a shim lost its executable bit"
+      failcase "reference writes stubs seeds and finder" "scripts/ holds more than harness, the shim, hooks/ and the seeds"
+    elif [ ! -x "$PROJ/scripts/harness" ] || [ ! -x "$PROJ/scripts/h" ] || [ ! -x "$PROJ/scripts/hooks/commit-msg" ] || [ ! -x "$PROJ/scripts/hooks/pre-commit" ]; then
+      failcase "reference writes stubs seeds and finder" "harness, the shim, or a hook lost its executable bit"
+    elif ! grep -qF 'exec "$(dirname "$0")/harness"' "$PROJ/scripts/h" 2>/dev/null; then
+      failcase "reference writes stubs seeds and finder" "the shim never execs the sibling harness"
     elif ! grep -qF '@AGENTS.md' "$PROJ/CLAUDE.md" 2>/dev/null; then
       failcase "reference writes stubs seeds and finder" "CLAUDE.md never imports AGENTS.md"
     else
@@ -221,7 +225,7 @@ git -C "$PROJ" config user.name probe >/dev/null 2>&1 || true
 
 # --- 6: a bead-less commit is rejected ---
 if [ "$hook_supported" -eq 0 ]; then
-  blocked "commit-msg rejects a bead-less commit" "no hook subcommand in template/scripts/h yet"
+  blocked "commit-msg rejects a bead-less commit" "no hook subcommand in template/scripts/harness yet"
 else
   (cd "$PROJ" && git add -A >/dev/null 2>&1)
   if (cd "$PROJ" && git -c commit.gpgsign=false commit -m "probe with no bead" >"$TMP/reject.log" 2>&1); then
@@ -235,7 +239,7 @@ fi
 
 # --- 7: a commit naming a bead is accepted ---
 if [ "$hook_supported" -eq 0 ]; then
-  blocked "commit-msg accepts a commit naming a bead" "no hook subcommand in template/scripts/h yet"
+  blocked "commit-msg accepts a commit naming a bead" "no hook subcommand in template/scripts/harness yet"
 else
   if ! bid="$(cd "$PROJ" && bd create "probe work" --design "d" --acceptance "a" --silent 2>"$TMP/bead.err")"; then
     failcase "commit-msg accepts a commit naming a bead" "cannot file a probe bead: $(head -1 "$TMP/bead.err" 2>/dev/null)"
@@ -257,7 +261,7 @@ fi
 
 # --- 7b: a commit lands a fresh export without a manual regen ---
 if [ "$hook_supported" -eq 0 ]; then
-  blocked "pre-commit lands a fresh export without a manual regen" "no hook subcommand in template/scripts/h yet"
+  blocked "pre-commit lands a fresh export without a manual regen" "no hook subcommand in template/scripts/harness yet"
 else
   if ! bid2="$(cd "$PROJ" && bd create "second probe work" --design "d" --acceptance "a" --silent 2>"$TMP/bead2.err")"; then
     failcase "pre-commit lands a fresh export without a manual regen" "cannot file a second probe bead: $(head -1 "$TMP/bead2.err" 2>/dev/null)"
@@ -292,9 +296,9 @@ fi
 
 # --- 8: session prints the contract and the brief ---
 if [ "$session_supported" -eq 0 ]; then
-  blocked "session prints the contract and the brief" "no session subcommand in template/scripts/h yet"
+  blocked "session prints the contract and the brief" "no session subcommand in template/scripts/harness yet"
 else
-  if ! "$PROJ/scripts/h" session >"$TMP/session.log" 2>&1; then
+  if ! "$PROJ/scripts/harness" session >"$TMP/session.log" 2>&1; then
     failcase "session prints the contract and the brief" "non-zero exit"
   elif ! grep -q "Working on this project" "$TMP/session.log" 2>/dev/null; then
     failcase "session prints the contract and the brief" "the contract never printed"
@@ -305,9 +309,9 @@ fi
 
 # --- 9: session --hook emits the SessionStart object ---
 if [ "$session_supported" -eq 0 ]; then
-  blocked "session --hook emits the SessionStart object" "no session subcommand in template/scripts/h yet"
+  blocked "session --hook emits the SessionStart object" "no session subcommand in template/scripts/harness yet"
 else
-  if ! "$PROJ/scripts/h" session --hook >"$TMP/hook.log" 2>&1; then
+  if ! "$PROJ/scripts/harness" session --hook >"$TMP/hook.log" 2>&1; then
     failcase "session --hook emits the SessionStart object" "non-zero exit"
   elif ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["hookSpecificOutput"]["hookEventName"]=="SessionStart"' \
       "$TMP/hook.log" 2>/dev/null; then
@@ -375,7 +379,7 @@ else
       failcase "shared prompt edits flow through check" "no shared agent prompt to edit"
     else
       printf '\nprobe rule\n' >> "$agent_src" || { echo "FAIL setup: cannot edit the scratch prompt"; exit 1; }
-      if ! HARNESS_HOME="$SHARED" "$PROJ2/scripts/h" codex-support check >"$TMP/check2.log" 2>&1; then
+      if ! HARNESS_HOME="$SHARED" "$PROJ2/scripts/harness" codex-support check >"$TMP/check2.log" 2>&1; then
         failcase "shared prompt edits flow through check" "check failed after a shared edit: $(head -1 "$TMP/check2.log" 2>/dev/null)"
       elif ! grep -q "probe rule" "$PROJ2/.codex/agents/$agent_name.toml" 2>/dev/null; then
         failcase "shared prompt edits flow through check" "the toml never picked up the shared edit"
@@ -389,10 +393,10 @@ fi
 
 # --- modes: installed files read like any checkout's (mktemp makes 0600) ---
 mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
-if [ "$(mode_of "$PROJ/AGENTS.md")" = 644 ] && [ "$(mode_of "$PROJ/scripts/h")" = 755 ]; then
+if [ "$(mode_of "$PROJ/AGENTS.md")" = 644 ] && [ "$(mode_of "$PROJ/scripts/harness")" = 755 ] && [ "$(mode_of "$PROJ/scripts/h")" = 755 ]; then
   pass "installed files keep readable modes"
 else
-  failcase "installed files keep readable modes" "AGENTS.md $(mode_of "$PROJ/AGENTS.md"), scripts/h $(mode_of "$PROJ/scripts/h") — want 644 and 755"
+  failcase "installed files keep readable modes" "AGENTS.md $(mode_of "$PROJ/AGENTS.md"), scripts/harness $(mode_of "$PROJ/scripts/harness"), scripts/h $(mode_of "$PROJ/scripts/h") — want 644, 755 and 755"
 fi
 
 # --- last: no install wrote through a link into the shared checkout ---

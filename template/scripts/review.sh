@@ -2,9 +2,9 @@
 # Builds the review packet: everything a reviewing agent needs about a change,
 # in one file, so it doesn't spend a dozen tool calls rediscovering the diff.
 #
-#   scripts/h review                 # working tree vs HEAD
-#   scripts/h review HEAD~3          # since a commit
-#   scripts/h review master          # since a branch (use on a feature branch)
+#   scripts/harness review                 # working tree vs HEAD
+#   scripts/harness review HEAD~3          # since a commit
+#   scripts/harness review master          # since a branch (use on a feature branch)
 #
 # Prints the packet path. Hand that to the reviewer agents — see the
 # agentic-review skill. Refuses (non-zero) when the packet exceeds the
@@ -68,7 +68,7 @@ narrow_hint=""
 if [ -z "$base" ]; then
   if [ -n "$(git status --porcelain)" ]; then
     range=""; label="uncommitted working tree"
-    narrow_hint="split the change into smaller commits and review each with scripts/h review <commit>"
+    narrow_hint="split the change into smaller commits and review each with scripts/harness review <commit>"
   else
     range="HEAD~1"; label="HEAD (last commit)"
     narrow_hint="the last commit alone is too big to review whole — split it"
@@ -221,7 +221,7 @@ elif [ "$lines" -gt 3000 ]; then
   # No budgets known (no roster) — the old heuristic is all there is. A packet
   # past a few thousand lines means the change is too big to review in one
   # pass — say so rather than letting a reviewer silently skim it.
-  echo "warning: packet is large; consider reviewing in stages (scripts/h review <earlier-commit>)" >&2
+  echo "warning: packet is large; consider reviewing in stages (scripts/harness review <earlier-commit>)" >&2
 fi
 
 echo "$packet ($label, $(echo "$files" | grep -c . ) files, $lines lines, ~$tokens tokens)"

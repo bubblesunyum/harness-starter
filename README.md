@@ -36,9 +36,9 @@ ledger reaches git" in `AGENTS.md`.
 | | |
 |---|---|
 | **Ledger** | beads in `.beads/` — work and discoveries survive the session that found them |
-| **Brief** | `scripts/h session`, a SessionStart hook: the shared contract plus the seat, the last note, the ready list, the memory keys, in ~500 tokens |
-| **Gate** | `scripts/h verify` — build, tests, and doc staleness behind one exit code and about six lines of output |
-| **Review** | `scripts/h review` builds one packet; three subagents read it, each on the model its frontmatter names |
+| **Brief** | `scripts/harness session`, a SessionStart hook: the shared contract plus the seat, the last note, the ready list, the memory keys, in ~500 tokens |
+| **Gate** | `scripts/harness verify` — build, tests, and doc staleness behind one exit code and about six lines of output |
+| **Review** | `scripts/harness review` builds one packet; three subagents read it, each on the model its frontmatter names |
 | **Librarian** | audits the knowledge layer from a digest, on a cadence, and proposes what to delete |
 | **Dashboard** | one board, run from the starter — it switches across every project, so nothing is installed per project except `dashboard.toml` |
 | **Skills** | `workflow` (the hub), `agentic-review`, `beads`, `handoff` — each costs a description line until invoked |
@@ -46,7 +46,7 @@ ledger reaches git" in `AGENTS.md`.
 
 ## How a project finds the harness
 
-Every project commits one small finder, `scripts/h`. It resolves the harness
+Every project commits one small finder, `scripts/harness`. It resolves the harness
 root — the `template/` tree holding `.harness-root` — in this order:
 
 1. the starter checkout's own `template/` when run inside the starter itself,
@@ -54,8 +54,8 @@ root — the `template/` tree holding `.harness-root` — in this order:
 3. `~/.harness`, a starter checkout,
 4. a fetched copy it clones into a gitignored `.harness/`.
 
-Everything else goes through the finder: `scripts/h verify` runs the shared
-gate for this project, `scripts/h link` symlinks the shared skills, agents,
+Everything else goes through the finder: `scripts/harness verify` runs the shared
+gate for this project, `scripts/harness link` symlinks the shared skills, agents,
 stack guidance and contract in per-entry links. A failure is one line naming
 the fix — set `HARNESS_HOME`, link `~/.harness`, or check the network for the
 fetch — so a session never works without the contract and never wonders why.
@@ -70,7 +70,7 @@ fetch — so a session never works without the contract and never wonders why.
 - **Overlays** — `harness/reviewers/<role>.md`, one per reviewer: the project's
   own answers live here while the shared reviewer prompts stay byte-identical.
 - **Shadows** — a real file at the same path as a shared one wins silently
-  (dispatch resolves project-first) and `scripts/h doctor` lists it. A
+  (dispatch resolves project-first) and `scripts/harness doctor` lists it. A
   same-name skill or agent shadows the shared one the same way.
 - **Own skills** — real directories beside the per-entry shared links.
 
@@ -88,7 +88,7 @@ things are left, because no script can infer them.
    you as "unnamed", which is the file saying it isn't done.
 2. **`CLAUDE.md`** — this project's own standards: architecture, naming,
    testing, the traps this codebase keeps hitting. The harness contract
-   arrives through `scripts/h session`, so don't repeat any of it here —
+   arrives through `scripts/harness session`, so don't repeat any of it here —
    everything else about the harness lives behind the `workflow` skill, and
    should stay there.
 3. **`scripts/verify.steps.sh`** — this project's real build and test commands,

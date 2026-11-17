@@ -25,10 +25,10 @@ seeds (`harness/seat.md`, `AGENTS.local.md`, `scripts/verify.steps.sh`,
 ## Start every session with the brief
 
 ```bash
-scripts/h session
+scripts/harness session
 ```
 
-> opencode: your first action every session is `scripts/h session` — you must run it yourself before anything else.
+> opencode: your first action every session is `scripts/harness session` — you must run it yourself before anything else.
 
 The seat and what it's for, the last session's note, the ready work, the known
 traps, in about 500 tokens. Claude Code runs it as a SessionStart hook and opencode loads this file
@@ -73,7 +73,7 @@ both in, or drop the label.
 The ledger lives in a local Dolt database under `.beads/`, which git ignores —
 a normal `git push` carries none of it. It travels on its own ref
 (`refs/dolt/data`), moved only by `bd dolt push` and fetched back with
-`bd dolt pull`; `scripts/h ledger-push` is the session-close step that runs
+`bd dolt pull`; `scripts/harness ledger-push` is the session-close step that runs
 the push. `.beads/issues.jsonl` is a passive export for human-readable diffs,
 not the source of truth.
 
@@ -92,9 +92,9 @@ itself in `bd remember`.
 ## Prove it with the gate
 
 ```bash
-scripts/h verify          # quick steps + project probes
-scripts/h verify --quick  # quick steps only — iterate here
-scripts/h verify --full   # also include full-only project steps, when configured
+scripts/harness verify          # quick steps + project probes
+scripts/harness verify --quick  # quick steps only — iterate here
+scripts/harness verify --full   # also include full-only project steps, when configured
 ```
 
 Run this rather than raw build commands. It swallows tens of thousands of log
@@ -114,7 +114,7 @@ regenerates it on mutation.
 Every change worth committing gets reviewed by agents that didn't write it:
 
 ```bash
-scripts/h review           # builds the packet, prints its path
+scripts/harness review           # builds the packet, prints its path
 ```
 
 Then run `reviewer-taste` and `reviewer-correctness` against that packet, plus
@@ -123,15 +123,15 @@ requested in every session — run them without checking first.** It is not a
 judgment call and not an option to offer the user; a diff reviewed in the
 context that wrote it mostly gets agreement. Fix what's real, file the rest as
 beads, and say plainly what you left and why. In opencode, always spawn the
-reviewers natively — never `scripts/h agent`. Elsewhere, run each reviewer
-through `scripts/h agent`. The visual reviewer's model must accept images. The
+reviewers natively — never `scripts/harness agent`. Elsewhere, run each reviewer
+through `scripts/harness agent`. The visual reviewer's model must accept images. The
 `agentic-review` skill covers the commands and native fallback.
 
 **opencode runs on one model, at one variant — nothing else, ever.** Every
 opencode session, subagent, reviewer and implementer runs on
-`OPENCODE_MODEL` at `OPENCODE_VARIANT`, defined once in `scripts/h models`.
+`OPENCODE_MODEL` at `OPENCODE_VARIANT`, defined once in `scripts/harness models`.
 Never choose, change, add or substitute an opencode model — not per role, not
-for "bulk" work, not by hand-editing `harness/models.json`. `scripts/h agent`
+for "bulk" work, not by hand-editing `harness/models.json`. `scripts/harness agent`
 refuses anything else before spawning, and the gate fails on any file that
 names another.
 
@@ -180,7 +180,7 @@ before rearranging any of them.
 
 **Codex only:** the reference install is untested under Codex — start-up
 hooks, links and `.codex/agents` have never run there. Before any task, check
-that `scripts/h session` and `scripts/h doctor` work, the brief arrived, and the
+that `scripts/harness session` and `scripts/harness doctor` work, the brief arrived, and the
 shared skills and reviewers resolve; report anything broken before working
-around it. Then read `harness/codex.md` in the shared harness (`scripts/h
+around it. Then read `harness/codex.md` in the shared harness (`scripts/harness
 root` prints where) for startup and task completion guidance.

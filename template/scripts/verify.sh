@@ -2,9 +2,9 @@
 # The gate: build, test, and smoke the app behind a single exit code, so an
 # agent can prove its own work without a human reading a screen.
 #
-#   scripts/h verify           # the changed paths pick the lane (see below)
-#   scripts/h verify --full    # everything, whatever changed
-#   scripts/h verify --quick   # fast lane only: no throwaway-repo probes
+#   scripts/harness verify           # the changed paths pick the lane (see below)
+#   scripts/harness verify --full    # everything, whatever changed
+#   scripts/harness verify --quick   # fast lane only: no throwaway-repo probes
 #
 # Diff-scoped lanes. The default run looks at what moved: only ledger paths
 # (.beads/, harness/handoffs/, harness/laurels.jsonl) mean a bead close or a
@@ -122,6 +122,10 @@ case "$PROBE_MAX" in ''|*[!0-9]*) PROBE_MAX=4;; esac
 if [ "$PROBE_MAX" -lt 2 ]; then PROBE_MAX=2; fi
 if [ "$PROBE_MAX" -gt 8 ]; then PROBE_MAX=8; fi
 
+# Probe and step names are prose and may carry slashes; file stems cannot, so
+# slashes become dashes alongside spaces.
+slug() { printf '%s' "${1// /-}" | tr '/' '-'; }
+
 # Everything interesting in a build log is on a line saying "error:" — the rest
 # is compile invocations. Keep the first few, deduplicated, and say where the
 # whole thing is. Widen the pattern if your toolchain words failures differently.
@@ -143,7 +147,7 @@ report() {
 # line each instead of a copied four-liner.
 capture_report() {
   local name="$1" output="$2" status="$3"
-  local log="$LOGS/${name// /-}.log"
+  local log="$LOGS/$(slug "$name").log"
   printf '%s\n' "$output" > "$log"
   echo "$status" > "$log.status"
   echo "$output"
@@ -195,7 +199,7 @@ step() {
     drain_probes
   fi
   local name="$1"; shift
-  local log="$LOGS/${name// /-}.log"
+  local log="$LOGS/$(slug "$name").log"
   local t0=$SECONDS
   "$@" > "$log" 2>&1
   local status=$?
@@ -231,7 +235,8 @@ probe_step() {
     wait "${probe_pids[0]}" 2>/dev/null || true
     probe_pids=("${probe_pids[@]:1}")
   fi
-  local base="${name// /-}"
+  local base
+  base="$(slug "$name")"
   ( trap - EXIT; PROBE_CHILD=1; step "$name" "$@" >"$LOGS/$base.report" 2>&1 ) &
   probe_pids+=("$!")
   probe_bases+=("$base")
@@ -453,7 +458,7 @@ else
   # step; the STALE detail stays in the echoed output above. context.py itself
   # is harness-owned elsewhere, so the bless remedy lives here, beside the failure.
   capture_report "context docs" "$context_out" "$context_st"
-  echo "        remedy: scripts/h context bless re-records hashes after updating the doc"
+  echo "        remedy: scripts/harness context bless re-records hashes after updating the doc"
 fi
 
 # The reviewers exist twice — .claude/agents/ for Claude Code, .opencode/agent/
@@ -468,7 +473,7 @@ else
   capture_report "opencode agents" "$agents_out" "$agents_st"
 fi
 
-# opencode runs on one model at one variant (scripts/h models), and every
+# opencode runs on one model at one variant (scripts/harness models), and every
 # file that could pick another — the roster, the generated agents,
 # opencode.json, the scripts, the docs — is held to it here. The prose rule
 # came first and a session with no terminal walked straight past it.

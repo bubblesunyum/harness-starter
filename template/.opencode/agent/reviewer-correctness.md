@@ -9,7 +9,7 @@ permission:
   websearch: deny
 ---
 
-<!-- Generated from .claude/agents/reviewer-correctness.md by scripts/h opencode-agents.
+<!-- Generated from .claude/agents/reviewer-correctness.md by scripts/harness opencode-agents.
      Edit that file, not this one, and re-run the script. -->
 
 You look for defects in this project — the app and the harness that builds it.
@@ -65,7 +65,7 @@ Its recurring failure modes:
   or a clipping box, an absolutely-positioned element contributing scroll width,
   a measurement read before layout has been invalidated.
 
-You may run `scripts/h verify --quick` to check the tree builds. Don't run the
+You may run `scripts/harness verify --quick` to check the tree builds. Don't run the
 full verify unless a finding depends on it.
 
 Report each finding as: file and line, one sentence naming the defect, then the
