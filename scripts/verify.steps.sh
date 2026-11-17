@@ -672,8 +672,8 @@ assert rows and rows[-1].get("category") == "probe-slug", rows
 PYEOF
 '
 
-# Skip and fail-soft share one copy with a stubbed gate: --no-reflect skips out loud and a dead reflector warns and continues. Verify is stubbed here because the reflector is under test, not the gate, keeping the scenario under time.
-probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh" "reflect skips and fails soft" bash -c '
+# Skip and fail-soft share one copy with a stubbed gate: --no-reflect skips out loud and a dead reflector warns and continues. Prose-only reads as zero candidates with a note, never REFLECTOR_FAILED. Verify is stubbed here because the reflector is under test, not the gate, keeping the scenario under time.
+probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh template/scripts/harness" "reflect skips and fails soft" bash -c '
 PROBE_SCENARIO="reflect skips and fails soft"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -693,9 +693,22 @@ printf "%s\n" "#!/usr/bin/env python3" "import sys" "a=sys.argv[1:]" "if a[:1]==
 chmod +x "$probe/opencode" || probe_fail "cannot chmod the fake"
 out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_SESSION_ID=probe-fail "$probe/scripts/harness" wrap-up --quick --no-push -m "probe failed-reflect close $bid" --bead "$bid" 2>&1) || probe_fail "wrap-up failed when the reflector failed"
 echo "$out" | grep -q "continuing without candidates" || probe_fail "reflector failure never warned and continued"
+# A prose-only reply is zero candidates with a note, never REFLECTOR_FAILED.
+# Direct reflect.sh keeps this under time: same agent stub as the wrap-up
+# probes, without another close cycle.
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":os.environ[\"FAKE_CANDIDATE\"]},\"sessionID\":\"ses_probe\"}))" > "$probe/opencode" || probe_fail "cannot plant prose fake opencode"
+chmod +x "$probe/opencode" || probe_fail "cannot chmod the prose fake"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" PATH="$probe:$PATH" OPENCODE_CONFIG_CONTENT="{\"agent\":{}}" HARNESS_SESSION_ID=probe-prose FAKE_CANDIDATE="just some prose, no json here" bash "$root/scripts/reflect.sh" 2>&1) || probe_fail "reflect failed on a prose-only reply"
+if echo "$out" | grep -q "REFLECTOR_FAILED"; then probe_fail "prose-only reply read as REFLECTOR_FAILED"; fi
+echo "$out" | grep -q "prose only" || probe_fail "prose-only reply never noted it held prose only"
+echo "$out" | grep -q "^CANDIDATES " || probe_fail "prose-only reply never printed the candidates line"
+_cands=$(echo "$out" | sed -n "s/^CANDIDATES //p" | head -1)
+[ -n "$_cands" ] || probe_fail "no candidates path from prose-only reflect"
+[ ! -s "$_cands" ] || probe_fail "prose-only reply left candidates behind"
 '
-# Native reflector in one copy: with OPENCODE_SESSION_ID set the real reflect.sh says to run the reflector natively instead of calling out. Wrap-up forwards this line verbatim, so calling reflect.sh directly keeps the scenario under time.
-probe_step --when "template/scripts/reflect.sh template/.claude/agents/reflector.md" "reflect runs native in opencode" bash -c '
+# Native reflector in one copy: with OPENCODE_SESSION_ID set the real reflect.sh says to run the reflector natively instead of calling out. Wrap-up forwards this line verbatim, so calling reflect.sh directly keeps the scenario under time. The packet diff covers session-start..work, and harness reflect previews without writing learning rows; the handoff skill documents that flow.
+probe_step --when "template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh template/scripts/harness template/.claude/skills/handoff/SKILL.md" "reflect runs native in opencode" bash -c '
 PROBE_SCENARIO="reflect runs native in opencode"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -705,11 +718,36 @@ HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail 
 echo "native probe work" > "$probe/probe-work.txt" || probe_fail "cannot dirty the probe"
 out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" OPENCODE_SESSION_ID=probe-native bash "$root/scripts/reflect.sh" 2>&1) || probe_fail "reflector failed on the native path"
 echo "$out" | grep -q "REFLECTOR_NATIVE" || probe_fail "native path never said to run the reflector natively"
+# The packet diff sees work committed after the journal first wrote: journal
+# first (records the start rev), commit, then the packet must carry it.
+HARNESS_SESSION_ID=probe-native HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/lib/journal.sh" event verify "passed" || probe_fail "probe journal write failed"
+echo "committed probe work probe-commit-marker-1" > "$probe/probe-committed.md" || probe_fail "cannot plant the committed file"
+(cd "$probe" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm "probe committed work") || probe_fail "probe committed commit failed"
+echo "uncommitted probe work" > "$probe/probe-uncommitted.md" || probe_fail "cannot dirty the probe after commit"
+out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" HARNESS_SESSION_ID=probe-native bash "$root/scripts/reflect.sh" --packet-only 2>&1) || probe_fail "packet-only reflect failed"
+pkt=$(echo "$out" | sed -n "s/^PACKET //p" | head -1) || probe_fail "no PACKET line from reflect"
+[ -n "$pkt" ] && [ -f "$pkt" ] || probe_fail "packet file missing: $pkt"
+grep -q "probe-commit-marker-1" "$pkt" || probe_fail "packet diff misses work committed after session start"
+grep -q "session start" "$pkt" || probe_fail "packet label never says which base it used"
+# harness reflect previews: prints candidates and the file path, writes
+# nothing to learning.jsonl.
+before=0
+[ -f "$probe/harness/learning.jsonl" ] && before=$(grep -c . "$probe/harness/learning.jsonl" || true)
+out=$(cd "$probe" && HARNESS_HOME="$top" HARNESS_PROJECT="$probe" OPENCODE_SESSION_ID=probe-native "$probe/scripts/harness" reflect 2>&1) || probe_fail "harness reflect preview failed"
+echo "$out" | grep -q "^PACKET " || probe_fail "harness reflect never printed the packet line"
+echo "$out" | grep -q "^CANDIDATES " || probe_fail "harness reflect never printed the candidates line"
+after=0
+[ -f "$probe/harness/learning.jsonl" ] && after=$(grep -c . "$probe/harness/learning.jsonl" || true)
+[ "$after" = "$before" ] || probe_fail "harness reflect wrote learning rows on preview"
+# The handoff skill documents preview-then-keep.
+grep -q "scripts/harness reflect" "$root/.claude/skills/handoff/SKILL.md" || probe_fail "handoff skill never documents harness reflect"
+grep -q -- "--candidates-file" "$root/.claude/skills/handoff/SKILL.md" || probe_fail "handoff skill never documents --candidates-file"
+grep -q -- "--keep-lesson" "$root/.claude/skills/handoff/SKILL.md" || probe_fail "handoff skill never documents --keep-lesson"
 '
 
 
-# Propose path in one copy with a stubbed gate: fake opencode returns one candidate, wrap-up keeps it, learning log and export carry it. Same stub reason as above.
-probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh" "reflect proposes a lesson and logs it kept" bash -c '
+# Propose path in one copy with a stubbed gate: fake opencode returns two candidates, wrap-up keeps one (the other logs unreviewed), learning log and export carry it. Reviewed closes log kept/dropped, brief pressure counts only kept, and a failed keyed remember logs failed. Same stub reason as above.
+probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh template/scripts/brief.sh template/scripts/harness" "reflect proposes a lesson and logs it kept" bash -c '
 PROBE_SCENARIO="reflect proposes a lesson and logs it kept"
 golden_probe || probe_fail "no golden fixture"
 top="$PWD"
@@ -723,16 +761,66 @@ bid=$(cd "$probe" && bd create "probe reflect work" --design d --acceptance a --
 await_bead_ready "$probe" "$bid" || probe_fail "probe bead never resolved"
 HARNESS_SESSION_ID=probe-reflect HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/lib/journal.sh" event verify "passed" || probe_fail "probe journal write failed"
 echo "probe work" > "$probe/probe-work.txt" || probe_fail "cannot dirty the probe"
-printf "%s\n" "# probe note draft" "" "stood where the probe stood" > "$probe/harness/handoffs/20260101-000000.md" || probe_fail "cannot plant the note draft"
 fake="$probe/opencode"
 printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":os.environ[\"FAKE_CANDIDATE\"]},\"sessionID\":\"ses_probe\"}))" > "$fake" || probe_fail "cannot plant fake opencode"
 chmod +x "$fake" || probe_fail "cannot chmod the fake"
-out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" OPENCODE_CONFIG_CONTENT="{\"agent\":{}}" HARNESS_SESSION_ID=probe-reflect FAKE_CANDIDATE="{\"tier\":\"memory\",\"target\":\"probe-trap\",\"text\":\"probe lesson text here\",\"evidence\":\"$bid\"}" "$probe/scripts/harness" wrap-up --quick --no-push -m "probe reflect $bid" --bead "$bid" --note-file harness/handoffs/20260101-000000.md --keep-lesson 1 2>&1) || probe_fail "wrap-up failed"
-echo "$out" | grep -q "reflector proposed 1 candidate" || probe_fail "wrap-up never reported the candidate"
+out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" OPENCODE_CONFIG_CONTENT="{\"agent\":{}}" HARNESS_SESSION_ID=probe-reflect FAKE_CANDIDATE="$(printf "%s\n%s" "{\"tier\":\"memory\",\"target\":\"probe-trap\",\"text\":\"probe lesson text here\",\"evidence\":\"$bid\"}" "{\"tier\":\"memory\",\"target\":\"probe-unreviewed\",\"text\":\"unreviewed lesson text\",\"evidence\":\"$bid\"}")" "$probe/scripts/harness" wrap-up --quick --no-push -m "probe reflect $bid" --bead "$bid" --keep-lesson 1 2>&1) || probe_fail "wrap-up failed"
+echo "$out" | grep -q "reflector proposed 2 candidate" || probe_fail "wrap-up never reported the candidates"
 echo "$out" | grep -q "lesson 1 .* kept" || probe_fail "wrap-up never marked lesson 1 kept"
-grep -q "\"kind\": \"lesson\"" "$probe/harness/learning.jsonl" || probe_fail "no lesson row in learning.jsonl"
-grep -q "\"outcome\": \"kept\"" "$probe/harness/learning.jsonl" || probe_fail "no kept outcome in learning.jsonl"
+echo "$out" | grep -q "lesson 2 .* unreviewed" || probe_fail "fresh close never marked lesson 2 unreviewed"
+python3 - "$probe/harness/learning.jsonl" <<PYEOF || probe_fail "fresh close never logged kept and unreviewed"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
+keep = [r for r in rows if r.get("target") == "probe-trap"]
+unrev = [r for r in rows if r.get("target") == "probe-unreviewed"]
+assert keep and keep[-1].get("outcome") == "kept", keep
+assert unrev and unrev[-1].get("outcome") == "unreviewed", unrev
+assert not [r for r in unrev if r.get("outcome") == "dropped"], unrev
+PYEOF
 (cd "$probe" && git show HEAD:.beads/issues.jsonl 2>/dev/null | grep -q "probe lesson text here") || probe_fail "kept memory never reached the committed export"
+# A reviewed list is reused verbatim and each outcome is logged. A full
+# close per outcome would price this past time, so reuse runs through the
+# real reflect.sh and the outcomes through the real annotate function from
+# wrap-up.sh (sourcing the whole script would run a close, so only the two
+# functions travel). The fake bd fails only the failed key. The drive runs
+# from inside the probe: bd remember writes to the ledger of its cwd.
+mkdir -p "$probe/fakebin" || probe_fail "cannot make the fake bin"
+realbd=$(command -v bd) || probe_fail "cannot locate real bd"
+printf "%s\n" "#!/bin/bash" "if [ \"\$1\" = \"remember\" ] && [ \"\${4:-}\" = \"probe-failed-key\" ]; then echo \"fake bd remember failure\" >&2; exit 1; fi" "exec \"$realbd\" \"\$@\"" > "$probe/fakebin/bd" || probe_fail "cannot plant fake bd"
+chmod +x "$probe/fakebin/bd" || probe_fail "cannot chmod fake bd"
+printf "%s\n" "{\"tier\": \"memory\", \"target\": \"probe-reviewed-keep\", \"text\": \"reviewed keep lesson\", \"evidence\": \"$bid\"}" "{\"tier\": \"memory\", \"target\": \"probe-failed-key\", \"text\": \"failed lesson text\", \"evidence\": \"$bid\"}" "{\"tier\": \"skill\", \"target\": \"probe-skill-file\", \"text\": \"reviewed drop lesson\", \"evidence\": \"$bid\"}" > "$probe/candidates.jsonl" || probe_fail "cannot plant the reviewed candidates"
+out=$(cd "$probe" && HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/reflect.sh" --candidates-file "$probe/candidates.jsonl" 2>&1) || probe_fail "candidates-file reuse failed"
+echo "$out" | grep -q "^CANDIDATES " || probe_fail "reuse never printed the candidates line"
+echo "$out" | grep -q "probe-reviewed-keep" || probe_fail "reuse never listed the kept candidate"
+sed -n "/^warn_keep_ignored()/,/^}/p; /^annotate_reflect_lesson()/,/^}/p" "$root/scripts/wrap-up.sh" > "$probe/annotate.sh" || probe_fail "cannot extract annotate"
+grep -q "annotate_reflect_lesson" "$probe/annotate.sh" || probe_fail "annotate extraction missed"
+HARNESS="$root"
+CANDIDATES_FILE="$probe/candidates.jsonl"
+KEEP_LESSONS=(1 2)
+export HARNESS HARNESS_SESSION_ID=probe-reflect HARNESS_PROJECT="$probe"
+export PATH="$probe/fakebin:$PATH"
+. "$probe/annotate.sh" || probe_fail "cannot load annotate"
+drive_out=$( cd "$probe" && { annotate_reflect_lesson 1 memory "probe-reviewed-keep" "reviewed keep lesson" "$bid"; annotate_reflect_lesson 2 memory "probe-failed-key" "failed lesson text" "$bid"; annotate_reflect_lesson 3 skill "probe-skill-file" "reviewed drop lesson" "$bid"; } 2>&1 ) || probe_fail "annotate drive failed"
+echo "$drive_out" | grep -q "lesson 1 .* kept" || probe_fail "reviewed drive never marked lesson 1 kept"
+echo "$drive_out" | grep -qi "lesson 2 .* failed" || probe_fail "keyed remember failure was never loud and failed"
+echo "$drive_out" | grep -q "lesson 3 .* dropped" || probe_fail "reviewed drive never marked lesson 3 dropped"
+python3 - "$probe/harness/learning.jsonl" <<PYEOF || probe_fail "reviewed drive never logged kept/failed/dropped"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]
+keep = [r for r in rows if r.get("target") == "probe-reviewed-keep"]
+fail = [r for r in rows if r.get("target") == "probe-failed-key"]
+drop = [r for r in rows if r.get("target") == "probe-skill-file"]
+assert keep and keep[-1].get("outcome") == "kept", keep
+assert fail and fail[-1].get("outcome") == "failed", fail
+assert drop and drop[-1].get("outcome") == "dropped", drop
+PYEOF
+# Lesson pressure counts only kept: pad probe-trap to three kept, plant three
+# unreviewed elsewhere, and one brief run names only the kept target.
+stamp=$(date -u "+%Y-%m-%dT%H:%M:%SZ") || probe_fail "cannot stamp probe rows"
+printf "%s\n" "{\"kind\": \"lesson\", \"tier\": \"memory\", \"target\": \"probe-trap\", \"text\": \"pad one\", \"evidence\": \"$bid\", \"outcome\": \"kept\", \"ts\": \"$stamp\"}" "{\"kind\": \"lesson\", \"tier\": \"memory\", \"target\": \"probe-trap\", \"text\": \"pad two\", \"evidence\": \"$bid\", \"outcome\": \"kept\", \"ts\": \"$stamp\"}" "{\"kind\": \"lesson\", \"tier\": \"memory\", \"target\": \"probe-pressure-ignored\", \"text\": \"one\", \"evidence\": \"$bid\", \"outcome\": \"unreviewed\", \"ts\": \"$stamp\"}" "{\"kind\": \"lesson\", \"tier\": \"memory\", \"target\": \"probe-pressure-ignored\", \"text\": \"two\", \"evidence\": \"$bid\", \"outcome\": \"unreviewed\", \"ts\": \"$stamp\"}" "{\"kind\": \"lesson\", \"tier\": \"memory\", \"target\": \"probe-pressure-ignored\", \"text\": \"three\", \"evidence\": \"$bid\", \"outcome\": \"unreviewed\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant pressure rows"
+out=$(cd "$probe" && HARNESS_HOME="$top" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed over pressure rows"
+echo "$out" | grep -q "lessons on probe-trap" || probe_fail "brief never counted kept pressure"
+if echo "$out" | grep -q "lessons on probe-pressure-ignored"; then probe_fail "brief counted unreviewed pressure"; fi
 '
 
 # Due signal in one copy: fresh silent, five old notes due once, reset silent, three lessons and three findings each due once, restore silent.
@@ -764,7 +852,7 @@ rm -f "$probe"/harness/handoffs/note-probe-*.md || probe_fail "cannot clear the 
 cp "$probe/harness/learning.jsonl" "$probe/learning-backup.jsonl" || probe_fail "cannot back up the learning log"
 printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" || probe_fail "cannot backdate the marker"
 stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" || probe_fail "cannot stamp probe rows"
-printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-x\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-x\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"dropped\", \"target\": \"probe-target\", \"text\": \"probe lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-x\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant probe lessons"
+printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-x\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-x\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-x\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant probe lessons"
 expect_due_once "lessons on probe-target"
 cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" || probe_fail "cannot restore the learning log"
 expect_silent

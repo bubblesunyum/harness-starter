@@ -11,7 +11,7 @@
 #   lib/journal.sh session-id
 #   lib/journal.sh event <kind> <detail...>
 #   lib/journal.sh finding --category <slug> --reviewer <role> --bead <id> --outcome accepted|rejected [--note <line>]
-#   lib/journal.sh lesson --tier <tier> --target <target> --text <line> --evidence <bead|commit|finding> --outcome kept|dropped [--why <line>]
+#   lib/journal.sh lesson --tier <tier> --target <target> --text <line> --evidence <bead|commit|finding> --outcome kept|dropped|unreviewed|failed [--why <line>]
 #   lib/journal.sh close
 #   lib/journal.sh orphan
 #
@@ -70,12 +70,26 @@ journal_live_file() {
   printf '%s/.live-%s.md\n' "$dir" "$id"
 }
 
+# The session's start rev from the live file header, on stdout. Fails when
+# there is no live file or no rev recorded — the caller falls back to HEAD,
+# labelled as a fallback.
+journal_start_rev() {
+  local id proj file rev
+  id="$(journal_session_id)" || return 1
+  proj="$(journal_project)" || return 1
+  file="$(journal_live_file "$proj" "$id")" || return 1
+  [ -f "$file" ] || return 1
+  rev="$(sed -n 's/^# start-rev: //p' "$file" 2>/dev/null | head -1)" || return 1
+  case "$rev" in ""|none) return 1;; esac
+  printf '%s\n' "$rev"
+}
+
 journal_now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u; }
 
 # One machine-written line. Creates the file with a header on first write.
 # Loud on failure, silent on success — the gate's tiny output stays tiny.
 journal_event() {
-  local kind detail id proj file now
+  local kind detail id proj file now _sr
   [ $# -ge 1 ] || { echo "journal: event needs a kind" >&2; return 1; }
   kind="$1"; shift
   detail=""
@@ -89,7 +103,15 @@ journal_event() {
     return 1
   }
   if [ ! -f "$file" ]; then
-    printf '# live journal %s — gitignored; removed when this session closes with a handoff\n' "$id" > "$file" || {
+    # The session's start rev, so a later reflect diffs session-start..work
+    # instead of HEAD..work and sees what the session already committed.
+    # Recorded once, at first write; none when not a repo or no commits yet.
+    _sr="$(git -C "$proj" rev-parse HEAD 2>/dev/null || true)"
+    [ -n "$_sr" ] || _sr="none"
+    {
+      printf '# live journal %s — gitignored; removed when this session closes with a handoff\n' "$id"
+      printf '# start-rev: %s\n' "$_sr"
+    } > "$file" || {
       echo "journal: cannot write $file" >&2; return 1
     }
   fi
@@ -163,7 +185,10 @@ PYEOF
 
 # One reflector candidate with the session's decision, appended to
 # harness/learning.jsonl. Tier is one of memory, reviewer-trap, skill,
-# claude-md; outcome kept or dropped, with why saying what decided it.
+# claude-md; outcome kept, dropped, unreviewed or failed, with why saying
+# what decided it. Fresh candidates the session never reviewed log
+# unreviewed, never dropped; dropped is a reviewed list the session declined.
+# A kept memory that bd could not store logs failed, loudly, never dropped.
 journal_lesson() {
   local tier target text evidence outcome why now log proj
   tier=""; target=""; text=""; evidence=""; outcome=""; why=""
@@ -187,8 +212,8 @@ journal_lesson() {
   [ -n "$text" ] || { echo "journal: lesson needs --text" >&2; return 1; }
   [ -n "$evidence" ] || { echo "journal: lesson needs --evidence" >&2; return 1; }
   case "$outcome" in
-    kept|dropped) ;;
-    *) echo "journal: --outcome must be kept or dropped" >&2; return 1;;
+    kept|dropped|unreviewed|failed) ;;
+    *) echo "journal: --outcome must be kept, dropped, unreviewed or failed" >&2; return 1;;
   esac
   command -v python3 >/dev/null 2>&1 || {
     echo "journal: python3 is needed for the lessons log" >&2; return 1

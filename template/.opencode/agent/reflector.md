@@ -33,6 +33,13 @@ Return at most three candidates, one JSON object per line:
 
 {"tier": "...", "target": "...", "text": "...", "evidence": "..."}
 
+Output ONLY JSON lines — no prose, no headings, no explanation. Zero
+candidates is an empty reply: print nothing.
+
+Session nominations in the packet are input, not output: weigh each one and
+either propose it as a candidate above or skip it. Skips are not output —
+never explain what you skipped.
+
 - `tier` is one of `memory`, `reviewer-trap`, `skill`, `claude-md`.
   - `memory`: a durable trap or insight, kept with `bd remember`. Target is
     the proposed memory key.

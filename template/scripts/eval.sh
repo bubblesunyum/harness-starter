@@ -62,7 +62,9 @@ PYEOF
 [ "${#KNOWLEDGE_FILES[@]}" -gt 0 ] || { echo "eval: cannot read the knowledge layer list" >&2; exit 1; }
 
 usage() {
-  awk '/^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
+  # NR==1 skips the shebang: it matches /^#/ like a comment, and without
+  # this the --help output starts with `!/bin/bash`.
+  awk 'NR==1 && /^#!/ {next} /^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
   exit "${1:-0}"
 }
 

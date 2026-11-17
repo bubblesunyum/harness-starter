@@ -1,20 +1,20 @@
 {
   ".claude/HARNESS.md": {
     ".claude/agents/librarian.md": "c72c3e90a73d977d",
-    ".claude/agents/reflector.md": "11ce1f800c95a039",
+    ".claude/agents/reflector.md": "7bb9487aaadc1c39",
     ".claude/agents/reviewer-correctness.md": "3c1250aa822d14fd",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
     ".claude/skills/workflow/SKILL.md": "45d097281222f913",
     "doc": "f8ed733207c7be64",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/brief.sh": "e8b8bedc3f791f91",
+    "scripts/brief.sh": "fae9c14c4ef0bf3e",
     "scripts/build-wiki.sh": "9abded546f400429",
     "scripts/context.py": "b13ab9080a00e38a",
-    "scripts/eval.sh": "e7a29284e9b5a92d",
-    "scripts/lib/journal.sh": "8e344aa9a971805f",
+    "scripts/eval.sh": "78c89b056755a5f8",
+    "scripts/lib/journal.sh": "967fc1f07c3041b5",
     "scripts/opencode-agents.py": "b857d6ca8e163421",
-    "scripts/reflect.sh": "75262c4a3a0860cd",
+    "scripts/reflect.sh": "16b3fc6f9306c1af",
     "scripts/review.sh": "292618fa5324f976",
     "scripts/verify.sh": "405f7c6755161ad8"
   },
@@ -31,15 +31,15 @@
     "scripts/agent.py": "c5991a16467704a4"
   },
   ".claude/skills/handoff/SKILL.md": {
-    "doc": "7600ad8d13bd0799",
-    "scripts/brief.sh": "e8b8bedc3f791f91",
-    "scripts/reflect.sh": "75262c4a3a0860cd",
-    "scripts/wrap-up.sh": "d2a7da4be0fcfea7"
+    "doc": "ca136e1f52acf8ad",
+    "scripts/brief.sh": "fae9c14c4ef0bf3e",
+    "scripts/reflect.sh": "16b3fc6f9306c1af",
+    "scripts/wrap-up.sh": "e373e626396b0ad1"
   },
   ".claude/skills/orchestrate/SKILL.md": {
     "doc": "0db2f2c316dffe8b",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/brief.sh": "e8b8bedc3f791f91",
+    "scripts/brief.sh": "fae9c14c4ef0bf3e",
     "scripts/review.sh": "292618fa5324f976",
     "scripts/verify.sh": "405f7c6755161ad8"
   },

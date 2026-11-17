@@ -14,11 +14,17 @@
 # instead of running the reflector, so --keep-lesson keeps the reviewed list
 # rather than a fresh nondeterministic rerun. Zero candidates is normal.
 #
+# The session diff covers session-start..work (the journal header's start
+# rev), so already-committed work stays in the packet; HEAD fallback when no
+# start rev was recorded or it no longer resolves, labelled as a fallback.
+#
 # Output contract, which wrap-up.sh reads back: a `PACKET <path>` line, a
 # `CANDIDATES <path>` line (raw JSON lines, one per candidate, empty when
-# none), and one human `N. [tier] target - text` line per candidate. A failed
+# none), and one human `N. [tier] target - text` line per candidate. A live
+# reply ignores prose lines and a prose-only reply is zero candidates with a
+# one-line prose-only note, not a failure. A failed
 # reflector prints `REFLECTOR_FAILED <reason>` and leaves CANDIDATES empty.
-# A reused candidates file is validated like a live reply (at most 3 lines,
+# A reused candidates file stays strict (at most 3 lines,
 # same tier/target/text/evidence schema) and reads as a failed reflector when
 # it does not parse. Only a packet that cannot be built exits non-zero — a
 # failed reflector never blocks a close.
@@ -37,7 +43,9 @@ PACKET_ONLY=0 NOTE_FILE="" CANDIDATES_FILE=""
 NOMINATIONS=()
 
 usage() {
-  awk '/^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
+  # NR==1 skips the shebang: it matches /^#/ like a comment, and without
+  # this the --help output starts with `!/bin/bash`.
+  awk 'NR==1 && /^#!/ {next} /^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
   exit "${1:-0}"
 }
 
@@ -45,11 +53,15 @@ need() { # need COUNT REMAINING FLAG -- fail when fewer than COUNT args remain
   if [ "$1" -gt "$2" ]; then echo "reflect: $3 needs a value" >&2; exit 1; fi
 }
 
-# Validate candidate JSON lines from a file into OUT, printing one numbered
+# Validate candidate JSON lines from SRC into OUT, printing one numbered
 # human line per candidate on stdout. MODE strict fails past 3 lines (a
 # reviewed list must match what the session saw); fresh truncates (a live run
-# may over-propose). Zero candidates stays success. Non-zero with a stderr
-# reason otherwise; OUT is only written once the whole file validates.
+# may over-propose) and ignores prose lines that are not JSON, so a reply of
+# prose with no JSON is zero candidates, not a failure — with a one-line note
+# saying the reply held prose only. Zero candidates stays success. Non-zero
+# with a stderr reason otherwise; OUT is only written once the whole file
+# validates. A prose-ish line that does parse as JSON but is not an object
+# reads as prose in fresh mode, still strict in strict mode.
 emit_candidates() { # emit_candidates OUT MODE SRC
   python3 - "$1" "$2" "$3" <<'PYEOF'
 import json, sys
@@ -61,6 +73,7 @@ except OSError as exc:
     sys.stderr.write("cannot read %s: %s\n" % (src, exc))
     sys.exit(1)
 kept = []
+had_prose = False
 for line in raw:
     line = line.strip()
     if not line:
@@ -68,11 +81,17 @@ for line in raw:
     try:
         cand = json.loads(line)
     except ValueError:
-        sys.stderr.write("candidates file holds invalid JSON: %s\n" % line[:80])
-        sys.exit(1)
+        if mode == "strict":
+            sys.stderr.write("candidates file holds invalid JSON: %s\n" % line[:80])
+            sys.exit(1)
+        had_prose = True
+        continue
     if not isinstance(cand, dict):
-        sys.stderr.write("candidates file holds a non-object line\n")
-        sys.exit(1)
+        if mode == "strict":
+            sys.stderr.write("candidates file holds a non-object line\n")
+            sys.exit(1)
+        had_prose = True
+        continue
     if cand.get("tier") not in ("memory", "reviewer-trap", "skill", "claude-md"):
         sys.stderr.write("candidates file holds a bad tier: %s\n" % line[:80])
         sys.exit(1)
@@ -89,6 +108,8 @@ with open(out_path, "w") as handle:
         handle.write(json.dumps(cand, sort_keys=True) + "\n")
 for pos, cand in enumerate(kept, 1):
     print("%d. [%s] %s - %s" % (pos, cand["tier"], cand["target"], cand["text"]))
+if mode == "fresh" and not kept and had_prose:
+    print("(reflector reply held prose only — zero candidates)")
 PYEOF
 }
 
@@ -167,7 +188,9 @@ else
 fi
 
 diff_cmd() {
-  git diff HEAD "$@" -- "${SCOPE[@]}"
+  # Read-only about the repo; a missing base (empty repo) diffs empty rather
+  # than failing the packet — untracked files below still show.
+  git diff "$_diff_base" "$@" -- "${SCOPE[@]}" 2>/dev/null || true
 }
 
 # A file that isn't tracked yet is still part of the change — read out with
@@ -180,11 +203,31 @@ untracked_diff() {
   done
 }
 
-if [ -n "$(git status --porcelain)" ]; then
-  label="uncommitted working tree"
-else
-  label="clean tree (nothing uncommitted)"
+# The session's start rev, so the packet sees work the session already
+# committed, not just what is still uncommitted. HEAD fallback, labelled,
+# when nothing was recorded or the recorded rev no longer resolves.
+_diff_base="HEAD" _diff_why="fallback: no session start rev"
+if _sr="$(journal_start_rev 2>/dev/null)"; then
+  if git cat-file -e "$_sr" 2>/dev/null; then
+    _diff_base="$_sr"
+    _diff_why="session start"
+  else
+    _diff_base="HEAD"
+    _diff_why="fallback: session start rev no longer resolves"
+  fi
 fi
+_diff_short="$(git rev-parse --short "$_diff_base" 2>/dev/null || printf '%s' "$_diff_base")"
+_diff_desc="since $_diff_short ($_diff_why)"
+if [ "$_diff_base" = "HEAD" ]; then
+  _diff_desc="vs HEAD ($_diff_why)"
+fi
+
+if [ -n "$(git status --porcelain 2>/dev/null || true)" ]; then
+  _tree="uncommitted working tree"
+else
+  _tree="clean tree (nothing uncommitted)"
+fi
+label="$_tree, $_diff_desc"
 
 _sid="$(journal_session_id 2>/dev/null)" || _sid=""
 _live="(no session id — journaling skipped this session)"
@@ -253,7 +296,7 @@ fi
 {
   echo "# Reflect packet — $label"
   echo
-  echo "## Session diff (working tree vs HEAD, in scope)"
+  echo "## Session diff (working tree $_diff_desc, in scope)"
   echo '```diff'
   diff_cmd
   untracked_diff

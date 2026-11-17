@@ -19,10 +19,13 @@
 # --no-reflect skips it; a close with a clean tree and an empty journal skips
 # itself out loud (unless --keep-lesson names candidates); a failed reflector
 # warns and never blocks the close. Name candidates to keep with --keep-lesson
-# (memory-tier keeps land in the ledger via `bd remember`); every candidate is
-# logged to harness/learning.jsonl with its outcome, kept or dropped, and why.
+# (memory-tier keeps land in the ledger via `bd remember --key`); every
+# candidate is logged to harness/learning.jsonl with its outcome — kept,
+# dropped (reviewed via --candidates-file but not kept), unreviewed (fresh
+# candidates never reviewed), or failed (bd remember --key failed) — and why.
 # --candidates-file reuses a reviewed list so --keep-lesson keeps what the
-# session saw instead of a fresh rerun.
+# session saw instead of a fresh rerun. Preview with `scripts/harness
+# reflect`, then close with --candidates-file plus --keep-lesson.
 #
 # Lane default is the full gate (default verify lane); --quick while
 # iterating, --full for the browser suite. Every ledger-shaped thing happens
@@ -54,7 +57,9 @@ KEEP_LESSONS=()
 PUSH=1 LANE="" MSG="" BEAD="" NOTE_FILE="" NOREFLECT=0 CANDIDATES_FILE=""
 
 usage() {
-  awk '/^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
+  # NR==1 skips the shebang: it matches /^#/ like a comment, and without
+  # this the --help output starts with `!/bin/bash`.
+  awk 'NR==1 && /^#!/ {next} /^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
   exit "${1:-0}"
 }
 
@@ -73,21 +78,29 @@ warn_keep_ignored() { # warn_keep_ignored REASON
 # One reflect candidate with the session's decision: memory-tier keeps land
 # via `bd remember`, other tiers print for the session to apply by hand, and
 # every outcome is logged to harness/learning.jsonl. Args: idx tier target
-# text evidence. Keeps come from KEEP_LESSONS.
+# text evidence. Keeps come from KEEP_LESSONS. Fresh candidates the session
+# never reviewed (no --candidates-file) log unreviewed, never dropped;
+# dropped is a reviewed list the session declined. A kept memory `bd` cannot
+# store logs failed, loudly, with no keyless fallback.
 annotate_reflect_lesson() {
   local _idx="$1" _tier="$2" _target="$3" _text="$4" _evidence="$5"
-  local _outcome="dropped" _why="no --keep-lesson named it at close" _k
+  local _outcome _why _k
+  if [ -n "$CANDIDATES_FILE" ]; then
+    _outcome="dropped"; _why="reviewed at close but no --keep-lesson named it"
+  else
+    _outcome="unreviewed"; _why="fresh candidates not reviewed at close (no --candidates-file)"
+  fi
   for _k in ${KEEP_LESSONS[@]+"${KEEP_LESSONS[@]}"}; do
     if [ "$_k" = "$_idx" ]; then _outcome="kept"; break; fi
   done
   if [ "$_outcome" = "kept" ]; then
     if [ "$_tier" = "memory" ]; then
-      if bd remember "$_text" --key "$_target" >/dev/null 2>&1 || bd remember "$_text" >/dev/null 2>&1; then
+      if bd remember "$_text" --key "$_target" >/dev/null 2>&1; then
         _why="kept at close (--keep-lesson $_idx)"
       else
-        echo "wrap-up: warning: lesson $_idx kept but bd remember failed — recording as dropped" >&2
-        _outcome="dropped"
-        _why="bd remember failed at close (--keep-lesson $_idx)"
+        echo "wrap-up: warning: lesson $_idx kept but bd remember --key $_target failed — recording as failed" >&2
+        _outcome="failed"
+        _why="bd remember --key $_target failed at close (--keep-lesson $_idx)"
       fi
     else
       echo "wrap-up: lesson $_idx kept — apply the delta to $_target by hand"

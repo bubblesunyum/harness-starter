@@ -11,7 +11,7 @@
 #   scripts/harness link                       symlink shared skills/agents/stacks here
 #   scripts/harness session [--hook]           link, then the contract plus the brief
 #   scripts/harness hook <name> [args]         run the shared hook for this project
-#   scripts/harness brief|verify|review|...    run the shared script for this project
+#   scripts/harness brief|verify|review|reflect|...    run the shared script for this project
 #
 # Resolution itself is silent on both streams, so `harness root` and dispatch keep
 # machine-readable output clean. The fetch announces itself on stderr and
@@ -158,6 +158,7 @@ usage: h [-h|--help] <command> [args]
   brief       session brief
   verify      run the gate
   review      build a review packet
+  reflect     build a reflect packet and preview candidates
   wrap-up     close-out checks
   ledger-push push the ledger
   ledger-export-check  check the committed ledger export matches
@@ -593,6 +594,7 @@ cmd_dispatch() {
     brief) file="brief.sh" ;;
     verify) file="verify.sh" ;;
     review) file="review.sh" ;;
+    reflect) file="reflect.sh" ;;
     wrap-up) file="wrap-up.sh" ;;
     ledger-push) file="ledger-push.sh" ;;
     ledger-export-check) file="ledger-export-check.sh" ;;
@@ -604,7 +606,7 @@ cmd_dispatch() {
     codex-support) file="codex-support.py" ;;
     opencode-agents) file="opencode-agents.py" ;;
     opencode-pin) file="opencode-pin.py" ;;
-    *) fail "no such command '$name'" "use one of: root doctor link session hook brief verify review wrap-up ledger-push ledger-export-check agent context dashboard dashboard-persist models codex-support opencode-agents opencode-pin" 2 ;; 
+    *) fail "no such command '$name'" "use one of: root doctor link session hook brief verify review reflect wrap-up ledger-push ledger-export-check agent context dashboard dashboard-persist models codex-support opencode-agents opencode-pin" 2 ;; 
   esac
   # A project copy shadows the shared one; that is how overlays win.
   if [ -f "$PROJECT/scripts/$file" ]; then

@@ -34,16 +34,16 @@ scripts/harness wrap-up -m "lowercase terse message" --bead <id> \
 ```
 
 Reflect runs at every close, before the ledger writes: wrap-up builds the
-packet (`scripts/reflect.sh`) and runs the reflector on the pinned model —
-natively inside opencode, where the session spawns the reflector itself
-against the printed packet. `--no-reflect` skips it; a clean tree with an
-empty journal skips itself and says so; a failed reflector warns and never
-blocks the close. Zero candidates is normal. Preview the packet with
-`bash "$(scripts/harness root)/scripts/reflect.sh" --packet-only`, pass
-`--keep-lesson N` for what to keep
-(memory-tier keeps land via `bd remember`; other tiers you apply as small
-deltas by hand), and pass the same `--candidates-file <path>` the preview
-printed from — without it a fresh run renumbers the candidates under you.
+packet and runs the reflector on the pinned model — natively inside opencode,
+where the session spawns the reflector itself against the printed packet.
+`--no-reflect` skips it; a clean tree with an empty journal skips itself and
+says so; a failed reflector warns and never blocks the close. Zero candidates
+is normal. Preview with `scripts/harness reflect` (builds the packet, runs
+the reflector, prints the candidates and the candidates file path, writes
+nothing to learning.jsonl), then keep with `wrap-up --candidates-file
+<path> --keep-lesson N` for what to keep (memory-tier keeps land via `bd
+remember`; other tiers you apply as small deltas by hand) — without the same
+`--candidates-file` a fresh run renumbers the candidates under you.
 Log anything decided outside wrap-up with
 `bash "$(scripts/harness root)/scripts/lib/journal.sh" lesson --tier <tier>
 --target <target> --text <text>

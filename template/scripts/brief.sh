@@ -208,6 +208,10 @@ try:
         if since is not None and not (row_epoch is not None and row_epoch >= since):
             continue
         if e.get("kind") == "lesson" and isinstance(e.get("target"), str) and e.get("target"):
+            # Pressure counts only kept lessons: unreviewed, dropped and
+            # failed rows are decisions not to keep, not lessons piling up.
+            if e.get("outcome") != "kept":
+                continue
             lessons[e["target"]] = lessons.get(e["target"], 0) + 1
         elif e.get("kind") == "finding" and isinstance(e.get("category"), str) and e.get("category"):
             findings[e["category"]] = findings.get(e["category"], 0) + 1
