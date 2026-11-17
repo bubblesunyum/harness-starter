@@ -57,6 +57,26 @@ cd "$ROOT"
 # session, for the file whose header promises exactly that.
 READY_SHOWN=4
 
+# --- Consolidation cadence: brief.sh is a contract file, never installed
+# into a project, so per-project tuning lives in the five numbers below,
+# never in the logic that reads them — a Tune here block, not FILL THIS IN,
+# because only seeds may carry a fill-in block. The librarian pass is due when (>= NOTES handoff
+# notes newer than the marker AND the marker is HOURS old) OR any pressure
+# signal: more known traps than MAX_TRAPS, LESSONS lessons on one target, or
+# FINDINGS findings in one category. The brief prints one line when due and
+# nothing otherwise; it never runs the pass. The calling session runs the
+# librarian and resets the marker by writing the current UTC time into
+# harness/.last-consolidation. A missing or empty marker means no pass has
+# run yet, so cadence has nothing to measure from — pressure still applies,
+# and a fresh install stays silent because it carries no pressure, not
+# because the marker is missing.
+# ── Tune here: thresholds, this block only.
+CONSOLIDATION_NOTES=5
+CONSOLIDATION_HOURS=24
+CONSOLIDATION_MAX_TRAPS=8
+CONSOLIDATION_LESSONS=3
+CONSOLIDATION_FINDINGS=3
+
 # The seat's name off the **Name:** line, on stdout: leading whitespace and
 # wrapping asterisks stripped, cut at the first em-dash (a descriptor after
 # it is not the name). The python seat() below parses the same way, so a seat
@@ -105,6 +125,104 @@ preflight() {
   fi
   [ -f "$ROOT/harness/models.json" ] || \
     echo "models: no harness/models.json — run scripts/harness models ensure to write it"
+}
+
+# One consolidation-due line on stdout, or nothing. Takes the brief text as $1
+# (to read the known-traps count without another bd spawn). Never runs the
+# pass, never fails: every fallible read is guarded, because a diagnostic that
+# errors out is the silence this script exists to replace. Callers append the
+# line to the brief text; at most one line ever comes back.
+say_due() { # say_due REASON — the one user-facing instruction, in one place
+  printf 'consolidation due: %s — run the librarian, then reset harness/.last-consolidation\n' "$1"
+}
+consolidation_due() {
+  local marker age_min notes traps_n hits lesson_hit finding_hit date_line marker_text
+  marker="$ROOT/harness/.last-consolidation"
+  # Cadence needs a marker to measure from; a missing or empty one means no
+  # pass has run yet, so there is no "since" to count. Pressure below still
+  # runs — a fresh install stays silent because it has no pressure, not
+  # because the marker is missing.
+  if [ -f "$marker" ] && [ -s "$marker" ]; then
+    notes=0
+    if [ -d "$ROOT/harness/handoffs" ]; then
+      notes="$(find "$ROOT/harness/handoffs" -maxdepth 1 -type f -name "*.md" ! -name ".live-*" -newer "$marker" 2>/dev/null | wc -l | tr -d ' ')" || notes=0
+    fi
+    case "$notes" in ''|*[!0-9]*) notes=0;; esac
+    age_min=$((CONSOLIDATION_HOURS * 60))
+    if [ "$notes" -ge "$CONSOLIDATION_NOTES" ] 2>/dev/null && \
+       [ -n "$(find "$marker" -mmin +"$age_min" 2>/dev/null)" ]; then
+      date_line="$(tail -n 1 "$marker" 2>/dev/null)"
+      case "$date_line" in "") date_line="the last pass";; esac
+      say_due "$notes handoffs since $date_line"
+      return 0
+    fi
+  fi
+  traps_n="$(printf '%s' "${1:-}" | sed -n 's/^known traps (\([0-9][0-9]*\)).*/\1/p')" || traps_n=""
+  case "$traps_n" in ''|*[!0-9]*) traps_n=0;; esac
+  if [ "$traps_n" -gt "$CONSOLIDATION_MAX_TRAPS" ] 2>/dev/null; then
+    say_due "$traps_n known traps over budget $CONSOLIDATION_MAX_TRAPS"
+    return 0
+  fi
+  lesson_hit=""; finding_hit=""
+  if [ -f "$ROOT/harness/learning.jsonl" ] && command -v python3 >/dev/null 2>&1; then
+    marker_text=""
+    if [ -f "$marker" ] && [ -s "$marker" ]; then
+      marker_text="$(tail -n 1 "$marker" 2>/dev/null)" || marker_text=""
+    fi
+    hits="$(python3 - "$ROOT/harness/learning.jsonl" "$CONSOLIDATION_LESSONS" "$CONSOLIDATION_FINDINGS" "${marker_text:-}" 2>/dev/null <<'PYEOF'
+import datetime, json, sys
+path, lesson_n, finding_n = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+marker_text = sys.argv[4] if len(sys.argv) > 4 else ""
+def parse_utc(s):
+    try:
+        return datetime.datetime.strptime(s.strip(), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+    except (ValueError, AttributeError, TypeError, OverflowError):
+        return None
+since = parse_utc(marker_text) if marker_text.strip() else None
+lessons, findings = {}, {}
+try:
+    for line in open(path, errors="replace"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        ts = e.get("ts")
+        row_epoch = parse_utc(ts) if isinstance(ts, str) and ts.strip() else None
+        if since is not None and not (row_epoch is not None and row_epoch >= since):
+            continue
+        if e.get("kind") == "lesson" and isinstance(e.get("target"), str) and e.get("target"):
+            lessons[e["target"]] = lessons.get(e["target"], 0) + 1
+        elif e.get("kind") == "finding" and isinstance(e.get("category"), str) and e.get("category"):
+            findings[e["category"]] = findings.get(e["category"], 0) + 1
+except OSError:
+    pass
+for target, n in lessons.items():
+    if n >= lesson_n:
+        print("lesson:%s" % target)
+        break
+for cat, n in findings.items():
+    if n >= finding_n:
+        print("finding:%s" % cat)
+        break
+PYEOF
+)" || hits=""
+    lesson_hit="$(printf '%s' "$hits" | sed -n 's/^lesson://p' | head -1)" || lesson_hit=""
+    finding_hit="$(printf '%s' "$hits" | sed -n 's/^finding://p' | head -1)" || finding_hit=""
+  fi
+  if [ -n "$lesson_hit" ]; then
+    say_due "$CONSOLIDATION_LESSONS lessons on $lesson_hit"
+    return 0
+  fi
+  if [ -n "$finding_hit" ]; then
+    say_due "$CONSOLIDATION_FINDINGS findings in $finding_hit"
+    return 0
+  fi
+  return 0
 }
 
 brief() {
@@ -503,6 +621,13 @@ orphan_line="$(journal_orphan)"
 if [ -n "$orphan_line" ]; then
   text="$text
 $orphan_line"
+fi
+# At most one consolidation-due line, appended after the orphan line so the
+# brief stays in budget: silence is the common case, one line the most.
+due_line="$(consolidation_due "$text")"
+if [ -n "$due_line" ]; then
+  text="$text
+$due_line"
 fi
 [ -z "$text" ] && exit 0
 

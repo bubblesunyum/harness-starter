@@ -429,6 +429,39 @@ deletions stay user-gated with an archive copy; lessons only add.
 Orchestrated rounds reflect once per round, at the orchestrator's close, not
 per worker.
 
+## Consolidation is one librarian pass on a due signal
+
+Capture and reflect only add knowledge; nothing removes it, so the layer only
+grows. The librarian runs one consolidation pass — no second sweep.
+`scripts/harness brief` prints at most one
+`consolidation due: ...` line when the pass is due and nothing otherwise, and
+it never runs the pass itself; the calling session runs the librarian through
+`scripts/harness agent` on the pinned model (natively inside opencode),
+applies what it keeps, and resets the marker by writing the current UTC time
+into `harness/.last-consolidation`.
+
+Due means (>=5 handoff notes newer than the marker AND the marker older than
+24h) OR pressure: more known traps than the brief's budget, >=3 lessons on one
+target in `harness/learning.jsonl`, or one finding category 3 times. Pressure
+counts only rows with a ts newer than the marker timestamp, and the reset
+writes the current UTC time — a pass clears the count until new rows land. The
+five numbers live in the one Tune here block at the top of `scripts/brief.sh`;
+the logic below them stays untouched. A missing or empty marker means no pass has
+run — cadence has nothing to measure from, pressure still applies, and a fresh
+install stays silent because it carries no pressure.
+
+The pass scopes to what changed since the marker plus the likely-to-change
+entries (anything naming a command, path, flag, or number), never a re-audit
+of everything. Beside delete/merge/move/shorten it carries three duties:
+promote (a lesson logged 2+ times, or a memory the sessions keep needing,
+moves up a tier), correct (memories naming commands, paths, flags, and numbers
+checked against the repo, the handoffs, and the closed beads — false claims
+first), and prune. A finding category seen 3 times becomes a reviewer-trap
+proposal by rule. The librarian proposes only, exactly like the reflector;
+memory deletions stay user-gated with an archive copy. If the project logs
+`bd recall` keys, later passes weight by access; otherwise they skip that —
+never new instrumentation on the hot path.
+
 ## File the bead as planning begins
 
 The moment a task is real — the user asked for something not already in the

@@ -778,6 +778,148 @@ probe_step "reflect skips and fails soft at close" bash -c '
   echo "$out" | grep -q "REFLECTOR_NATIVE" ||
     { echo "error: native path never said to run the reflector natively"; echo "$out"; exit 1; }'
 
+# The consolidation prompt: the librarian gains promote/correct/prune beside
+# delete/merge/move/shorten, scopes every pass to the marker, proposes only,
+# and turns a 3x finding category into a reviewer trap. Static checks on the
+# tree — the behavioral half is the due-signal probe below.
+step "librarian consolidation prompt" bash -c '
+  for w in promote correct prune; do
+    grep -q "$w" template/.claude/agents/librarian.md ||
+      { echo "error: librarian never names $w"; exit 1; }
+  done
+  for w in last-consolidation "3 times" reviewer-trap "scripts/harness agent" native "You propose" memory-archive "since the marker"; do
+    grep -q "$w" template/.claude/agents/librarian.md ||
+      { echo "error: librarian never covers $w"; exit 1; }
+  done
+  for w in CONSOLIDATION_NOTES CONSOLIDATION_HOURS CONSOLIDATION_MAX_TRAPS CONSOLIDATION_LESSONS CONSOLIDATION_FINDINGS; do
+    grep -q "$w" template/scripts/brief.sh ||
+      { echo "error: brief never sets $w"; exit 1; }
+  done
+  for w in "consolidation due" last-consolidation "Tune here"; do
+    grep -q "$w" template/scripts/brief.sh ||
+      { echo "error: brief never covers $w"; exit 1; }
+  done
+  if grep -q "agent.py" template/scripts/brief.sh; then
+    echo "error: brief shells to the agent instead of only printing one line"; exit 1;
+  fi
+  [ -f template/harness/.last-consolidation ] ||
+    { echo "error: no marker seed in template/harness"; exit 1; }
+  [ ! -s template/harness/.last-consolidation ] ||
+    { echo "error: the marker seed is not empty"; exit 1; }
+  grep -q "Consolidation is one librarian pass" template/.claude/HARNESS.md ||
+    { echo "error: HARNESS.md never explains consolidation"; exit 1; }
+  grep -q "consolidation due" template/.claude/HARNESS.md ||
+    { echo "error: HARNESS.md never names the due line"; exit 1; }
+  for w in "agents/librarian.md" "scripts/brief.sh"; do
+    grep -q "$w" template/.claude/HARNESS.md ||
+      { echo "error: HARNESS.md tracks comment lost $w"; exit 1; }
+  done
+  for w in promote correct "last-consolidation" "reviewer-trap"; do
+    grep -q "$w" template/.opencode/agent/librarian.md ||
+      { echo "error: opencode translation lost $w"; exit 1; }
+  done'
+
+# The due signal, through a reference install: a fresh install with no marker
+# stays silent, >=5 handoff notes plus a 24h-old marker reports exactly one
+# line, a reset marker clears it, each pressure signal (lessons, findings,
+# traps over budget) reports exactly one line on its own, and pressure scopes
+# to the marker: legacy rows with no marker report due, a UTC reset clears
+# them, and fresh rows after the reset report due again. Silent otherwise.
+probe_step "consolidation due signal" bash -c '
+  expect_brief() {
+    out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) ||
+      { echo "error: brief failed ($1)"; echo "$out"; exit 1; }
+  }
+  expect_due_once() {
+    expect_brief "$1" || exit 1
+    n="$(echo "$out" | grep -c "consolidation due" || true)"
+    [ "$n" = "1" ] ||
+      { echo "error: $1 reported due $n times, want exactly 1"; echo "$out"; exit 1; }
+    [ -z "${2:-}" ] || echo "$out" | grep -q "$2" ||
+      { echo "error: $1 line never matched $2"; echo "$out"; exit 1; }
+  }
+  expect_silent() {
+    expect_brief "$1" || exit 1
+    if echo "$out" | grep -q "consolidation due"; then
+      echo "error: $1 still reports due"; echo "$out"; exit 1;
+    fi
+  }
+  golden_probe || exit 1
+  [ ! -e "$probe/harness/.last-consolidation" ] ||
+    { echo "error: fresh install carries a consolidation marker"; exit 1; }
+  expect_silent "fresh install"
+  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot plant the marker"; exit 1; }
+  touch -t 202001010000 "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot age the marker"; exit 1; }
+  for i in 1 2 3 4 5; do
+    printf "%s\n" "# probe note $i" > "$probe/harness/handoffs/note-probe-$i.md" ||
+      { echo "error: cannot plant handoff note $i"; exit 1; }
+  done
+  expect_due_once "cadence" "5 handoffs"
+  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot reset the marker"; exit 1; }
+  expect_silent "reset marker"
+  rm -f "$probe"/harness/handoffs/note-probe-*.md ||
+    { echo "error: cannot clear the probe notes"; exit 1; }
+  printf "%s\n" "# probe note 1" > "$probe/harness/handoffs/note-probe-1.md" ||
+    { echo "error: cannot plant one probe note"; exit 1; }
+  touch -t 202001010000 "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot re-age the marker"; exit 1; }
+  expect_silent "one old note"
+  rm -f "$probe"/harness/handoffs/note-probe-*.md ||
+    { echo "error: cannot clear the probe notes again"; exit 1; }
+  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot freshen the marker"; exit 1; }
+  for i in 1 2 3 4 5; do
+    printf "%s\n" "# probe note $i" > "$probe/harness/handoffs/note-probe-$i.md" ||
+      { echo "error: cannot replant handoff note $i"; exit 1; }
+  done
+  expect_silent "five fresh notes"
+  rm -f "$probe"/harness/handoffs/note-probe-*.md ||
+    { echo "error: cannot clear the notes before the pressure cases"; exit 1; }
+  cp "$probe/harness/learning.jsonl" "$probe/learning-backup.jsonl" ||
+    { echo "error: cannot back up the learning log"; exit 1; }
+  printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot backdate the marker content"; exit 1; }
+  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" ||
+    { echo "error: cannot stamp probe rows"; exit 1; }
+  printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-x\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-x\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"dropped\", \"target\": \"probe-target\", \"text\": \"probe lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-x\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot plant probe lessons"; exit 1; }
+  expect_due_once "lesson pressure" "lessons on probe-target"
+  cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot restore the learning log"; exit 1; }
+  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" ||
+    { echo "error: cannot stamp probe rows"; exit 1; }
+  printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-slug\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-taste\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-slug\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"rejected\", \"reviewer\": \"reviewer-correctness\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-slug\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-design\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot plant probe findings"; exit 1; }
+  expect_due_once "finding pressure" "findings in probe-slug"
+  cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot restore the learning log again"; exit 1; }
+  expect_silent "restored log"
+  rm -f "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot drop the marker for the legacy case"; exit 1; }
+  printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-legacy\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"legacy lesson one\", \"tier\": \"memory\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-legacy\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"legacy lesson two\", \"tier\": \"memory\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-legacy\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"legacy lesson three\", \"tier\": \"memory\"}" >> "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot plant legacy lessons"; exit 1; }
+  expect_due_once "legacy rows with no marker" "lessons on probe-legacy"
+  date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" ||
+    { echo "error: cannot write the UTC reset"; exit 1; }
+  expect_silent "UTC reset over legacy rows"
+  sleep 2 ||
+    { echo "error: cannot wait out the marker second"; exit 1; }
+  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" ||
+    { echo "error: cannot stamp fresh rows"; exit 1; }
+  printf "%s\n" "{\"bead\": \"probe-4\", \"category\": \"probe-legacy\", \"evidence\": \"probe-4\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"fresh lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-5\", \"category\": \"probe-legacy\", \"evidence\": \"probe-5\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"fresh lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-6\", \"category\": \"probe-legacy\", \"evidence\": \"probe-6\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-legacy\", \"text\": \"fresh lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot plant fresh lessons"; exit 1; }
+  expect_due_once "fresh rows after reset" "lessons on probe-legacy"
+  cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" ||
+    { echo "error: cannot restore the learning log a third time"; exit 1; }
+  for i in 1 2 3 4 5 6 7 8 9; do
+    (cd "$probe" && bd remember "probe trap $i" --key "probe-trap-$i" >/dev/null 2>&1) ||
+      { echo "error: cannot remember probe memory $i"; exit 1; }
+  done
+  expect_due_once "trap pressure" "known traps over budget"'
+
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
 # pattern from the reader.

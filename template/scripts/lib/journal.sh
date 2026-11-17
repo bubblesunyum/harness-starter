@@ -114,7 +114,7 @@ journal_close() {
 # One review finding the session accepted or rejected, appended to
 # harness/learning.jsonl. Category is a short slug the session chose.
 journal_finding() {
-  local category reviewer bead outcome note log proj
+  local category reviewer bead outcome note now log proj
   category=""; reviewer=""; bead=""; outcome=""; note=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -145,12 +145,13 @@ journal_finding() {
     echo "journal: no harness/ in $proj — skipping the findings log" >&2; return 1
   fi
   log="$proj/harness/learning.jsonl"
-  python3 - "$category" "$reviewer" "$bead" "$outcome" "$note" "$log" <<'PYEOF' || {
+  now="$(journal_now)"
+  python3 - "$category" "$reviewer" "$bead" "$outcome" "$note" "$now" "$log" <<'PYEOF' || {
 import json
 import sys
-category, reviewer, bead, outcome, note, path = sys.argv[1:7]
+category, reviewer, bead, outcome, note, now, path = sys.argv[1:8]
 entry = {"kind": "finding", "category": category, "reviewer": reviewer,
-         "bead": bead, "outcome": outcome}
+         "bead": bead, "outcome": outcome, "ts": now}
 if note:
     entry["note"] = " ".join(note.split())
 with open(path, "a") as handle:
@@ -164,7 +165,7 @@ PYEOF
 # harness/learning.jsonl. Tier is one of memory, reviewer-trap, skill,
 # claude-md; outcome kept or dropped, with why saying what decided it.
 journal_lesson() {
-  local tier target text evidence outcome why log proj
+  local tier target text evidence outcome why now log proj
   tier=""; target=""; text=""; evidence=""; outcome=""; why=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -197,13 +198,14 @@ journal_lesson() {
     echo "journal: no harness/ in $proj — skipping the lessons log" >&2; return 1
   fi
   log="$proj/harness/learning.jsonl"
-  python3 - "$tier" "$target" "$text" "$evidence" "$outcome" "$why" "$log" <<'PYEOF' || {
+  now="$(journal_now)"
+  python3 - "$tier" "$target" "$text" "$evidence" "$outcome" "$why" "$now" "$log" <<'PYEOF' || {
 import json
 import sys
-tier, target, text, evidence, outcome, why, path = sys.argv[1:8]
+tier, target, text, evidence, outcome, why, now, path = sys.argv[1:9]
 entry = {"kind": "lesson", "tier": tier, "target": " ".join(target.split()),
          "text": " ".join(text.split()), "evidence": " ".join(evidence.split()),
-         "outcome": outcome}
+         "outcome": outcome, "ts": now}
 if why.strip():
     entry["why"] = " ".join(why.split())
 with open(path, "a") as handle:
