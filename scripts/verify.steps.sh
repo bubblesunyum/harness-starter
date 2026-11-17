@@ -692,6 +692,92 @@ assert rows and rows[-1].get("category") == "probe-slug", rows
 PYEOF
     { echo "error: finding never landed with its category"; exit 1; }'
 
+# The close reflects by default: one packet over the session, one pinned-model
+# reflector run, and every candidate logged with its outcome. The reflector is
+# a fake opencode here — same argv shape agent.py builds, canned JSON-line
+# reply — because the gate never reaches the network.
+probe_step "reflect proposes a lesson at close and logs it kept" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  root="$(probe_shared_root "$probe")" || exit 1
+  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 ||
+    { echo "error: link failed in the probe"; exit 1; }
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git -c user.email=t@t -c user.name=t add -A &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  bid=$(cd "$probe" && bd create "probe reflect work" --design d --acceptance a --silent 2>/dev/null) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  await_bead_ready "$probe" "$bid" || exit 1
+  HARNESS_SESSION_ID=probe-reflect HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/lib/journal.sh" event verify "passed" ||
+    { echo "error: probe journal write failed"; exit 1; }
+  echo "probe work" > "$probe/probe-work.txt" ||
+    { echo "error: cannot dirty the probe"; exit 1; }
+  printf "%s\n" "# probe note draft" "" "stood where the probe stood" > "$probe/harness/handoffs/20260101-000000.md" ||
+    { echo "error: cannot plant the note draft"; exit 1; }
+  fake="$probe/opencode"
+  printf "%s\n" "#!/usr/bin/env python3" "import json,os,sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    print(json.dumps({\"type\":\"text\",\"part\":{\"text\":os.environ[\"FAKE_CANDIDATE\"]},\"sessionID\":\"ses_probe\"}))" > "$fake" ||
+    { echo "error: cannot plant fake opencode"; exit 1; }
+  chmod +x "$fake" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" OPENCODE_CONFIG_CONTENT="{\"agent\":{}}" HARNESS_SESSION_ID=probe-reflect FAKE_CANDIDATE="{\"tier\":\"memory\",\"target\":\"probe-trap\",\"text\":\"probe lesson text here\",\"evidence\":\"$bid\"}" "$probe/scripts/harness" wrap-up --quick -m "probe reflect $bid" --bead "$bid" --note-file harness/handoffs/20260101-000000.md --keep-lesson 1 2>&1) ||
+    { echo "error: wrap-up failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "reflector proposed 1 candidate" ||
+    { echo "error: wrap-up never reported the candidate"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "lesson 1 .* kept" ||
+    { echo "error: wrap-up never marked lesson 1 kept"; echo "$out"; exit 1; }
+  grep -q "\"kind\": \"lesson\"" "$probe/harness/learning.jsonl" ||
+    { echo "error: no lesson row in learning.jsonl"; exit 1; }
+  grep -q "\"outcome\": \"kept\"" "$probe/harness/learning.jsonl" ||
+    { echo "error: no kept outcome in learning.jsonl"; exit 1; }
+  (cd "$probe" && git show HEAD:.beads/issues.jsonl 2>/dev/null | grep -q "probe lesson text here") ||
+    { echo "error: kept memory never reached the committed export"; exit 1; }'
+
+# The soft paths: --no-reflect skips, an empty close skips itself out loud, a
+# dead reflector warns and never blocks the close, and inside opencode the
+# session is told to run the reflector natively.
+probe_step "reflect skips and fails soft at close" bash -c '
+  golden_probe || exit 1
+  top="$PWD"
+  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 ||
+    { echo "error: link failed in the probe"; exit 1; }
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" ||
+    { echo "error: cannot plant trivial steps"; exit 1; }
+  (cd "$probe" && git -c user.email=t@t -c user.name=t add -A &&
+    git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit --no-verify -qm init) ||
+    { echo "error: probe init commit failed"; exit 1; }
+  bid=$(cd "$probe" && bd create "probe reflect skips" --design d --acceptance a --silent 2>/dev/null) ||
+    { echo "error: cannot file a probe bead"; exit 1; }
+  await_bead_ready "$probe" "$bid" || exit 1
+  out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-empty "$probe/scripts/harness" wrap-up --quick -m "probe empty close $bid" --bead "$bid" 2>&1) ||
+    { echo "error: wrap-up failed on an empty close"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "reflect skipped — clean tree and empty journal" ||
+    { echo "error: empty close never said it skipped reflect"; echo "$out"; exit 1; }
+  echo "probe work" > "$probe/probe-work.txt" ||
+    { echo "error: cannot dirty the probe"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-flag "$probe/scripts/harness" wrap-up --quick --no-reflect -m "probe no-reflect close $bid" --bead "$bid" 2>&1) ||
+    { echo "error: wrap-up failed with --no-reflect"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "reflect skipped (--no-reflect)" ||
+    { echo "error: --no-reflect never said it skipped"; echo "$out"; exit 1; }
+  if echo "$out" | grep -q "reflector proposed"; then
+    echo "error: --no-reflect still ran the reflector"; echo "$out"; exit 1;
+  fi
+  echo "more probe work" >> "$probe/probe-work.txt" ||
+    { echo "error: cannot dirty the probe again"; exit 1; }
+  printf "%s\n" "#!/usr/bin/env python3" "import sys" "a=sys.argv[1:]" "if a[:1]==[\"--version\"]:" "    print(\"opencode 2.0.0\")" "else:" "    sys.stderr.write(\"fake opencode: no model here\")" "    sys.exit(1)" > "$probe/opencode" ||
+    { echo "error: cannot plant failing fake opencode"; exit 1; }
+  chmod +x "$probe/opencode" || { echo "error: cannot chmod the fake"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_SESSION_ID=probe-fail "$probe/scripts/harness" wrap-up --quick -m "probe failed-reflect close $bid" --bead "$bid" 2>&1) ||
+    { echo "error: wrap-up failed when the reflector failed"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "continuing without candidates" ||
+    { echo "error: reflector failure never warned and continued"; echo "$out"; exit 1; }
+  echo "even more probe work" >> "$probe/probe-work.txt" ||
+    { echo "error: cannot dirty the probe a third time"; exit 1; }
+  out=$(cd "$probe" && env -u OPENCODE_BIN HARNESS_HOME="$top" HARNESS_SESSION_ID=probe-native OPENCODE_SESSION_ID=probe-native "$probe/scripts/harness" wrap-up --quick -m "probe native close $bid" --bead "$bid" 2>&1) ||
+    { echo "error: wrap-up failed on the native path"; echo "$out"; exit 1; }
+  echo "$out" | grep -q "REFLECTOR_NATIVE" ||
+    { echo "error: native path never said to run the reflector natively"; echo "$out"; exit 1; }'
+
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing
 # pattern from the reader.

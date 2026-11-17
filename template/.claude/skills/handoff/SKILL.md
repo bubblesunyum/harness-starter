@@ -33,6 +33,22 @@ scripts/harness wrap-up -m "lowercase terse message" --bead <id> \
   [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
 ```
 
+Reflect runs at every close, before the ledger writes: wrap-up builds the
+packet (`scripts/reflect.sh`) and runs the reflector on the pinned model —
+natively inside opencode, where the session spawns the reflector itself
+against the printed packet. `--no-reflect` skips it; a clean tree with an
+empty journal skips itself and says so; a failed reflector warns and never
+blocks the close. Zero candidates is normal. Preview the packet with
+`bash "$(scripts/harness root)/scripts/reflect.sh" --packet-only`, pass
+`--keep-lesson N` for what to keep
+(memory-tier keeps land via `bd remember`; other tiers you apply as small
+deltas by hand), and pass the same `--candidates-file <path>` the preview
+printed from — without it a fresh run renumbers the candidates under you.
+Log anything decided outside wrap-up with
+`bash "$(scripts/harness root)/scripts/lib/journal.sh" lesson --tier <tier>
+--target <target> --text <text>
+--evidence <evidence> --outcome kept|dropped [--why <why>]`.
+
 Write the note first and pass it as `--note-file`: the run commits the work
 first (the note file excluded), then lands the note in its own capture commit
 — that capture commit is the one the close ends on. Append any laurel before
@@ -141,4 +157,4 @@ with `claude agents`. Include a "suggested skills" line in the summary. Don't
 duplicate what's already in beads, commits, or a plan file — reference those by
 id or path.
 
-<!-- tracks: scripts/brief.sh scripts/wrap-up.sh -->
+<!-- tracks: scripts/brief.sh scripts/wrap-up.sh scripts/reflect.sh -->

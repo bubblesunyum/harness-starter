@@ -12,6 +12,17 @@
 #   scripts/harness wrap-up -m "lowercase terse message" --bead fol-xxx
 #     [--close fol-yyy --reason "..."] [--note fol-yyy "stands at ..."]
 #     [--remember "..."] [--quick|--full] [--no-push] [--note-file harness/handoffs/<ts>.md]
+#     [--no-reflect] [--nominate "one line"]... [--keep-lesson N]... [--candidates-file <path>]
+#
+# Reflect runs at every close, before the ledger writes (stage 0 below): one
+# packet plus the reflector on the pinned model, zero candidates normal.
+# --no-reflect skips it; a close with a clean tree and an empty journal skips
+# itself out loud (unless --keep-lesson names candidates); a failed reflector
+# warns and never blocks the close. Name candidates to keep with --keep-lesson
+# (memory-tier keeps land in the ledger via `bd remember`); every candidate is
+# logged to harness/learning.jsonl with its outcome, kept or dropped, and why.
+# --candidates-file reuses a reviewed list so --keep-lesson keeps what the
+# session saw instead of a fresh rerun.
 #
 # Lane default is the full gate (default verify lane); --quick while
 # iterating, --full for the browser suite. Every ledger-shaped thing happens
@@ -33,11 +44,14 @@ HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
 
 . "$HARNESS/scripts/lib/paths.sh"
+. "$HARNESS/scripts/lib/journal.sh"
 
 SEP=$'\x1f' # unit separator: joins action + args into one array element, so a
             # single loop applies every ledger write (split fields never nest)
 ACTIONS=()
-PUSH=1 LANE="" MSG="" BEAD="" NOTE_FILE=""
+NOMINATIONS=()
+KEEP_LESSONS=()
+PUSH=1 LANE="" MSG="" BEAD="" NOTE_FILE="" NOREFLECT=0 CANDIDATES_FILE=""
 
 usage() {
   awk '/^#/{sub(/^# ?/, ""); print; next} {exit}' "$0"
@@ -46,6 +60,160 @@ usage() {
 
 need() { # need COUNT REMAINING FLAG -- fail when fewer than COUNT args remain
   if [ "$1" -gt "$2" ]; then echo "wrap-up: $3 needs a value" >&2; exit 1; fi
+}
+
+# --keep-lesson names indices reflect never applied (skipped run, native
+# run, no candidates): one shape for every site that reports it. Call only
+# behind a non-empty KEEP_LESSONS guard — the expansion is unsafe on an
+# empty array under `set -u` on old bash.
+warn_keep_ignored() { # warn_keep_ignored REASON
+  echo "wrap-up: warning: --keep-lesson ${KEEP_LESSONS[*]} ignored — $1" >&2
+}
+
+# One reflect candidate with the session's decision: memory-tier keeps land
+# via `bd remember`, other tiers print for the session to apply by hand, and
+# every outcome is logged to harness/learning.jsonl. Args: idx tier target
+# text evidence. Keeps come from KEEP_LESSONS.
+annotate_reflect_lesson() {
+  local _idx="$1" _tier="$2" _target="$3" _text="$4" _evidence="$5"
+  local _outcome="dropped" _why="no --keep-lesson named it at close" _k
+  for _k in ${KEEP_LESSONS[@]+"${KEEP_LESSONS[@]}"}; do
+    if [ "$_k" = "$_idx" ]; then _outcome="kept"; break; fi
+  done
+  if [ "$_outcome" = "kept" ]; then
+    if [ "$_tier" = "memory" ]; then
+      if bd remember "$_text" --key "$_target" >/dev/null 2>&1 || bd remember "$_text" >/dev/null 2>&1; then
+        _why="kept at close (--keep-lesson $_idx)"
+      else
+        echo "wrap-up: warning: lesson $_idx kept but bd remember failed — recording as dropped" >&2
+        _outcome="dropped"
+        _why="bd remember failed at close (--keep-lesson $_idx)"
+      fi
+    else
+      echo "wrap-up: lesson $_idx kept — apply the delta to $_target by hand"
+      _why="kept at close (--keep-lesson $_idx) — apply by hand"
+    fi
+  fi
+  bash "$HARNESS/scripts/lib/journal.sh" lesson --tier "$_tier" --target "$_target" --text "$_text" --evidence "$_evidence" --outcome "$_outcome" --why "$_why" || echo "wrap-up: warning: cannot log lesson $_idx" >&2
+  echo "wrap-up: lesson $_idx [$_tier] $_target — $_outcome"
+}
+
+# Stage 0: one reflector pass over this close, before anything moves the
+# ledger: the packet carries the session diff, the live journal, the actions
+# below (still pending), recent findings, the note draft and the session's
+# nominations. Default on; --no-reflect skips; a close with a clean tree and
+# an empty journal skips itself out loud unless --keep-lesson names
+# candidates. Nothing here blocks the close: a failed reflector warns and the
+# close continues without candidates. Kept lessons land memory-tier in the
+# ledger via `bd remember`, and every candidate is logged to
+# harness/learning.jsonl with its outcome — anything else kept is a small
+# delta the session applies by hand. --candidates-file reuses a reviewed list
+# so --keep-lesson indexes what the session saw, not a fresh rerun.
+run_reflect_stage() {
+  if [ "$NOREFLECT" -eq 1 ]; then
+    echo "wrap-up: reflect skipped (--no-reflect)"
+    if [ "${#KEEP_LESSONS[@]}" -gt 0 ]; then
+      warn_keep_ignored "reflect did not run, so there is nothing to keep"
+    fi
+    return 0
+  fi
+  local _reflect_sid _reflect_live _reflect_empty _reflect_pending
+  local _reflect_args _reflect_out _reflect_cands _reflect_n _reflect_tab
+  local kind rest a b e _nom
+  local _idx _tier _target _text _evidence _k
+  _reflect_sid="$(journal_session_id 2>/dev/null)" || _reflect_sid=""
+  _reflect_live=""
+  if [ -n "$_reflect_sid" ]; then
+    _reflect_live="$(journal_live_file "$ROOT" "$_reflect_sid" 2>/dev/null)" || _reflect_live=""
+  fi
+  _reflect_empty=0
+  if [ -z "$(git status --porcelain)" ] && [ "${#ACTIONS[@]}" -eq 0 ] && [ -z "$NOTE_FILE" ] && [ "${#NOMINATIONS[@]}" -eq 0 ] && [ "${#KEEP_LESSONS[@]}" -eq 0 ]; then
+    if [ -z "$_reflect_live" ] || [ ! -s "$_reflect_live" ]; then
+      _reflect_empty=1
+    fi
+  fi
+  if [ "$_reflect_empty" -eq 1 ]; then
+    echo "wrap-up: reflect skipped — clean tree and empty journal (nothing to reflect on)"
+    return 0
+  fi
+  echo "wrap-up: reflecting on this close..."
+  _reflect_pending=""
+  for e in ${ACTIONS[@]+"${ACTIONS[@]}"}; do
+    kind="${e%%"$SEP"*}"; rest="${e#*"$SEP"}"
+    a="${rest%%"$SEP"*}"; b="${rest#*"$SEP"}"
+    case "$kind" in
+      close) _reflect_pending="${_reflect_pending}close $a -- $b
+";;
+      note) _reflect_pending="${_reflect_pending}note $a -- $b
+";;
+      remember) _reflect_pending="${_reflect_pending}remember -- $a
+";;
+    esac
+  done
+  _reflect_args=()
+  [ -n "$NOTE_FILE" ] && _reflect_args+=(--note-file "$NOTE_FILE")
+  [ -n "$CANDIDATES_FILE" ] && _reflect_args+=(--candidates-file "$CANDIDATES_FILE")
+  for _nom in ${NOMINATIONS[@]+"${NOMINATIONS[@]}"}; do
+    _reflect_args+=(--nominate "$_nom")
+  done
+  _reflect_out="$(mktemp)" || {
+    echo "wrap-up: warning: cannot stage reflect output — continuing without candidates" >&2
+    _reflect_out=""
+  }
+  if [ -z "$_reflect_out" ]; then
+    return 0
+  fi
+  if HARNESS_REFLECT_PENDING="$_reflect_pending" "$(harness_script reflect.sh)" ${_reflect_args[@]+"${_reflect_args[@]}"} >"$_reflect_out" 2>&1; then
+    cat "$_reflect_out"
+    _reflect_cands="$(grep -m1 '^CANDIDATES ' "$_reflect_out" | sed 's/^CANDIDATES //')" || _reflect_cands=""
+    if grep -q '^REFLECTOR_NATIVE' "$_reflect_out"; then
+      if [ "${#KEEP_LESSONS[@]}" -gt 0 ]; then
+        warn_keep_ignored "the reflector runs natively, so keeps need --candidates-file or a real run"
+      fi
+      journal_event "reflect" "packet built, native run left to the session" || true
+    elif [ -n "$_reflect_cands" ] && [ -f "$_reflect_cands" ] && [ -s "$_reflect_cands" ]; then
+      _reflect_n="$(grep -c . "$_reflect_cands")"
+      echo "wrap-up: reflector proposed $_reflect_n candidate(s)"
+      _reflect_tab="$(python3 - "$_reflect_cands" <<'PYEOF'
+import json, sys
+for pos, line in enumerate(open(sys.argv[1]), 1):
+    line = line.strip()
+    if not line:
+        continue
+    cand = json.loads(line)
+    print("%d\t%s\t%s\t%s\t%s" % (pos, cand["tier"], cand["target"], cand["text"], cand["evidence"]))
+PYEOF
+)" || _reflect_tab=""
+      if [ -n "$_reflect_tab" ]; then
+        printf '%s\n' "$_reflect_tab" | while IFS=$'\t' read -r _idx _tier _target _text _evidence; do
+          [ -n "$_idx" ] || continue
+          annotate_reflect_lesson "$_idx" "$_tier" "$_target" "$_text" "$_evidence"
+        done
+      fi
+      for _k in ${KEEP_LESSONS[@]+"${KEEP_LESSONS[@]}"}; do
+        case "$_k" in
+          ''|*[!0-9]*) echo "wrap-up: warning: --keep-lesson $_k names no candidate" >&2;;
+          *) if [ "$_k" -lt 1 ] || [ "$_k" -gt "$_reflect_n" ]; then echo "wrap-up: warning: --keep-lesson $_k names no candidate (1-$_reflect_n)" >&2; fi;;
+        esac
+      done
+      journal_event "reflect" "$_reflect_n candidate(s), ${#KEEP_LESSONS[@]} kept" || true
+    else
+      if grep -q '^REFLECTOR_FAILED' "$_reflect_out"; then
+        echo "wrap-up: warning: $(grep -m1 '^REFLECTOR_FAILED' "$_reflect_out" | sed 's/^REFLECTOR_FAILED //') — continuing without candidates" >&2
+      else
+        echo "wrap-up: reflect proposed nothing — continuing"
+      fi
+      if [ "${#KEEP_LESSONS[@]}" -gt 0 ]; then
+        warn_keep_ignored "reflect produced no candidates, so there is nothing to keep"
+      fi
+      journal_event "reflect" "no candidates" || true
+    fi
+  else
+    cat "$_reflect_out"
+    echo "wrap-up: warning: reflect failed — continuing without candidates" >&2
+    journal_event "reflect" "failed, continuing" || true
+  fi
+  rm -f "$_reflect_out"
 }
 
 # Repeatable flags take their value as the next argv; --close consumes two,
@@ -59,6 +227,10 @@ while [ $# -gt 0 ]; do
       ACTIONS+=("close${SEP}$2${SEP}$4"); shift 4;;
     --note) need 3 "$#" "--note ID TEXT"; ACTIONS+=("note${SEP}$2${SEP}$3"); shift 3;;
     --remember) need 2 "$#" "--remember TEXT"; ACTIONS+=("remember${SEP}$2"); shift 2;;
+    --nominate) need 2 "$#" "--nominate TEXT"; NOMINATIONS+=("$2"); shift 2;;
+    --keep-lesson) need 2 "$#" "--keep-lesson N"; KEEP_LESSONS+=("$2"); shift 2;;
+    --candidates-file) need 2 "$#" "--candidates-file PATH"; CANDIDATES_FILE="$2"; shift 2;;
+    --no-reflect) NOREFLECT=1; shift;;
     --no-push) PUSH=0; shift;;
     --quick|--full) LANE="$1"; shift;;
     -m) need 2 "$#" "-m"; MSG="$2"; shift 2;;
@@ -104,6 +276,10 @@ if [ -n "$NOTE_FILE" ]; then
     *) echo "wrap-up: note file must be harness/handoffs/<name>.md or harness/laurels.jsonl" >&2; exit 1;;
   esac
 fi
+
+# ── 0. Reflect. One reflector pass over this close; the shape lives on
+# run_reflect_stage above so this stage stays one call.
+run_reflect_stage
 
 # ── 1. Ledger writes. Nothing after this point may move the ledger before
 # the export — a stray `bd` write here still needs a fresh export, and the

@@ -1,5 +1,6 @@
 <!-- tracks:
   .claude/agents/librarian.md
+  .claude/agents/reflector.md
   .claude/agents/reviewer-correctness.md
   .claude/agents/reviewer-design.md
   .claude/agents/reviewer-taste.md
@@ -9,6 +10,7 @@
   scripts/context.py
   scripts/lib/journal.sh
   scripts/opencode-agents.py
+  scripts/reflect.sh
   scripts/review.sh
   scripts/verify.sh
 -->
@@ -401,6 +403,31 @@ Review findings the session accepts or rejects land in
 per line, category a short slug the session chose. The agentic-review skill
 says how; readers skip `#` and blank lines, which is what the seed's schema
 comment is.
+
+## Reflect reads the close back
+
+Every close ends with one reflector pass over what the session did — the
+diff, the live journal, the beads it settled, recent findings, the note
+draft — and at most three proposed lessons back. The packet is
+`scripts/reflect.sh`, the prompt `.claude/agents/reflector.md`, and the close
+runs them in `scripts/wrap-up.sh` before the ledger writes: default on,
+`--no-reflect` to skip, and a clean tree with an empty journal skips itself
+out loud. The reflector runs through `scripts/harness agent` on the pinned
+model, natively inside opencode, and a failed run warns and never blocks the
+close — an unrecorded lesson is cheaper than an unrecorded session. Zero
+candidates is the normal outcome; a pass that always finds three things
+teaches the session to ignore it, the same way a reviewer that always finds
+three things does.
+
+What it may propose is bounded by tier — a memory, one line for a reviewer's
+overlay, a delta to a skill or to `CLAUDE.md` — and every candidate lands in
+`harness/learning.jsonl` with its outcome, kept or dropped, and why. A close
+passes `--candidates-file` when it keeps from a reviewed list, so the indices
+mean what the session saw; without one a fresh run renumbers them. The
+calling session decides; the script never rewrites prose on its own. Memory
+deletions stay user-gated with an archive copy; lessons only add.
+Orchestrated rounds reflect once per round, at the orchestrator's close, not
+per worker.
 
 ## File the bead as planning begins
 

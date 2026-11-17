@@ -86,6 +86,18 @@ Every finished piece of work ends by asking where its residue goes:
 | A repeatable procedure | a new skill, or a section in an existing one |
 | Praise the user offered unprompted | a line in `harness/laurels.jsonl` |
 
+**Close with a reflector pass.** `wrap-up` reflects by default: one packet
+over the session's diff, journal, settled beads, findings and note draft,
+and at most three proposed lessons back — zero is normal. The session
+decides: preview the packet with
+`bash "$(scripts/harness root)/scripts/reflect.sh" --packet-only`, keep with
+`--keep-lesson N` (memory-tier keeps land via `bd remember`; other tiers you
+apply as small deltas in place), passing the same `--candidates-file <path>`
+the preview printed from — without it a fresh run renumbers the candidates —
+and every candidate is logged to
+`harness/learning.jsonl` with its outcome. Never rewrite prose for a kept
+lesson; apply the delta in place.
+
 **Write a memory when a fact surprised you** — a tool behaving differently than
 its docs suggest, a platform trap, a number worth knowing. Not for what the code
 already says, and not for what happened once; for the fact that outlives the
@@ -240,4 +252,4 @@ reads as the truth instead of a guess.
 honest" — nothing ready means the next session has nothing to pick up, and
 something stale means work is rotting rather than moving.
 
-<!-- tracks: scripts/brief.sh scripts/verify.sh scripts/dashboard.py scripts/hooks/commit-msg scripts/context.py -->
+<!-- tracks: scripts/brief.sh scripts/verify.sh scripts/dashboard.py scripts/hooks/commit-msg scripts/context.py scripts/reflect.sh -->

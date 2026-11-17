@@ -6,11 +6,12 @@
 # file per close; the close removes only its own live file.
 #
 # Sourced (provides journal_session_id, journal_event, journal_close,
-# journal_finding, journal_orphan) or executed:
+# journal_finding, journal_lesson, journal_orphan) or executed:
 #
 #   lib/journal.sh session-id
 #   lib/journal.sh event <kind> <detail...>
 #   lib/journal.sh finding --category <slug> --reviewer <role> --bead <id> --outcome accepted|rejected [--note <line>]
+#   lib/journal.sh lesson --tier <tier> --target <target> --text <line> --evidence <bead|commit|finding> --outcome kept|dropped [--why <line>]
 #   lib/journal.sh close
 #   lib/journal.sh orphan
 #
@@ -159,6 +160,59 @@ PYEOF
   }
 }
 
+# One reflector candidate with the session's decision, appended to
+# harness/learning.jsonl. Tier is one of memory, reviewer-trap, skill,
+# claude-md; outcome kept or dropped, with why saying what decided it.
+journal_lesson() {
+  local tier target text evidence outcome why log proj
+  tier=""; target=""; text=""; evidence=""; outcome=""; why=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --tier) [ $# -ge 2 ] || { echo "journal: --tier needs a value" >&2; return 1; }; tier="$2"; shift 2;;
+      --target) [ $# -ge 2 ] || { echo "journal: --target needs a value" >&2; return 1; }; target="$2"; shift 2;;
+      --text) [ $# -ge 2 ] || { echo "journal: --text needs a value" >&2; return 1; }; text="$2"; shift 2;;
+      --evidence) [ $# -ge 2 ] || { echo "journal: --evidence needs a value" >&2; return 1; }; evidence="$2"; shift 2;;
+      --outcome) [ $# -ge 2 ] || { echo "journal: --outcome needs a value" >&2; return 1; }; outcome="$2"; shift 2;;
+      --why) [ $# -ge 2 ] || { echo "journal: --why needs a value" >&2; return 1; }; why="$2"; shift 2;;
+      --) shift; break;;
+      *) echo "journal: unknown lesson arg $1" >&2; return 1;;
+    esac
+  done
+  case "$tier" in
+    memory|reviewer-trap|skill|claude-md) ;;
+    *) echo "journal: --tier must be memory, reviewer-trap, skill or claude-md" >&2; return 1;;
+  esac
+  [ -n "$target" ] || { echo "journal: lesson needs --target" >&2; return 1; }
+  [ -n "$text" ] || { echo "journal: lesson needs --text" >&2; return 1; }
+  [ -n "$evidence" ] || { echo "journal: lesson needs --evidence" >&2; return 1; }
+  case "$outcome" in
+    kept|dropped) ;;
+    *) echo "journal: --outcome must be kept or dropped" >&2; return 1;;
+  esac
+  command -v python3 >/dev/null 2>&1 || {
+    echo "journal: python3 is needed for the lessons log" >&2; return 1
+  }
+  proj="$(journal_project)" || return 1
+  if [ ! -d "$proj/harness" ]; then
+    echo "journal: no harness/ in $proj — skipping the lessons log" >&2; return 1
+  fi
+  log="$proj/harness/learning.jsonl"
+  python3 - "$tier" "$target" "$text" "$evidence" "$outcome" "$why" "$log" <<'PYEOF' || {
+import json
+import sys
+tier, target, text, evidence, outcome, why, path = sys.argv[1:8]
+entry = {"kind": "lesson", "tier": tier, "target": " ".join(target.split()),
+         "text": " ".join(text.split()), "evidence": " ".join(evidence.split()),
+         "outcome": outcome}
+if why.strip():
+    entry["why"] = " ".join(why.split())
+with open(path, "a") as handle:
+    handle.write(json.dumps(entry, sort_keys=True) + "\n")
+PYEOF
+    echo "journal: cannot append to $log" >&2; return 1
+  }
+}
+
 # How long ago a journal mtime was, in the board's words. Empty when the
 # clock cannot say — the caller then prints the line without an age.
 journal_age() {
@@ -211,9 +265,10 @@ journal_main() {
     session-id) journal_session_id;;
     event) shift; journal_event "$@";;
     finding) shift; journal_finding "$@";;
+    lesson) shift; journal_lesson "$@";;
     close) shift; journal_close;;
     orphan) journal_orphan;;
-    *) echo "usage: journal.sh {session-id|event <kind> <detail...>|finding --category ...|close|orphan}" >&2; return 2;;
+    *) echo "usage: journal.sh {session-id|event <kind> <detail...>|finding --category ...|lesson --tier ...|close|orphan}" >&2; return 2;;
   esac
 }
 
