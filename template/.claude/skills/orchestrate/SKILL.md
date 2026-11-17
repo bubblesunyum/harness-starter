@@ -77,6 +77,9 @@ else. One message per worker:
 - acceptance criteria and only the scoped checks that prove them —
   never `scripts/h verify` (the gate runs once, on the frozen tree,
   by the orchestrator);
+- bless check — if the brief touches a file named in a `tracks` comment
+  or a tracked doc itself, report it and leave the bless to the orchestrator,
+  which blesses once on the frozen tree before gating;
 - the fix-as-you-go rule (below).
 
 ## Phase 3 — Spawn implementers
