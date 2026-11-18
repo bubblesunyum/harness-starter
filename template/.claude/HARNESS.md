@@ -487,7 +487,7 @@ never new instrumentation on the hot path.
 ## The wiki is derived, never primary
 
 The brief's memory-key line grows with every trap the sessions keep, and a flat
-list of fifty keys abstracts nothing — nobody can hold it, so nobody reads it.
+list of dozens of keys abstracts nothing — nobody can hold it, so nobody reads it.
 Past a threshold (`WIKI_MAX_KEYS` in `scripts/brief.sh`, beside the
 consolidation numbers) the brief prints topic names from
 `harness/wiki/index.md` instead, and the pages load on demand. A stale index

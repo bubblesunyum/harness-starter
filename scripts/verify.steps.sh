@@ -983,7 +983,7 @@ step "wiki derived layer format" bash -c '
       { echo "error: opencode translation lost $w"; exit 1; }
   done'
 
-# Wiki lifecycle in one copy: empty builds nothing, 27 keys build and rebuild losslessly, colliding topics keep distinct files, zero cap breaches loudly with no publish, fake harness proves staleness.
+# Wiki lifecycle in one copy: empty builds nothing, 61 keys build and rebuild losslessly, colliding topics keep distinct files, zero cap breaches loudly with no publish, fake harness proves staleness.
 probe_step --when "template/scripts/build-wiki.sh template/scripts/brief.sh template/scripts/context.py template/.claude/agents/librarian.md" "wiki lifecycle" bash -c '
 PROBE_SCENARIO="wiki lifecycle"
 golden_probe || probe_fail "no golden fixture"
@@ -997,21 +997,27 @@ out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brie
 echo "$out" | grep -q "known traps (2)" || probe_fail "brief lost the flat key list below threshold"
 if echo "$out" | grep -q "wiki topics"; then probe_fail "brief named topics below threshold"; fi
 [ ! -e "$probe/harness/wiki" ] || probe_fail "harness/wiki exists below threshold"
-for i in 1 2 3 4 5 6 7; do (cd "$probe" && bd remember "probe wiki memory alpha $i" --key "alpha-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe memory alpha $i"; done
-for i in 1 2 3 4 5 6; do (cd "$probe" && bd remember "probe wiki memory beta $i" --key "beta-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe memory beta $i"; (cd "$probe" && bd remember "probe wiki memory gamma $i" --key "gamma-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe memory gamma $i"; done
-for i in 1 2 3 4; do (cd "$probe" && bd remember "probe wiki filler memory $i" --key "filler-$i" >/dev/null 2>&1) || probe_fail "cannot remember probe filler $i"; done
-(cd "$probe" && bd remember "probe wiki memory Alpha" --key "Alpha-1" >/dev/null 2>&1) || probe_fail "cannot remember Alpha-1"
-(cd "$probe" && bd remember "probe wiki memory Beta" --key "Beta-1" >/dev/null 2>&1) || probe_fail "cannot remember Beta-1"
+# One import, not 59 remembers: crossing WIKI_MAX_KEYS one bd call at a time
+# cost this probe twenty seconds.
+import_file="$probe/wiki-memories.jsonl"
+: > "$import_file" || probe_fail "cannot start the probe memory file"
+add_memory() { printf "{\"_type\":\"memory\",\"key\":\"%s\",\"value\":\"probe wiki memory %s\"}\n" "$1" "$1" >> "$import_file"; }
+for i in 1 2 3 4 5 6 7; do add_memory "alpha-$i"; done
+for i in 1 2 3 4 5 6; do add_memory "beta-$i"; add_memory "gamma-$i"; done
+i=1; while [ "$i" -le 38 ]; do add_memory "filler-$i"; i=$((i + 1)); done
+add_memory "Alpha-1"; add_memory "Beta-1"
+(cd "$probe" && bd import "$import_file" >/dev/null 2>&1) || probe_fail "cannot import the probe memories"
+rm -f "$import_file" || probe_fail "cannot clean the probe memory file"
 out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/build-wiki.sh" 2>&1) || probe_fail "build failed above threshold"
-echo "$out" | grep -q "7 topics, 27 keys" || probe_fail "build never reported its topics and keys"
+echo "$out" | grep -q "7 topics, 61 keys" || probe_fail "build never reported its topics and keys"
 [ -f "$probe/harness/wiki/index.md" ] || probe_fail "build wrote no index"
 [ -f "$probe/harness/wiki/Alpha.md" ] || probe_fail "no page for colliding topic Alpha"
 [ -f "$probe/harness/wiki/alpha-2.md" ] || probe_fail "no suffixed page for colliding topic alpha"
 [ -f "$probe/harness/wiki/Beta.md" ] || probe_fail "no page for colliding topic Beta"
 [ -f "$probe/harness/wiki/beta-2.md" ] || probe_fail "no suffixed page for colliding topic beta"
-for k in alpha-1 beta-6 filler-4 gamma-1 alpha-7 Alpha-1 alpha-2 Beta-1 beta-2; do grep -rqF "$k" "$probe/harness/wiki/" || probe_fail "key $k reachable from no page"; done
+for k in alpha-1 beta-6 filler-38 gamma-1 alpha-7 Alpha-1 alpha-2 Beta-1 beta-2; do grep -rqF "$k" "$probe/harness/wiki/" || probe_fail "key $k reachable from no page"; done
 out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed above threshold"
-echo "$out" | grep -q "wiki topics (7 topics, 27 keys)" || probe_fail "brief never switched to topics"
+echo "$out" | grep -q "wiki topics (7 topics, 61 keys)" || probe_fail "brief never switched to topics"
 if echo "$out" | grep -q "known traps ("; then probe_fail "brief still printed the flat key list"; fi
 cp -R "$probe/harness/wiki" "$probe/wiki-backup" || probe_fail "cannot back up the probe wiki"
 rm -rf "$probe/harness/wiki" || probe_fail "cannot delete the probe wiki"

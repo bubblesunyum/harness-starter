@@ -88,8 +88,10 @@ CONSOLIDATION_FINDINGS=3
 # The wiki takes over the memory-key line once keys outgrow it: above this
 # many memories the brief names topics from harness/wiki/index.md instead of
 # every key. The generator is scripts/build-wiki.sh; below the threshold the
-# brief reads exactly as before and the directory may not exist.
-WIKI_MAX_KEYS=24
+# brief reads exactly as before and the directory may not exist. Topics are
+# each key's first segment (always, when, bare), which says less than the keys
+# they replace until the flat list is too long to read.
+WIKI_MAX_KEYS=60
 
 # The seat's name off the **Name:** line, on stdout: leading whitespace and
 # wrapping asterisks stripped, cut at the first em-dash (a descriptor after
