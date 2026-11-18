@@ -6,6 +6,7 @@
 #   scripts/harness verify --full    # everything, whatever changed
 #   scripts/harness verify --quick   # fast lane only: no throwaway-repo probes
 #   scripts/harness verify --lane <name,...>   # only one gate lane (see below)
+#   scripts/harness verify --probe "<exact name>"  # one probe, the way the gate runs it
 #
 # Diff-scoped lanes. The default run looks at what moved: only ledger paths
 # (.beads/, harness/handoffs/, harness/laurels.jsonl) mean a bead close or a
@@ -50,6 +51,29 @@
 # steps, no golden fixture. Probes asserting lane behavior call this instead of
 # pasting the lane's python or nesting a full gate.
 #
+# Single probe. --probe "<exact name>" runs scope detection, every `step`
+# (project build and setup included), and only the probe_step with that exact
+# name; the harness-ownership checks (ledger export, context docs, knowledge
+# static, opencode agents and pin) skip — through the same
+# background machinery as the gate, ignoring --when — so a worker proves a
+# probe the way the gate runs it instead of pasting a copy of its body (a
+# pasted copy once passed in isolation and failed the gate on quoting).
+# Every other probe skips silently, and the run ends with one line
+# "verify: --probe ran 1 of M probe(s)". An unknown name exits 2 naming close
+# matches. Its own scratch log dir (removed on pass, kept and printed on
+# failure) and the gate's exit status.
+#
+# Ledger guard. Probes build throwaway repos but start in the starter's cwd,
+# and one probe filed its memory there — writing into the real ledger on every
+# gate run with nothing catching it. So every probe subshell runs with a bd
+# shim first on PATH: bd from the live checkout hits the log and exits 3,
+# while bd anywhere else (a throwaway repo, or under .tmp/ where the golden
+# cache lives) execs the real binary. After the final drain a non-empty hits
+# file fails "probes left the live ledger untouched" naming the strays; else
+# ok. Loud skip with no bd; lane runs skip it entirely (they run inside probe
+# copies). No snapshots — a concurrent session's routine ledger write can no
+# longer fail this gate.
+#
 # Output is deliberately tiny. A build tool prints tens of thousands of lines
 # and an agent that pipes that into its context has spent a chunk of the day's
 # tokens to learn one bit — did it pass. Full logs land in /tmp/<prefix>-verify/
@@ -64,15 +88,24 @@
 set -uo pipefail
 mode="--default"
 lane_list=""
+probe_name=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick|--full|--default) mode="$1"; shift;;
     --lane)
       [ -n "${2:-}" ] || { echo "verify: --lane needs a lane list (knowledge-static,knowledge-behavioural)" >&2; exit 2; }
       lane_list="$2"; shift 2;;
+    --probe)
+      [ -n "${2:-}" ] || { echo "verify: --probe needs an exact probe name" >&2; exit 2; }
+      probe_name="$2"; shift 2;;
     *) shift;;
   esac
 done
+# Single-probe mode, read as a question rather than an empty-string test.
+in_probe_mode() { [ -n "$probe_name" ]; }
+if in_probe_mode && [ -n "$lane_list" ]; then
+  echo "verify: --probe and --lane cannot be combined" >&2; exit 2
+fi
 
 ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Where this script was loaded from: the shared checkout, whose scripts/ holds
@@ -108,12 +141,13 @@ _harness_prefix() {
 }
 LOGS=/tmp/$(_harness_prefix)-verify
 mkdir -p "$LOGS"
-if [ -n "$lane_list" ]; then
-  # Lane runs happen inside probe copies that share the gate log dir: point
-  # them at scratch so lane logs never clobber the outer run's files. Removed
-  # explicitly at the end of the lane-only path below: probe bodies reset
-  # EXIT traps, so a trap here would not reliably run there.
-  LOGS="$(mktemp -d 2>/dev/null)" || { echo "verify: cannot create a scratch log dir for --lane" >&2; exit 1; }
+if [ -n "$lane_list" ] || in_probe_mode; then
+  # Lane runs happen inside probe copies that share the gate log dir, and a
+  # --probe run beside a full gate would clobber its fixed filenames the same
+  # way: point both at scratch. Lane removes its dir on its own path below;
+  # --probe removes its on pass and keeps it (printed) on failure. Probe
+  # bodies reset EXIT traps, so no trap here would reliably run there.
+  LOGS="$(mktemp -d 2>/dev/null)" || { echo "verify: cannot create a scratch log dir" >&2; exit 1; }
 fi
 # Per-step seconds for the last run, in run order (`sort -rn` for
 # slowest-first): har-ckm showed the gate's total cost with no breakdown, so
@@ -138,6 +172,11 @@ note_failed() {
 started=$SECONDS
 probes_run=0
 probes_skipped_unaffected=0
+# Single-probe runs: every probe_step counts itself for the ran-of-M summary,
+# and only the exact match runs. probe_all_names feeds the exit-2 candidates.
+probe_total=0
+probe_matched=0
+probe_all_names=()
 probe_pids=()
 probe_bases=()
 probe_names=()
@@ -278,6 +317,20 @@ step() {
 # probe can observe, while every serial step still runs — the local-ok check
 # reads the live ledger, which that diff does move. Composable: a
 # ledger-scoped --quick run skips on the first check above.
+# One enqueue path for every probe: bound the flight, then run the body in a
+# background subshell with the ledger-guard shim armed, its line printing at
+# the next drain in enqueue order.
+enqueue_probe() {
+  local name="$1"; shift
+  wait_for_probe_slot
+  local base
+  base="$(slug "$name")"
+  ( trap - EXIT; PROBE_CHILD=1; ledger_guard_arm "$name"; step "$name" "$@" >"$LOGS/$base.report" 2>&1 ) &
+  probe_pids+=("$!")
+  probe_bases+=("$base")
+  probe_names+=("$name")
+}
+
 probe_step() {
   local when=""
   if [ "${1:-}" = "--when" ]; then
@@ -293,6 +346,20 @@ probe_step() {
     return 0
   fi
   local name="$1"; shift
+  # Single-probe runs count every probe for the ran-of-M summary, then run
+  # only the exact match through the same machinery — ignoring --when and
+  # the quick/ledger lanes above, so the worker proves the probe the way the
+  # gate runs it. Everything else skips silently.
+  probe_total=$((probe_total + 1))
+  probe_all_names+=("$name")
+  if in_probe_mode; then
+    if [ "$name" != "$probe_name" ]; then
+      return 0
+    fi
+    probe_matched=$((probe_matched + 1))
+    enqueue_probe "$name" "$@"
+    return 0
+  fi
   if [ -n "$when" ] && [ "$mode" != "--full" ] && [ -z "${lane_list:-}" ]; then
     case "$scope_reason" in
       *not\ a\ git\ checkout*|*git\ status\ failed*|*clean\ tree*|*explicit\ --full*)
@@ -327,13 +394,7 @@ probe_step() {
         ;;
     esac
   fi
-  wait_for_probe_slot
-  local base
-  base="$(slug "$name")"
-  ( trap - EXIT; PROBE_CHILD=1; step "$name" "$@" >"$LOGS/$base.report" 2>&1 ) &
-  probe_pids+=("$!")
-  probe_bases+=("$base")
-  probe_names+=("$name")
+  enqueue_probe "$name" "$@"
 }
 
 # A path the ledger lane owns: the live export, the capture locations a
@@ -704,10 +765,134 @@ verify_lanes_only() {
   return "$st"
 }
 
+# Ledger guard: a probe that files or remembers without cd-ing into its
+# throwaway repo writes into the real ledger. Every probe subshell arms a bd
+# shim first on PATH: bd from the live checkout hits the log and exits 3,
+# while bd anywhere else execs the real binary. After the final drain a
+# non-empty hits file fails "probes left the live ledger untouched". No
+# snapshots — a concurrent session's routine ledger write can no longer fail
+# this gate.
+ledger_guard_active=0
+ledger_guard_root=""
+ledger_guard_realbd=""
+ledger_guard_shimdir=""
+ledger_guard_install() {
+  # A gate nested inside an armed probe keeps the outer shim: reinstalling
+  # would resolve "real bd" to that shim and, sharing a log dir, could remove
+  # it from under every probe still running.
+  if [ -n "${LEDGER_GUARD_HITS:-}" ]; then
+    return 0
+  fi
+  if ! command -v bd >/dev/null 2>&1; then
+    echo "  skip  probes left the live ledger untouched (no bd here)"
+    return 0
+  fi
+  # Resolved once, absolute, before the shim dir exists anywhere on PATH —
+  # the shim execs this, never a lookup that could find itself.
+  ledger_guard_realbd="$(command -v bd)" || ledger_guard_realbd=""
+  case "$ledger_guard_realbd" in
+    /*) : ;;
+    *) echo "  skip  probes left the live ledger untouched (bd is not a plain binary — nothing to interpose)"; return 0;;
+  esac
+  # Physical, like the prefix fallback above: through a symlink the logical
+  # name could be anything, and the shim compares physical paths.
+  ledger_guard_root="$(cd "$ROOT" && pwd -P)" || ledger_guard_root="$ROOT"
+  ledger_guard_shimdir="$LOGS/ledger-guard-shim"
+  mkdir -p "$ledger_guard_shimdir" || { echo "verify: cannot install the ledger-guard shim" >&2; exit 1; }
+  cat > "$ledger_guard_shimdir/bd" <<'SHIMEOF'
+#!/bin/bash
+# First on PATH inside every probe subshell: bd from the live checkout is a
+# probe that never cd-ed into its throwaway repo.
+# An undeterminable cwd counts as the live checkout: fail closed, not open.
+_here="$(pwd -P 2>/dev/null)" || _here="$LEDGER_GUARD_ROOT"
+[ -n "$_here" ] || _here="$LEDGER_GUARD_ROOT"
+# Throwaway repos live in mktemp dirs, but the golden cache lives under the
+# checkout's .tmp: bd there is fixture work, not a stray write.
+case "$_here" in
+  "$LEDGER_GUARD_ROOT"/.tmp/*) exec "$LEDGER_GUARD_REALBD" "$@" ;;
+esac
+case "$_here" in
+  "$LEDGER_GUARD_ROOT"|"$LEDGER_GUARD_ROOT"/*)
+    printf '%s: bd %s\n' "$LEDGER_GUARD_PROBE" "$*" >> "$LEDGER_GUARD_HITS"
+    echo "ledger guard: probe ran bd in the live checkout — cd into the throwaway repo first" >&2
+    exit 3 ;;
+esac
+exec "$LEDGER_GUARD_REALBD" "$@"
+SHIMEOF
+  chmod +x "$ledger_guard_shimdir/bd" || { echo "verify: cannot install the ledger-guard shim" >&2; exit 1; }
+  rm -f "$LOGS/ledger-guard.hits"
+  ledger_guard_active=1
+}
+
+# Armed inside each probe's background subshell: the shim first on PATH with
+# this probe's identity, so a hit names the probe that strayed.
+ledger_guard_arm() {
+  [ "$ledger_guard_active" -eq 1 ] || return 0
+  LEDGER_GUARD_ROOT="$ledger_guard_root"
+  LEDGER_GUARD_REALBD="$ledger_guard_realbd"
+  LEDGER_GUARD_PROBE="$1"
+  LEDGER_GUARD_HITS="$LOGS/ledger-guard.hits"
+  export LEDGER_GUARD_ROOT LEDGER_GUARD_REALBD LEDGER_GUARD_PROBE LEDGER_GUARD_HITS
+  PATH="$ledger_guard_shimdir:$PATH"
+  export PATH
+}
+
+# After the final drain: a non-empty hits file fails the step naming the
+# strays (at most 10) with the remedy; else ok. The shim dir goes either way.
+ledger_guard_check() {
+  if [ "$ledger_guard_active" -ne 1 ]; then
+    return 0
+  fi
+  rm -rf "$ledger_guard_shimdir"
+  local hits="$LOGS/ledger-guard.hits" out n
+  if [ ! -s "$hits" ]; then
+    echo "  ok    probes left the live ledger untouched"
+    return 0
+  fi
+  n="$(wc -l < "$hits" | tr -d ' ')" || n=""
+  case "$n" in ''|*[!0-9]*) n=10;; esac
+  out="$(head -10 "$hits" | sed -e 's/^/        /')"
+  if [ "$n" -gt 10 ]; then
+    out="$out
+        ...and $((n - 10)) more"
+  fi
+  out="  a probe ran bd in the live checkout:
+$out
+        remedy: cd into the throwaway repo first (golden_probe and fresh_probe set \$probe for exactly this)"
+  capture_report "probes left the live ledger untouched" "$out" 1
+  return 1
+}
+
+# An unknown --probe name exits 2 naming candidates: close matches first,
+# else a sample of the probe list so the name is still guessable.
+probe_unknown_exit() {
+  local candidates=""
+  # The ${arr[@]+...} form expands to nothing when the array is empty: under
+  # set -u a bare empty array expansion fails, so the pipeline needs the guard.
+  candidates="$(printf '%s\n' ${probe_all_names[@]+"${probe_all_names[@]}"} | python3 -c 'import difflib,sys; want=sys.argv[1]; names=[l.rstrip("\n") for l in sys.stdin if l.rstrip("\n")]; print("\n".join(difflib.get_close_matches(want, names, n=5, cutoff=0.5)))' "$probe_name" 2>/dev/null)"
+  echo "verify: unknown probe '$probe_name'" >&2
+  if [ -n "$candidates" ]; then
+    echo "verify: did you mean:" >&2
+    printf '%s\n' "$candidates" | sed -e 's/^/        /' >&2
+  else
+    echo "verify: no close match among $probe_total probe(s) — for example:" >&2
+    printf '%s\n' ${probe_all_names[@]+"${probe_all_names[@]}"} | sort | head -5 | sed -e 's/^/        /' >&2
+  fi
+  rm -rf "$LOGS"
+  exit 2
+}
+
 echo "verify: $ROOT"
 scope_line="$(pick_scope)"
 scope="${scope_line%%|*}"
 scope_reason="${scope_line#*|}"
+if in_probe_mode; then
+  # A single-probe run narrows nothing: the fixture builds and the match runs
+  # whatever changed, ignoring the scope and the mode.
+  scope="full"
+  scope_reason="--probe runs the named probe whatever changed"
+  mode="--default"
+fi
 echo "verify: scope=$scope ($scope_reason)"
 # --lane: probe-cheap entry to a single gate lane. Scope detection already ran
 # above; this runs only the named lane(s) and exits with the lane status, so
@@ -731,13 +916,16 @@ fi
 # steps below skip loudly (same contract as the --quick lane) while every
 # serial step still runs — a beads-only diff moves the live ledger the
 # local-ok check reads, but nothing any probe observes.
-if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
-  echo "$export_out"
-else
-  # The check's own output already carries its FAIL line naming the step; only
-  # record the name for the summary below.
-  note_failed "ledger export"
-  echo "$export_out"
+ledger_guard_install
+if ! in_probe_mode; then
+  if export_out="$("$(harness_script ledger-export-check.sh)" 2>&1)"; then
+    echo "$export_out"
+  else
+    # The check's own output already carries its FAIL line naming the step; only
+    # record the name for the summary below.
+    note_failed "ledger export"
+    echo "$export_out"
+  fi
 fi
 
 # Ledger hygiene every install enforces, not just the starter: parked in a
@@ -861,43 +1049,51 @@ step "opencode pin probes" env -u HARNESS_PROJECT -u HARNESS_ROOT python3 "$(har
 # stopped being true is worse than a missing one, and it can't be caught by
 # reviewing a diff — the stale file isn't in the diff, the thing it describes is.
 # Runs early because it takes a second and needs no build.
-if context_out="$(python3 "$(harness_script context.py)" check 2>&1)"; then
-  echo "$context_out"
-else
-  context_st=$?
-  # Routed through capture_report so the failure emits a FAIL line naming the
-  # step; the STALE detail stays in the echoed output above. context.py itself
-  # is harness-owned elsewhere, so the bless remedy lives here, beside the failure.
-  capture_report "context docs" "$context_out" "$context_st"
-  echo "        remedy: scripts/harness context bless re-records hashes after updating the doc"
+if ! in_probe_mode; then
+  if context_out="$(python3 "$(harness_script context.py)" check 2>&1)"; then
+    echo "$context_out"
+  else
+    context_st=$?
+    # Routed through capture_report so the failure emits a FAIL line naming the
+    # step; the STALE detail stays in the echoed output above. context.py itself
+    # is harness-owned elsewhere, so the bless remedy lives here, beside the failure.
+    capture_report "context docs" "$context_out" "$context_st"
+    echo "        remedy: scripts/harness context bless re-records hashes after updating the doc"
+  fi
 fi
 
 # Bare, like the context-docs check above: step would swallow the verdict
 # lines the probes below grep for, and every probe is already drained by the
 # model-probes step further up.
-knowledge_static
+if ! in_probe_mode; then
+  knowledge_static
+fi
 
 probe_step "knowledge behavioural" knowledge_behavioural
 # generated from it — and the generated half drifts silently, because nothing
 # about editing the source makes opencode complain. Checked rather than
 # regenerated: a gate that quietly fixed this would pass every time and never
 # say the two had parted company.
-if agents_out="$(python3 "$(harness_script opencode-agents.py)" check 2>&1)"; then
-  echo "$agents_out"
-else
-  agents_st=$?
-  capture_report "opencode agents" "$agents_out" "$agents_st"
+if ! in_probe_mode; then
+  if agents_out="$(python3 "$(harness_script opencode-agents.py)" check 2>&1)"; then
+    echo "$agents_out"
+  else
+    agents_st=$?
+    capture_report "opencode agents" "$agents_out" "$agents_st"
+  fi
 fi
 
 # opencode runs on one model at one variant (scripts/harness models), and every
 # file that could pick another — the roster, the generated agents,
 # opencode.json, the scripts, the docs — is held to it here. The prose rule
 # came first and a session with no terminal walked straight past it.
-if pin_out="$(python3 "$(harness_script opencode-pin.py)" check 2>&1)"; then
-  echo "$pin_out"
-else
-  pin_st=$?
-  capture_report "opencode pin" "$pin_out" "$pin_st"
+if ! in_probe_mode; then
+  if pin_out="$(python3 "$(harness_script opencode-pin.py)" check 2>&1)"; then
+    echo "$pin_out"
+  else
+    pin_st=$?
+    capture_report "opencode pin" "$pin_out" "$pin_st"
+  fi
 fi
 
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────
@@ -922,10 +1118,22 @@ fi
 # Whatever is still flying lands here, in enqueue order; only then is the
 # fixture (built by the project steps above, if they built one) safe to reap.
 drain_probes
-if [ "$probes_run" -gt 0 ]; then
-  echo "verify: $probes_run probe(s) in parallel (at most $PROBE_MAX at once)"
+if in_probe_mode; then
+  # Nothing matched: no probe ran, so exit before the guard and the footer —
+  # there is nothing they could judge.
+  if [ "$probe_matched" -eq 0 ]; then
+    probe_unknown_exit
+  fi
+  echo "verify: --probe ran $probe_matched of $probe_total probe(s)"
+else
+  if [ "$probes_run" -gt 0 ]; then
+    echo "verify: $probes_run probe(s) in parallel (at most $PROBE_MAX at once)"
+  fi
+  echo "verify: $probes_run probe(s) ran, $probes_skipped_unaffected skipped as unaffected"
 fi
-echo "verify: $probes_run probe(s) ran, $probes_skipped_unaffected skipped as unaffected"
+# The guard reports after the final drain above: any probe that ran bd from
+# the live checkout fails here, naming the strays.
+ledger_guard_check
 
 # The golden probe fixture pays one install per run and every probe copies it
 # instead of installing — but probe bodies reset the EXIT trap, so the fixture
@@ -987,8 +1195,21 @@ fi
 # the loop, not just its end. Loud but never fatal — the verdict above stands
 # whatever the journal does.
 if [ "$failed" -eq 0 ]; then
-  journal_event "verify" "passed"
+  if in_probe_mode; then
+    journal_event "verify" "--probe $probe_name passed"
+  else
+    journal_event "verify" "passed"
+  fi
 else
-  journal_event "verify" "FAILED ${_failed_line:-$failed}"
+  journal_event "verify" "${probe_name:+--probe $probe_name }FAILED ${_failed_line:-$failed}"
+fi
+# A --probe run owns a scratch log dir: gone on pass, kept and printed on
+# failure so the report names where to read.
+if in_probe_mode; then
+  if [ "$failed" -eq 0 ]; then
+    rm -rf "$LOGS"
+  else
+    echo "verify: --probe logs kept in $LOGS"
+  fi
 fi
 exit "$failed"

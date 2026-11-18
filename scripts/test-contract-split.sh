@@ -148,9 +148,11 @@ case_plain_copy() {
   PRE_SPLIT=34e0a13
   git -C "$here" show "$PRE_SPLIT:template/scripts/context.py" > "$plain_d/scripts/context-old.py" 2>/dev/null || {
     echo "FAIL setup: cannot read context.py at $PRE_SPLIT — this probe needs full history (git fetch --unshallow)"; exit 1; }
+  # Checks run from inside the fixture: from the starter's cwd the check's
+  # ledger-push probe asks the starter's own ledger about its remote.
   old_bless="$(HOME="$home_d" python3 "$plain_d/scripts/context-old.py" bless 2>&1)" || {
     echo "FAIL setup: today's bless failed"; exit 1; }
-  old_out="$(HOME="$home_d" python3 "$plain_d/scripts/context-old.py" check 2>&1)"
+  old_out="$(cd "$plain_d" && HOME="$home_d" python3 "$plain_d/scripts/context-old.py" check 2>&1)"
   old_rc=$?
   cp "$plain_d/.claude/context.lock" "$plain_d/.claude/context.lock.old-probe" || {
     echo "FAIL setup: cannot snapshot the old lock"; exit 1; }
@@ -177,7 +179,7 @@ case_plain_copy() {
   else
     pass "plain copy: lock path and content match the old script"
   fi
-  new_out="$(HOME="$home_d" python3 "$plain_d/scripts/context.py" check 2>&1)"
+  new_out="$(cd "$plain_d" && HOME="$home_d" python3 "$plain_d/scripts/context.py" check 2>&1)"
   new_rc=$?
   if [ "$old_rc" -ne "$new_rc" ]; then
     oops "plain copy: check exits $new_rc, today exited $old_rc"

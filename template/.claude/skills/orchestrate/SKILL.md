@@ -77,6 +77,9 @@ else. One message per worker:
 - acceptance criteria and only the scoped checks that prove them —
   never `scripts/harness verify` (the gate runs once, on the frozen tree,
   by the orchestrator);
+- a probe brief names its exact probe_step name, proved with
+  `scripts/harness verify --probe "<name>"` — never a pasted copy of the
+  probe body, which drifts from how the gate actually runs it;
 - bless check — if the brief touches a file named in a `tracks` comment
   or a tracked doc itself, report it and leave the bless to the orchestrator,
   which blesses once on the frozen tree before gating;

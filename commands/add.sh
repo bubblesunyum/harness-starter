@@ -325,7 +325,9 @@ if command -v bd >/dev/null 2>&1; then
   # one machine, and network wakeups are what put `bd` at the top of Activity
   # Monitor's Energy tab with no session open. The setting is global rather than
   # per-repo, so this is idempotent across projects.
-  (bd config set metrics.disabled true >/dev/null 2>&1) &&
+  # From inside the target: run from the caller's cwd this lands in whatever
+  # ledger the caller happens to stand in (the gate's ledger guard caught it).
+  (cd "$target" && bd config set metrics.disabled true >/dev/null 2>&1) &&
     echo "  bd telemetry off" ||
     echo "  ! could not turn bd telemetry off — run 'bd config set metrics.disabled true'."
 else

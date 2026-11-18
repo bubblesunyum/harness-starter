@@ -76,7 +76,16 @@ how the pieces fit together.
   globs over the changed paths: a probe runs when a path matches, when a gate
   file moves (`verify.sh`, `verify.steps.sh`, `lib/paths.sh`), or
   when the scope cannot narrow; otherwise it skips loudly as unaffected, and
-  the run ends with ran-vs-skipped counts.
+  the run ends with ran-vs-skipped counts. Every probe runs with a bd shim
+  first on PATH: bd from the live checkout fails loud and the gate fails
+  `probes left the live ledger untouched` naming the strays, while bd inside
+  a throwaway repo (or under `.tmp/`) passes through to the real binary — so
+  a concurrent session's routine ledger write can no longer fail the gate.
+  The guard skips out loud with no bd, and never runs in `--lane` runs, which
+  execute inside probe copies. `scripts/harness verify --probe "<name>"` runs
+  the project steps plus one probe through the real probe machinery (the
+  harness-ownership checks skip), ignoring `--when`, so a worker proves a probe without pasting its body; an unknown
+  name exits 2 naming close matches.
 - **Dashboard:** `scripts/harness dashboard` serves a live diagram at localhost:7391.
   It never opens a browser itself. It publishes the live port to
   `.claude/launch.json` and prints the link with the instruction to open it in
