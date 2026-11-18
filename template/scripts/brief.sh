@@ -10,6 +10,7 @@
 #
 #   scripts/harness brief          # the brief, as text
 #   scripts/harness brief --hook   # wrapped as Claude Code SessionStart JSON
+#   scripts/harness brief --mark-consolidated   # reset the consolidation marker
 #   scripts/harness brief --hook --prepend <file> [--append <file>]
 #                           # contract first, brief, skill note last — one JSON
 set -euo pipefail
@@ -20,11 +21,13 @@ set -euo pipefail
 # fallback has a single home; without these flags the script behaves exactly
 # as before.
 hook=0
+mark=0
 prepend=""
 append=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --hook) hook=1; shift ;;
+    --mark-consolidated) mark=1; shift ;;
     --prepend)
       if [ -z "${2:-}" ]; then
         echo "brief.sh: --prepend needs a file" >&2
@@ -58,22 +61,28 @@ cd "$ROOT"
 READY_SHOWN=4
 
 # --- Consolidation cadence: brief.sh is a contract file, never installed
-# into a project, so per-project tuning lives in the five numbers below,
+# into a project, so per-project tuning lives in the six numbers below,
 # never in the logic that reads them — a Tune here block, not FILL THIS IN,
 # because only seeds may carry a fill-in block. The librarian pass is due when (>= NOTES handoff
 # notes newer than the marker AND the marker is HOURS old) OR any pressure
-# signal: more known traps than MAX_TRAPS, LESSONS lessons on one target, or
+# signal: more known traps than at the marker plus TRAP_GROWTH, LESSONS lessons on one target, or
 # FINDINGS findings in one category. The brief prints one line when due and
 # nothing otherwise; it never runs the pass. The calling session runs the
-# librarian and resets the marker by writing the current UTC time into
-# harness/.last-consolidation. A missing or empty marker means no pass has
-# run yet, so cadence has nothing to measure from — pressure still applies,
-# and a fresh install stays silent because it carries no pressure, not
-# because the marker is missing.
+# librarian and resets the marker with `scripts/harness brief --mark-consolidated`,
+# which writes the current UTC time plus the current trap count into
+# harness/.last-consolidation. A missing or empty marker, or one without a
+# traps= line, means no measured pass has run yet: cadence has nothing to
+# measure from and pressure falls back to the size rule (more known traps
+# than MAX_TRAPS), and a fresh install stays silent because it carries no
+# pressure, not because the marker is missing.
 # ── Tune here: thresholds, this block only.
 CONSOLIDATION_NOTES=5
 CONSOLIDATION_HOURS=24
 CONSOLIDATION_MAX_TRAPS=8
+# Growth, not size: the pass is due again only once this many NEW traps
+# landed since the marker's count (old markers without a count keep the
+# size rule above).
+CONSOLIDATION_TRAP_GROWTH=8
 CONSOLIDATION_LESSONS=3
 CONSOLIDATION_FINDINGS=3
 # The wiki takes over the memory-key line once keys outgrow it: above this
@@ -138,10 +147,80 @@ preflight() {
 # errors out is the silence this script exists to replace. Callers append the
 # line to the brief text; at most one line ever comes back.
 say_due() { # say_due REASON — the one user-facing instruction, in one place
-  printf 'consolidation due: %s — run the librarian, then reset harness/.last-consolidation\n' "$1"
+  printf 'consolidation due: %s — run the librarian, then run scripts/harness brief --mark-consolidated\n' "$1"
+}
+# The known-trap count out of brief text ($1): the wiki line once keys outgrow
+# the flat list, else the flat key line. One function, shared by the due check
+# and --mark-consolidated, so the reset counts what the brief counted. No
+# count line is not zero: a zero-memory brief prints no trap line at all, and
+# neither does one whose memories read failed — so no line returns 1 with
+# nothing printed, and callers tell the two apart.
+traps_from_text() {
+  local n
+  n="$(printf '%s' "${1:-}" | sed -n 's/^wiki topics ([0-9][0-9]* topics, \([0-9][0-9]*\) keys).*/\1/p')" || n=""
+  # The wiki line carries the key count once topics replace the flat list, so
+  # pressure keeps working above the threshold; without it, fall back to the
+  # flat key list the brief prints below it.
+  case "$n" in ''|*[!0-9]*) n="";; esac
+  if [ -z "$n" ]; then
+    n="$(printf '%s' "${1:-}" | sed -n 's/^known traps (\([0-9][0-9]*\)).*/\1/p')" || n=""
+    case "$n" in ''|*[!0-9]*) n="";; esac
+  fi
+  if [ -z "$n" ]; then
+    return 1
+  fi
+  printf '%s\n' "$n"
+}
+# Memory keys straight from the ledger, counted the same way the brief counts
+# them (only string values are prose; schema_version is an int). Only the
+# no-trap-line branch of the reset uses it: the brief text cannot tell a truly
+# empty ledger from a failed memories read, and only the former may mark zero.
+# Prints the count, or nothing on any failure.
+direct_memory_count() {
+  bd memories --json 2>/dev/null | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+print(sum(1 for v in d.values() if isinstance(v, str)))' 2>/dev/null
+}
+# The two-line reset: date plus count, written by one command because a
+# hand-written marker gets the count (or the newline) wrong. Never records a
+# false zero: a brief that fails, or one with no trap line over a ledger that
+# is not provably empty, refuses loudly and leaves the old marker untouched.
+do_mark_consolidated() {
+  local text n stamp marker refuse
+  refuse="brief.sh: no trap count in the brief — marker not written; run scripts/harness brief to see why"
+  # No `|| true`: a brief that fails must refuse, never become a zero baseline.
+  text="$(preflight; brief)" || {
+    echo "$refuse" >&2
+    exit 1
+  }
+  # No trap line is not zero: a zero-memory brief prints none, and neither
+  # does one whose memories read failed. Only a provably empty ledger may
+  # mark zero; anything else refuses and leaves the old marker untouched.
+  n="$(traps_from_text "$text")" || {
+    if [ "$(direct_memory_count)" = "0" ]; then
+      n=0
+    else
+      echo "$refuse" >&2
+      exit 1
+    fi
+  }
+  stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)" || stamp=""
+  if [ -z "$stamp" ]; then
+    echo "brief.sh: cannot read the clock — marker not written" >&2
+    exit 1
+  fi
+  marker="$ROOT/harness/.last-consolidation"
+  printf '%s\ntraps=%s\n' "$stamp" "$n" > "$marker" 2>/dev/null || {
+    echo "brief.sh: cannot write $marker — check permissions" >&2
+    exit 1
+  }
+  printf 'marked consolidated: %s traps=%s in %s\n' "$stamp" "$n" "$marker"
 }
 consolidation_due() {
-  local marker age_min notes traps_n hits lesson_hit finding_hit date_line marker_text
+  local marker age_min notes traps_n marker_traps hits lesson_hit finding_hit date_line marker_text
   marker="$ROOT/harness/.last-consolidation"
   # Cadence needs a marker to measure from; a missing or empty one means no
   # pass has run yet, so there is no "since" to count. Pressure below still
@@ -156,22 +235,26 @@ consolidation_due() {
     age_min=$((CONSOLIDATION_HOURS * 60))
     if [ "$notes" -ge "$CONSOLIDATION_NOTES" ] 2>/dev/null && \
        [ -n "$(find "$marker" -mmin +"$age_min" 2>/dev/null)" ]; then
-      date_line="$(tail -n 1 "$marker" 2>/dev/null)"
+      # Line 1 is the date; line 2 (since the two-line marker) is the count.
+      date_line="$(head -n 1 "$marker" 2>/dev/null)" || date_line=""
       case "$date_line" in "") date_line="the last pass";; esac
       say_due "$notes handoffs since $date_line"
       return 0
     fi
   fi
-  traps_n="$(printf '%s' "${1:-}" | sed -n 's/^wiki topics ([0-9][0-9]* topics, \([0-9][0-9]*\) keys).*/\1/p')" || traps_n=""
-  # The wiki line carries the key count once topics replace the flat list, so
-  # pressure keeps working above the threshold; without it, fall back to the
-  # flat key list the brief prints below it.
-  case "$traps_n" in ''|*[!0-9]*) traps_n="";; esac
-  if [ -z "$traps_n" ]; then
-    traps_n="$(printf '%s' "${1:-}" | sed -n 's/^known traps (\([0-9][0-9]*\)).*/\1/p')" || traps_n=""
-  fi
+  traps_n="$(traps_from_text "${1:-}")" || traps_n=0
   case "$traps_n" in ''|*[!0-9]*) traps_n=0;; esac
-  if [ "$traps_n" -gt "$CONSOLIDATION_MAX_TRAPS" ] 2>/dev/null; then
+  # Growth, not size: a pass plus reset clears the line until TRAP_GROWTH new
+  # traps land. A marker without a count (old one-line markers, or no marker
+  # at all) keeps today's size rule.
+  marker_traps="$(sed -n 's/^traps=\([0-9][0-9]*\)$/\1/p' "$marker" 2>/dev/null | head -1)" || marker_traps=""
+  case "$marker_traps" in ''|*[!0-9]*) marker_traps="";; esac
+  if [ -n "$marker_traps" ]; then
+    if [ "$traps_n" -ge "$((marker_traps + CONSOLIDATION_TRAP_GROWTH))" ] 2>/dev/null; then
+      say_due "$traps_n known traps ($((traps_n - marker_traps)) since last pass)"
+      return 0
+    fi
+  elif [ "$traps_n" -gt "$CONSOLIDATION_MAX_TRAPS" ] 2>/dev/null; then
     say_due "$traps_n known traps over budget $CONSOLIDATION_MAX_TRAPS"
     return 0
   fi
@@ -179,7 +262,8 @@ consolidation_due() {
   if [ -f "$ROOT/harness/learning.jsonl" ] && command -v python3 >/dev/null 2>&1; then
     marker_text=""
     if [ -f "$marker" ] && [ -s "$marker" ]; then
-      marker_text="$(tail -n 1 "$marker" 2>/dev/null)" || marker_text=""
+      # Line 1 is the date; the count lives on line 2 since the two-line marker.
+      marker_text="$(head -n 1 "$marker" 2>/dev/null)" || marker_text=""
     fi
     hits="$(python3 - "$ROOT/harness/learning.jsonl" "$CONSOLIDATION_LESSONS" "$CONSOLIDATION_FINDINGS" "${marker_text:-}" 2>/dev/null <<'PYEOF'
 import datetime, json, sys
@@ -655,6 +739,12 @@ print("\n".join(out))
 PY
 }
 
+# The consolidation reset is a brief flag, not a dispatcher subcommand: it needs
+# the brief's own trap count, which lives here.
+if [ "$mark" = "1" ]; then
+  do_mark_consolidated
+  exit "$?"
+fi
 text="$( { preflight; brief; } || true)"
 # One --prepend/--append file grafted onto the brief text: before it for the
 # contract, after it for the skill note. A named file that is missing warns on

@@ -452,15 +452,19 @@ grows. The librarian runs one consolidation pass — no second sweep.
 `consolidation due: ...` line when the pass is due and nothing otherwise, and
 it never runs the pass itself; the calling session runs the librarian through
 `scripts/harness agent` on the pinned model (natively inside opencode),
-applies what it keeps, and resets the marker by writing the current UTC time
-into `harness/.last-consolidation`.
+applies what it keeps, and resets the marker with
+`scripts/harness brief --mark-consolidated`, which writes the current UTC time
+plus the trap count into `harness/.last-consolidation`.
 
 Due means (>=5 handoff notes newer than the marker AND the marker older than
-24h) OR pressure: more known traps than the brief's budget, >=3 lessons on one
-target in `harness/learning.jsonl`, or one finding category 3 times. Pressure
-counts only rows with a ts newer than the marker timestamp, and the reset
-writes the current UTC time — a pass clears the count until new rows land. The
-five numbers live in the one Tune here block at the top of `scripts/brief.sh`;
+24h) OR pressure: more known traps than the marker's `traps=` count plus
+growth (old one-line markers without a count keep the MAX_TRAPS size rule),
+>=3 lessons on one target in `harness/learning.jsonl`, or one finding category
+3 times. Pressure counts only rows with a ts newer than the marker timestamp,
+and the reset (`scripts/harness brief --mark-consolidated`) writes the current
+UTC time plus the trap count — a pass clears the count until new traps or rows
+land. The six threshold numbers live in the one Tune here block at the top of
+`scripts/brief.sh`;
 the logic below them stays untouched. A missing or empty marker means no pass has
 run — cadence has nothing to measure from, pressure still applies, and a fresh
 install stays silent because it carries no pressure.

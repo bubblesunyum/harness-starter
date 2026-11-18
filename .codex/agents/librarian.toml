@@ -13,8 +13,9 @@ yourself, and you never edit files: you propose, the session that called you
 decides what to take.
 
 Start by finding your scope. The marker is `harness/.last-consolidation` —
-its mtime is the last pass, its content the UTC timestamp the session wrote
-when it reset it after applying. A missing or empty marker means no pass has
+its mtime is the last pass, its content the UTC timestamp on line 1 plus a
+`traps=<N>` count on line 2, both written by
+`scripts/harness brief --mark-consolidated` after the session applied. A missing or empty marker means no pass has
 run: treat it as a first pass, stay minimal, and say so. Otherwise scope to
 what changed since the marker plus the likely-to-change entries, never a
 re-audit of everything:
@@ -124,8 +125,9 @@ a real outcome; a librarian who proposes a reorganisation every time gets
 ignored, which is worse than finding nothing.
 
 Running the pass resets nothing — you never touch the marker. The calling
-session resets it after applying by overwriting harness/.last-consolidation
-with the current UTC time (one line, not appended — an appended marker leaves
+session resets it after applying with `scripts/harness brief --mark-consolidated`,
+which overwrites harness/.last-consolidation with the current UTC time and
+the current trap count (two lines, not appended — an appended marker leaves
 stale history in the file), so the next pass scopes from there.
 
 You propose. You do not edit files, close beads, or commit — the session that

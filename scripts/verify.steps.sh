@@ -823,31 +823,49 @@ echo "$out" | grep -q "lessons on probe-trap" || probe_fail "brief never counted
 if echo "$out" | grep -q "lessons on probe-pressure-ignored"; then probe_fail "brief counted unreviewed pressure"; fi
 '
 
-# Due signal in one copy: fresh silent, five old notes due once, reset silent, three lessons and three findings each due once, restore silent.
+# Due signal in one copy: cadence names the marker's line-1 date; lesson and finding pressure each fire once; an old one-line marker keeps the size rule; a reset at 28 keys clears the line until 8 more land (7 stay silent); a broken memories read refuses the reset without touching the marker.
 probe_step --when "template/scripts/brief.sh template/.claude/agents/librarian.md" "consolidation due signal" bash -c '
 PROBE_SCENARIO="consolidation due signal"
 golden_probe || probe_fail "no golden fixture"
-expect_brief() {
-out=$(HARNESS_HOME="$PWD" HARNESS_PROJECT="$probe" "$probe/scripts/harness" brief 2>&1) || probe_fail "brief failed"
+top="$PWD"
+root="$(probe_shared_root "$probe")" || probe_fail "finder cannot resolve the harness"
+# The real brief.sh with the real env, minus the finder handoff: one
+# refusal-path run below still goes through scripts/harness dispatch, which
+# is what proves the flag survives it.
+brief_out() {
+out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/brief.sh" 2>&1) || probe_fail "brief failed"
 }
 expect_due_once() {
-expect_brief || probe_fail "brief failed"
+brief_out || probe_fail "brief failed"
 n="$(echo "$out" | grep -c "consolidation due" || true)"
 [ "$n" = "1" ] || probe_fail "reported due $n times, want exactly 1"
 [ -z "${1:-}" ] || echo "$out" | grep -q "$1" || probe_fail "due line never matched $1"
 }
 expect_silent() {
-expect_brief || probe_fail "brief failed"
+brief_out || probe_fail "brief failed"
 if echo "$out" | grep -q "consolidation due"; then probe_fail "still reports due"; fi
 }
+mark_consolidated() {
+out=$(HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/brief.sh" --mark-consolidated 2>&1) || probe_fail "mark-consolidated failed"
+}
+# One ledger write per key range: N serial `bd remember` calls price the
+# probe out of its time budget, and `bd import` takes memory lines natively.
+plant_memories() {
+rm -f "$probe/memories-batch.jsonl" || probe_fail "cannot clean the probe batch"
+i="$1"
+while [ "$i" -le "$2" ]; do
+printf "{\"_type\":\"memory\",\"key\":\"probe-trap-%s\",\"value\":\"probe trap memory %s\"}\n" "$i" "$i" >> "$probe/memories-batch.jsonl" || probe_fail "cannot write the probe batch"
+i=$((i + 1))
+done
+(cd "$probe" && bd import "$probe/memories-batch.jsonl" >/dev/null 2>&1) || probe_fail "cannot import probe memories $1-$2"
+rm -f "$probe/memories-batch.jsonl" || probe_fail "cannot clean the probe batch"
+}
 [ ! -e "$probe/harness/.last-consolidation" ] || probe_fail "fresh install carries a consolidation marker"
-expect_silent
-date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" || probe_fail "cannot plant the marker"
+# Cadence reads the date off the marker line 1: an aged two-line marker with newer notes names that date, never the traps= line.
+printf "%s\n" "2020-01-01T00:00:00Z" "traps=0" > "$probe/harness/.last-consolidation" || probe_fail "cannot plant the marker"
 touch -t 202001010000 "$probe/harness/.last-consolidation" || probe_fail "cannot age the marker"
 for i in 1 2 3 4 5; do printf "%s\n" "# probe note $i" > "$probe/harness/handoffs/note-probe-$i.md" || probe_fail "cannot plant handoff note $i"; done
-expect_due_once "5 handoffs"
-date -u "+%Y-%m-%dT%H:%M:%SZ" > "$probe/harness/.last-consolidation" || probe_fail "cannot reset the marker"
-expect_silent
+expect_due_once "5 handoffs since 2020-01-01T00:00:00Z"
 rm -f "$probe"/harness/handoffs/note-probe-*.md || probe_fail "cannot clear the probe notes"
 cp "$probe/harness/learning.jsonl" "$probe/learning-backup.jsonl" || probe_fail "cannot back up the learning log"
 printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" || probe_fail "cannot backdate the marker"
@@ -855,13 +873,38 @@ stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" || probe_fail "cannot stamp probe rows"
 printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-x\", \"evidence\": \"probe-1\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson one\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-x\", \"evidence\": \"probe-2\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson two\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-x\", \"evidence\": \"probe-3\", \"kind\": \"lesson\", \"outcome\": \"kept\", \"target\": \"probe-target\", \"text\": \"probe lesson three\", \"tier\": \"memory\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant probe lessons"
 expect_due_once "lessons on probe-target"
 cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" || probe_fail "cannot restore the learning log"
-expect_silent
 printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" || probe_fail "cannot backdate the marker"
 stamp="$(date -u "+%Y-%m-%dT%H:%M:%SZ")" || probe_fail "cannot stamp probe rows"
 printf "%s\n" "{\"bead\": \"probe-1\", \"category\": \"probe-findings\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-taste\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-2\", \"category\": \"probe-findings\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"rejected\", \"reviewer\": \"reviewer-correctness\", \"ts\": \"$stamp\"}" "{\"bead\": \"probe-3\", \"category\": \"probe-findings\", \"kind\": \"finding\", \"note\": \"probe\", \"outcome\": \"accepted\", \"reviewer\": \"reviewer-design\", \"ts\": \"$stamp\"}" >> "$probe/harness/learning.jsonl" || probe_fail "cannot plant probe findings"
 expect_due_once "findings in probe-findings"
 cp "$probe/learning-backup.jsonl" "$probe/harness/learning.jsonl" || probe_fail "cannot restore the learning log"
+# An old one-line marker keeps the size rule: 9 keys over a budget of 8 is due.
+printf "%s\n" "2020-01-01T00:00:00Z" > "$probe/harness/.last-consolidation" || probe_fail "cannot plant the old marker"
+plant_memories 1 9
+expect_due_once "9 known traps"
+# A pass plus reset clears the line at 28 keys; pressure is growth from there.
+# No due run first: the old one-line marker still in place fires on size at
+# 28, so the silent after the reset is already non-vacuous.
+plant_memories 10 28
+mark_consolidated
+echo "$out" | grep -q "marked consolidated" || probe_fail "mark-consolidated never confirmed the reset"
+sed -n "1p" "$probe/harness/.last-consolidation" | grep -qE "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" || probe_fail "mark-consolidated never wrote the date line"
+grep -q "^traps=28$" "$probe/harness/.last-consolidation" || probe_fail "mark-consolidated never wrote traps=28"
 expect_silent
+# Seven more stay silent; the eighth brings it back.
+plant_memories 29 35
+expect_silent
+plant_memories 36 36
+expect_due_once "36 known traps"
+# A broken memories read refuses the reset: loud, and the old marker untouched.
+mkdir -p "$probe/fakebin" || probe_fail "cannot make the fake bin"
+realbd="$(command -v bd)" || probe_fail "cannot locate real bd"
+printf "%s\n" "#!/bin/bash" "if [ \"\$1\" = \"memories\" ]; then echo \"probe stub refuses bd memories\" >&2; exit 1; fi" "exec \"$realbd\" \"\$@\"" > "$probe/fakebin/bd" || probe_fail "cannot plant fake bd"
+chmod +x "$probe/fakebin/bd" || probe_fail "cannot chmod fake bd"
+before="$(cat "$probe/harness/.last-consolidation")" || probe_fail "cannot read the marker"
+out=$(cd "$probe" && HARNESS_HOME="$top" HARNESS_PROJECT="$probe" PATH="$probe/fakebin:$PATH" "$probe/scripts/harness" brief --mark-consolidated 2>&1) && probe_fail "mark-consolidated passed over a broken memories read" || true
+echo "$out" | grep -q "no trap count in the brief" || probe_fail "refusal never said why"
+[ "$(cat "$probe/harness/.last-consolidation")" = "$before" ] || probe_fail "refused mark rewrote the marker"
 '
 
 
@@ -878,7 +921,7 @@ step "librarian consolidation prompt" bash -c '
     grep -q "$w" template/.claude/agents/librarian.md ||
       { echo "error: librarian never covers $w"; exit 1; }
   done
-  for w in CONSOLIDATION_NOTES CONSOLIDATION_HOURS CONSOLIDATION_MAX_TRAPS CONSOLIDATION_LESSONS CONSOLIDATION_FINDINGS; do
+  for w in CONSOLIDATION_NOTES CONSOLIDATION_HOURS CONSOLIDATION_MAX_TRAPS CONSOLIDATION_TRAP_GROWTH CONSOLIDATION_LESSONS CONSOLIDATION_FINDINGS; do
     grep -q "$w" template/scripts/brief.sh ||
       { echo "error: brief never sets $w"; exit 1; }
   done

@@ -1,14 +1,14 @@
 {
   ".claude/HARNESS.md": {
-    ".claude/agents/librarian.md": "c72c3e90a73d977d",
+    ".claude/agents/librarian.md": "c827fd29cc27ebb1",
     ".claude/agents/reflector.md": "7bb9487aaadc1c39",
     ".claude/agents/reviewer-correctness.md": "3c1250aa822d14fd",
     ".claude/agents/reviewer-design.md": "567f0d3780b6f026",
     ".claude/agents/reviewer-taste.md": "6374618e13f3b517",
     ".claude/skills/workflow/SKILL.md": "45d097281222f913",
-    "doc": "6114467117b87f01",
+    "doc": "a9a6d4d0f0791717",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/brief.sh": "fae9c14c4ef0bf3e",
+    "scripts/brief.sh": "2425986f41eff335",
     "scripts/build-wiki.sh": "9abded546f400429",
     "scripts/context.py": "b13ab9080a00e38a",
     "scripts/eval.sh": "78c89b056755a5f8",
@@ -32,14 +32,14 @@
   },
   ".claude/skills/handoff/SKILL.md": {
     "doc": "ca136e1f52acf8ad",
-    "scripts/brief.sh": "fae9c14c4ef0bf3e",
+    "scripts/brief.sh": "2425986f41eff335",
     "scripts/reflect.sh": "16b3fc6f9306c1af",
     "scripts/wrap-up.sh": "e373e626396b0ad1"
   },
   ".claude/skills/orchestrate/SKILL.md": {
     "doc": "cf574c0cd7b43939",
     "scripts/agent.py": "e997f8d6e09da122",
-    "scripts/brief.sh": "fae9c14c4ef0bf3e",
+    "scripts/brief.sh": "2425986f41eff335",
     "scripts/review.sh": "292618fa5324f976",
     "scripts/verify.sh": "2f0818e9e4d6f837"
   },
