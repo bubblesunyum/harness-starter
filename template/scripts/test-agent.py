@@ -15,6 +15,7 @@ import signal
 import sys
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -47,6 +48,37 @@ if sys.argv[1] == "models":
     print(json.dumps({"capabilities": {"input": {
         "image": os.environ.get("FAKE_IMAGE", "true") == "true"}}}))
     sys.exit(int(os.environ.get("FAKE_MODELS_EXIT", "0")))
+if os.environ.get("FAKE_TOOL_SLEEP") or os.environ.get("FAKE_ZOMBIE") \
+        or os.environ.get("FAKE_DAEMON"):
+    import subprocess as _sp, threading as _th
+if os.environ.get("FAKE_TOOL_SLEEP"):
+    # A silent stand-in for a long tool command: a direct child of the fake,
+    # no output, so only the process-group watch notices it. Reaped on exit,
+    # like opencode reaps its tools — otherwise the zombie would hold the
+    # table open past the command's life.
+    _tool = _sp.Popen(["sleep", os.environ["FAKE_TOOL_SLEEP"]],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    _th.Thread(target=_tool.wait, daemon=True).start()
+if os.environ.get("FAKE_DAEMON"):
+    # A backgrounded server: the shell exits at once, leaving its sleep
+    # reparented to init — still in the group, but no longer the fake's
+    # child, so the ppid rule drops it. Spawned before the zombie: any later
+    # Popen would reap it through subprocess._cleanup.
+    _dm = _sp.Popen(["sh", "-c", "sleep 8 &"])
+    _dm.wait()
+if os.environ.get("FAKE_ZOMBIE"):
+    # An unreaped exit: the fake's child, stat Z. Spawned last for the same
+    # reason. Held and never waited, so it stays a zombie until the fake
+    # exits — and must not count.
+    _zb = _sp.Popen(["true"])
+if os.environ.get("FAKE_WAIT_FILE"):
+    # Gate the fake's exit on a file the test touches: the test writes its
+    # work file after the first heartbeat, then ends the wait here, so the
+    # run lasts exactly as long as the assertions need, whatever the load.
+    for _ in range(200):
+        if os.path.exists(os.environ["FAKE_WAIT_FILE"]):
+            break
+        time.sleep(0.2)
 sys.stdout.write(os.environ.get("FAKE_EVENTS", ""))
 sys.stderr.write(os.environ.get("FAKE_STDERR", ""))
 time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
@@ -108,6 +140,18 @@ class AgentTests(unittest.TestCase):
         if not self.log.exists():
             return []
         return [json.loads(l) for l in self.log.read_text().splitlines()]
+
+    def _wait_for_line(self, lines, needle, timeout):
+        """Block until a collected stderr line holds needle. Heartbeats prove
+        where the run got to, so waiting on them — not on a sleep — is what
+        keeps the timing tests free of ordering races under load."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if any(needle in line for line in lines):
+                return
+            time.sleep(0.05)
+        self.fail(f"timed out waiting for {needle!r} in agent output:\n"
+                  + "".join(lines))
 
     def test_reviewer_runs_its_own_agent_promoted_to_primary(self):
         out = self.agent("reviewer-taste", "review", "it", events=text_event("no findings"))
@@ -412,6 +456,173 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertIn("agent.py:", out.stderr)
         self.assertNotIn("Traceback", out.stderr)
+
+    def test_idle_default_is_five_minutes(self):
+        import agent
+        self.assertEqual(agent.IDLE_TIMEOUT_SECONDS, 300)
+        self.assertEqual(agent.TOOL_TIMEOUT_SECONDS, 1200)
+
+    def test_silent_run_dies_at_the_idle_limit(self):
+        # HARNESS_AGENT_IDLE_SECONDS=1.5 proves the env override end to end:
+        # on the 300s default this run would outlive its fake instead. The
+        # zombie (dead, still the fake's child) and the daemon (live,
+        # reparented to init) must neither count as tool activity.
+        self.env["HARNESS_AGENT_IDLE_SECONDS"] = "1.5"
+        try:
+            start = time.time()
+            out = self.agent("reviewer-taste", "go do it", sleep="10",
+                             zombie="1", daemon="1")
+        finally:
+            del self.env["HARNESS_AGENT_IDLE_SECONDS"]
+        elapsed = time.time() - start
+        self.assertEqual(out.returncode, 5, out.stderr)
+        self.assertIn("no output or tool activity for", out.stderr)
+        self.assertLess(elapsed, 10)
+
+    def test_live_tool_command_counts_as_activity(self):
+        # The fake's sleep child is silent but a direct one: the idle clock
+        # must not advance for the 3s it lives, then must kill the run once
+        # it exits and silence continues. Bounds sit seconds clear of both
+        # the expected kill (~5s) and the no-counting kill (~2s).
+        self.env["HARNESS_AGENT_IDLE_SECONDS"] = "2"
+        try:
+            start = time.time()
+            out = self.agent("reviewer-taste", "go do it", sleep="10", tool_sleep="3")
+        finally:
+            del self.env["HARNESS_AGENT_IDLE_SECONDS"]
+        elapsed = time.time() - start
+        self.assertEqual(out.returncode, 5, out.stderr)
+        self.assertGreaterEqual(elapsed, 4)
+        self.assertLess(elapsed, 10)
+
+    def test_tool_command_ages_out_of_activity(self):
+        # Past HARNESS_AGENT_TOOL_SECONDS a live tool stops counting: the
+        # run dies of idleness while the tool is still alive. Killed near
+        # first-seen + 2 + 1 (~4s), seconds clear of the tool's own exit.
+        self.env["HARNESS_AGENT_IDLE_SECONDS"] = "1"
+        self.env["HARNESS_AGENT_TOOL_SECONDS"] = "2"
+        try:
+            start = time.time()
+            out = self.agent("reviewer-taste", "go do it", sleep="10", tool_sleep="7")
+        finally:
+            del self.env["HARNESS_AGENT_IDLE_SECONDS"]
+            del self.env["HARNESS_AGENT_TOOL_SECONDS"]
+        elapsed = time.time() - start
+        self.assertEqual(out.returncode, 5, out.stderr)
+        self.assertGreaterEqual(elapsed, 2.5)
+        self.assertLess(elapsed, 7)
+
+    def test_select_live_tools_counts_only_young_direct_non_zombie_children(self):
+        import agent
+        seen = {}
+        rows = [(100, 50, "S", "sleep 9"),
+                (101, 50, "Z+", "true <defunct>"),
+                (102, 1, "S", "sleep 8"),
+                (103, 99, "S", "sleep 8"),
+                (104, 50, "S", "old helper")]
+        seen[104] = 0.0
+        live = agent._select_live_tools(rows, 50, 1200, seen, 2000.0)
+        self.assertEqual(live, [(100, "sleep 9")])
+
+    def test_negative_delta_clamps_without_double_sign(self):
+        import agent
+        real = agent._git_snapshot
+        try:
+            agent._git_snapshot = lambda: ({"f": "M "}, 0, 3)
+            progress = agent._worktree_progress(({"f": " M"}, 5, 0))
+        finally:
+            agent._git_snapshot = real
+        self.assertEqual(progress, "1 file, +0/-3 since start")
+        try:
+            agent._git_snapshot = lambda: ({"a": " M", "b": "??"}, 3, 1)
+            progress = agent._worktree_progress(({}, 0, 0))
+        finally:
+            agent._git_snapshot = real
+        self.assertEqual(progress, "2 files, +3/-1 since start")
+
+    def test_implement_heartbeat_reports_progress_and_running_command(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(self.root), "config", "user.email", "t@t"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.root), "config", "user.name", "t"],
+                       check=True, capture_output=True)
+        tracked = self.root / "work.txt"
+        tracked.write_text("one\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "work.txt"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "init"],
+                       check=True, capture_output=True)
+        # Pre-create the files the run itself writes (the fake's call log
+        # and the runs dir): untracked paths present at snapshot keep the
+        # same porcelain status, so only the edit below counts as changed.
+        self.log.write_text("")
+        (self.root / ".tmp" / "agent-runs").mkdir(parents=True, exist_ok=True)
+        # An empty dir is invisible to git: seed a placeholder so ?? .tmp/
+        # exists at snapshot and the status file lands inside it uncounted.
+        (self.root / ".tmp" / "agent-runs" / ".keep").write_text("")
+        done_file = self.root / "fake-done"
+        env = dict(self.env, HARNESS_AGENT_HEARTBEAT_SECONDS="1",
+                   HARNESS_AGENT_IDLE_SECONDS="60", FAKE_SLEEP="0.5",
+                   FAKE_WAIT_FILE=str(done_file),
+                   FAKE_TOOL_SLEEP="8", FAKE_EVENTS=text_event("done"))
+        proc = subprocess.Popen(
+            [sys.executable, str(self.root / "scripts/agent.py"),
+             "implement", "do the thing"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        lines = []
+        def _collect():
+            # Live stderr, line by line: stderr is never block-buffered, so
+            # each heartbeat lands here as the run prints it.
+            try:
+                for line in proc.stderr:
+                    lines.append(line)
+            except ValueError:
+                pass
+        reader = threading.Thread(target=_collect, daemon=True)
+        reader.start()
+        try:
+            # The first beat proves the spawn snapshot is taken; only then
+            # does the edit land, so no startup delay can hide it from every
+            # later beat. The tool outlives the run, spanning every heartbeat
+            # (it lingers a few seconds past the run as an orphan, then exits
+            # alone — nothing accumulates).
+            self._wait_for_line(lines, "still running", timeout=20)
+            with tracked.open("a") as handle:
+                handle.write("two\n")
+            self._wait_for_line(lines, "1 file, +1/-0 since start", timeout=20)
+        finally:
+            done_file.write_text("")
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            self.fail("agent run hung")
+        reader.join(timeout=10)
+        out, err = proc.stdout.read(), "".join(lines)
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertIn("done", out)
+        self.assertTrue(any("1 file, +1/-0 since start" in line for line in lines), err)
+        self.assertGreaterEqual(sum("running:" in line for line in lines), 2, err)
+        self.assertTrue(any("sleep" in line for line in lines), err)
+
+    def test_ps_shows_progress(self):
+        runs = self.root / "runs"
+        runs.mkdir()
+        self.env["HARNESS_AGENT_RUNS_DIR"] = str(runs)
+        try:
+            (runs / "run1.json").write_text(json.dumps({
+                "agent_pid": os.getpid(), "child_pid": 1234,
+                "role": "implement", "session": "ses_1",
+                "started_at": time.time() - 60,
+                "last_activity_at": time.time() - 5,
+                "progress": "1 file, +1/-0 since start"}))
+            out = self.agent("ps")
+        finally:
+            del self.env["HARNESS_AGENT_RUNS_DIR"]
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("PROGRESS", out.stdout)
+        self.assertIn("1 file, +1/-0 since start", out.stdout)
 
 
 if __name__ == "__main__":

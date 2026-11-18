@@ -20,11 +20,17 @@ when opencode refused a permission — the reply is still printed, but was
 written without what it asked for; 5 when the child went silent past the idle
 limit and was killed.
 
-A silent child is killed: no output or events for HARNESS_AGENT_IDLE_SECONDS
-(default 600) ends the run with exit 5, whatever the wall cap still allows.
+A silent child is killed: no output, events, or live tool commands for
+HARNESS_AGENT_IDLE_SECONDS (default 300) ends the run with exit 5, whatever
+the wall cap still allows. A tool command counts as activity only while it
+is young: a direct child of the run, not a zombie, first seen less than
+HARNESS_AGENT_TOOL_SECONDS (default 1200) ago. Past that age it stops
+counting and the normal idle limit applies, so a stuck command or a
+session-long helper hands control back instead of holding the run open.
 While it runs, a heartbeat line goes to stderr every
-HARNESS_AGENT_HEARTBEAT_SECONDS (default 120) with the elapsed time and the
-last activity, and .tmp/agent-runs/<run-id>.json carries the same for
+HARNESS_AGENT_HEARTBEAT_SECONDS (default 120) with the elapsed time, the
+last activity, worktree progress on implement runs, and the live tool
+command, and .tmp/agent-runs/<run-id>.json carries the same for
 `agent.py ps` and `agent.py stop`. HARNESS_AGENT_RUNS_DIR overrides the dir
 (hermetic tests point it at a temp dir). An interrupted wrapper (Ctrl-C)
 kills the child's process group before exiting 130, so no headless run
@@ -78,9 +84,15 @@ MAX_ROUNDS = 3
 # hung provider is noticed before the calling session gives up on it.
 TIMEOUT_SECONDS = 45 * 60
 EXPORT_TIMEOUT_SECONDS = 60
-# No output or events for this long and the child is dead weight: kill it,
-# separate from the wall cap above (a chatty run may still use all 45 minutes).
-IDLE_TIMEOUT_SECONDS = 10 * 60
+# No output, events, or live tool commands for this long and the child is
+# dead weight: kill it, separate from the wall cap above (a chatty run may
+# still use all 45 minutes). Short enough that a stuck worker is noticed in
+# minutes; a legitimately long tool command still counts as activity.
+IDLE_TIMEOUT_SECONDS = 5 * 60
+# A tool command counts as activity only while it is young: past this age it
+# stops counting and the normal idle limit applies, so a stuck command or a
+# session-long helper hands control back instead of holding the run open.
+TOOL_TIMEOUT_SECONDS = 20 * 60
 # How often a running child says its age on stderr and refreshes its status.
 HEARTBEAT_SECONDS = 2 * 60
 # How often the wait loop re-checks the idle and wall clocks.
@@ -89,6 +101,11 @@ POLL_SECONDS = 1.0
 KILL_GRACE_SECONDS = 10
 # A silent child was killed (exit 1 stays the failed run, 2 the usage error).
 IDLE_EXIT = 5
+# Consecutive `ps` failures before the tool watch gives up for the run.
+PS_STRIKES = 3
+# Repo-relative dir of live-run status files: written by this runner, never
+# counted as the worker's changed files.
+RUNNER_OWN_PREFIX = ".tmp/agent-runs/"
 
 IMPLEMENT_CONTRACT = """\
 You are a delegated implementer. Another agent wrote this brief, will review \
@@ -401,6 +418,120 @@ def _alive(pid):
     return True
 
 
+def _select_live_tools(rows, child_pid, tool_timeout, seen, now):
+    """[(pid, command)] counted as live tool commands from parsed ps rows
+    (pid, ppid, stat, command). A row counts only when it is a direct child
+    of the run (a backgrounded server reparented to init drops out — group
+    membership rides on ppid, not pgid), is not a zombie, and was first seen
+    less than tool_timeout ago. Pids gone from the table are forgotten, so a
+    reused pid starts a fresh age."""
+    live, present = [], set()
+    for pid, ppid, stat, command in rows:
+        if ppid != child_pid or stat.startswith("Z"):
+            continue
+        present.add(pid)
+        if now - seen.setdefault(pid, now) >= tool_timeout:
+            continue
+        live.append((pid, command))
+    for pid in list(seen):
+        if pid not in present:
+            del seen[pid]
+    return live
+
+
+def _live_tool_procs(child_pid, tool_timeout, seen, now):
+    """[(pid, command)] for the run's live tool commands, or None when `ps`
+    fails. Bytes off the pipe, decoded with replace: an undecodable argv
+    never raises its way out of the wait loop."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,command="],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        rows = []
+        for line in out.stdout.decode("utf-8", errors="replace").splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 4:
+                continue
+            try:
+                pid, ppid = int(parts[0]), int(parts[1])
+            except ValueError:
+                continue
+            rows.append((pid, ppid, parts[3], parts[4] if len(parts) > 4 else ""))
+        return _select_live_tools(rows, child_pid, tool_timeout, seen, now)
+    except ValueError:
+        return None
+
+
+def _git_snapshot():
+    """(porcelain {path: status}, added, deleted) of the worktree, or None
+    outside a git checkout. Best effort: a repo the wrapper can't read says
+    nothing rather than failing the run it describes."""
+    try:
+        porcelain = subprocess.run(["git", "status", "--porcelain", "-uall"], stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, cwd=ROOT, timeout=5)
+        shortstat = subprocess.run(["git", "diff", "--shortstat"], stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, cwd=ROOT, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if porcelain.returncode != 0 or shortstat.returncode != 0:
+        return None
+    try:
+        files = {}
+        for line in porcelain.stdout.decode("utf-8", errors="replace").splitlines():
+            # The runner's own status files are not the worker's progress;
+            # -uall lists them one by one, so they must be skipped by name.
+            if len(line) > 3 and not line[3:].startswith(RUNNER_OWN_PREFIX):
+                files[line[3:]] = line[:2]
+        added = deleted = 0
+        short = shortstat.stdout.decode("utf-8", errors="replace")
+        match = re.search(r"(\d+) insertion", short)
+        if match:
+            added = int(match.group(1))
+        match = re.search(r"(\d+) deletion", short)
+        if match:
+            deleted = int(match.group(1))
+        return files, added, deleted
+    except ValueError:
+        return None
+
+
+def _worktree_progress(snapshot):
+    """'N file(s), +A/-D since start' against the spawn snapshot, or None
+    when there is no snapshot. N counts files whose porcelain status changed;
+    the shortstat delta is an approximation — it misses untracked files,
+    which the porcelain count still catches. Deltas clamp at zero, so a
+    revert below the snapshot reads +0/-0 instead of printing a doubled
+    sign; the file count still shows something moved."""
+    if snapshot is None:
+        return None
+    old_files, old_added, old_deleted = snapshot
+    current = _git_snapshot()
+    if current is None:
+        return None
+    new_files, new_added, new_deleted = current
+    changed = sum(1 for path in set(old_files) | set(new_files)
+                  if old_files.get(path) != new_files.get(path))
+    word = "file" if changed == 1 else "files"
+    added = max(0, new_added - old_added)
+    removed = max(0, new_deleted - old_deleted)
+    return f"{changed} {word}, +{added}/-{removed} since start"
+
+
+def _running_command(tool_procs):
+    """'running: <cmd>' for the youngest live tool command, or '' when none
+    is counted. The youngest is the highest pid — good enough to name the
+    tool at work."""
+    if not tool_procs:
+        return ""
+    youngest = max(tool_procs, key=lambda proc: proc[0])[1]
+    return "running: " + re.sub(r"\s+", " ", youngest).strip()[:60]
+
+
 def live_runs():
     """Live status dicts (each with run_id, elapsed, idle_for), pruning files
     whose agent is gone — a killed session must not haunt `ps` forever."""
@@ -431,11 +562,12 @@ def cmd_ps():
     if not live:
         print("agent.py: no live runs", file=sys.stderr)
         return 0
-    print("RUN ROLE SESSION ELAPSED IDLE PID")
+    print("RUN ROLE SESSION ELAPSED IDLE PID PROGRESS")
     for info in sorted(live, key=lambda i: i.get("started_at", 0)):
         print(f"{info['run_id']} {info.get('role', '?')} "
               f"{info.get('session') or '-'} {fmt_age(info['elapsed'])} "
-              f"{fmt_age(info['idle_for'])} {info.get('child_pid', '?')}")
+              f"{fmt_age(info['idle_for'])} {info.get('child_pid', '?')} "
+              f"{info.get('progress') or '-'}")
     return 0
 
 
@@ -555,6 +687,9 @@ def run_agent(role, agent, model, variant, session, prompt):
                                       if agent == "build" else agent_config(agent))
     idle_timeout = _seconds_env("HARNESS_AGENT_IDLE_SECONDS", IDLE_TIMEOUT_SECONDS)
     heartbeat_every = _seconds_env("HARNESS_AGENT_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
+    tool_timeout = _seconds_env("HARNESS_AGENT_TOOL_SECONDS", TOOL_TIMEOUT_SECONDS)
+    # Worktree progress is implement-only: other roles shouldn't move the tree.
+    spawn_snapshot = _git_snapshot() if role == "implement" else None
     # Before spawning: a bad HARNESS_AGENT_RUNS_DIR must fail while no child
     # exists, not orphan one while reporting the dir.
     status_dir = runs_dir()
@@ -582,17 +717,46 @@ def run_agent(role, agent, model, variant, session, prompt):
     run_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + f"-{os.getpid()}"
     status_path = status_dir / f"{run_id}.json"
 
-    def refresh_status():
+    def refresh_status(progress=""):
         write_status(status_path, run_id=run_id, role=role, agent=agent,
                      agent_pid=os.getpid(), child_pid=proc.pid,
                      session=shared["session_id"], started_at=start,
-                     last_activity_at=shared["last_activity"])
+                     last_activity_at=shared["last_activity"],
+                     progress=progress)
 
-    refresh_status()
+    refresh_status(_worktree_progress(spawn_snapshot) or "")
     outcome, next_beat = None, start + heartbeat_every
+    # ps gets three strikes in a row before the watch goes output-only: one
+    # load spike must not blind the guard for the rest of a 45-minute run.
+    ps_failures, running_detail, seen = 0, "", {}
     try:
         while proc.poll() is None:
             now = time.time()
+            if ps_failures >= PS_STRIKES:
+                tool_procs = []
+            else:
+                tool_procs = _live_tool_procs(proc.pid, tool_timeout, seen, now)
+                if tool_procs is None:
+                    # `ps` is how a live tool command counts as activity;
+                    # without it the idle guard watches output only, said once.
+                    ps_failures += 1
+                    tool_procs = []
+                    if ps_failures == PS_STRIKES:
+                        print("agent.py: `ps` keeps failing — idle guard watches output only",
+                              file=sys.stderr)
+                else:
+                    ps_failures = 0
+            if tool_procs:
+                # A running tool command is activity: the idle clock restarts
+                # here instead of advancing, so a legitimately long silent
+                # command doesn't read as a stuck run. The wall cap below
+                # still bounds it, so a hung tool still dies at the wall.
+                # max(): ps can block, and a drain thread may have stamped a
+                # later time meanwhile — never rewind the clock it set.
+                shared["last_activity"] = max(shared["last_activity"], now)
+                running_detail = _running_command(tool_procs)
+            else:
+                running_detail = ""
             if now - shared["last_activity"] >= idle_timeout:
                 outcome = "idle"
                 break
@@ -600,9 +764,14 @@ def run_agent(role, agent, model, variant, session, prompt):
                 outcome = "wall"
                 break
             if now >= next_beat:
-                refresh_status()
+                progress = _worktree_progress(spawn_snapshot) or ""
+                refresh_status(progress)
                 beat = (f"agent.py: {role} still running — {fmt_age(now - start)} "
-                        f"elapsed, last output {fmt_age(now - shared['last_activity'])} ago")
+                        f"elapsed, last activity {fmt_age(now - shared['last_activity'])} ago")
+                if progress:
+                    beat += f" · {progress}"
+                if running_detail:
+                    beat += f" · {running_detail}"
                 if shared["session_id"]:
                     beat += f" (session {shared['session_id']})"
                 print(beat, file=sys.stderr)
@@ -632,7 +801,8 @@ def run_agent(role, agent, model, variant, session, prompt):
     stdout_text, stderr_text = "".join(out_chunks), "".join(err_chunks)
     if outcome == "idle":
         where = f" (session {shared['session_id']})" if shared["session_id"] else ""
-        fail(f"no output for {fmt_age(idle_timeout)} — killed the silent run{where}; "
+        fail(f"no output or tool activity for {fmt_age(idle_timeout)} — killed "
+             f"the silent run{where}; "
              f"`opencode session list` shows where it got to", IDLE_EXIT)
     if outcome == "wall":
         fail(f"no reply after {TIMEOUT_SECONDS // 60} minutes — "
