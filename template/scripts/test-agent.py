@@ -426,10 +426,13 @@ class AgentTests(unittest.TestCase):
         env = dict(self.env, FAKE_LOG=str(self.log), FAKE_MODEL=OPENCODE_MODEL,
                    FAKE_SLEEP="30", HARNESS_AGENT_IDLE_SECONDS="600",
                    HARNESS_AGENT_HEARTBEAT_SECONDS="60")
+        # Launched with SIGINT ignored, the way a shell starts a background
+        # job (the gate's parallel probes): the runner must still clean up.
         proc = subprocess.Popen(
             [sys.executable, str(self.root / "scripts/agent.py"),
              "reviewer-taste", "go now please"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN))
         try:
             runs = self.root / ".tmp" / "agent-runs"
             child = None

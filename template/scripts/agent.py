@@ -706,6 +706,19 @@ def run_agent(role, agent, model, variant, session, prompt):
     # Before spawning: a bad HARNESS_AGENT_RUNS_DIR must fail while no child
     # exists, not orphan one while reporting the dir.
     status_dir = runs_dir()
+    start = time.time()
+    shared = {"last_activity": start, "session_id": session}
+    out_chunks, err_chunks = [], []
+    run_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + f"-{os.getpid()}"
+    status_path = status_dir / f"{run_id}.json"
+
+    def refresh_status(progress=""):
+        write_status(status_path, run_id=run_id, role=role, agent=agent,
+                     agent_pid=os.getpid(), child_pid=proc.pid,
+                     session=shared["session_id"], started_at=start,
+                     last_activity_at=shared["last_activity"],
+                     progress=progress)
+
     try:
         # A group of its own, so killing a silent run takes the grandchildren
         # (opencode's tool processes) with it instead of orphaning them.
@@ -718,31 +731,20 @@ def run_agent(role, agent, model, variant, session, prompt):
              "or spawn the role natively")
     except OSError as exc:
         fail(f"opencode can't be run ({exc}) — check the install")
-    start = time.time()
-    shared = {"last_activity": start, "session_id": session}
-    out_chunks, err_chunks = [], []
-    readers = [threading.Thread(target=_drain, args=(proc.stdout, out_chunks, shared, True),
-                                daemon=True),
-               threading.Thread(target=_drain, args=(proc.stderr, err_chunks, shared, False),
-                                daemon=True)]
-    for reader in readers:
-        reader.start()
-    run_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(start)) + f"-{os.getpid()}"
-    status_path = status_dir / f"{run_id}.json"
-
-    def refresh_status(progress=""):
-        write_status(status_path, run_id=run_id, role=role, agent=agent,
-                     agent_pid=os.getpid(), child_pid=proc.pid,
-                     session=shared["session_id"], started_at=start,
-                     last_activity_at=shared["last_activity"],
-                     progress=progress)
-
-    refresh_status(_worktree_progress(spawn_snapshot) or "")
-    outcome, next_beat = None, start + heartbeat_every
-    # ps gets three strikes in a row before the watch goes output-only: one
-    # load spike must not blind the guard for the rest of a 45-minute run.
-    ps_failures, running_detail, seen = 0, "", {}
+    # Everything from here on sits inside the cleanup below: once the child
+    # exists, an interrupt anywhere must still kill its group.
     try:
+        readers = [threading.Thread(target=_drain, args=(proc.stdout, out_chunks, shared, True),
+                                    daemon=True),
+                   threading.Thread(target=_drain, args=(proc.stderr, err_chunks, shared, False),
+                                    daemon=True)]
+        for reader in readers:
+            reader.start()
+        refresh_status(_worktree_progress(spawn_snapshot) or "")
+        outcome, next_beat = None, start + heartbeat_every
+        # ps gets three strikes in a row before the watch goes output-only: one
+        # load spike must not blind the guard for the rest of a 45-minute run.
+        ps_failures, running_detail, seen = 0, "", {}
         while proc.poll() is None:
             now = time.time()
             if ps_failures >= PS_STRIKES:
@@ -842,6 +844,11 @@ def run_agent(role, agent, model, variant, session, prompt):
 
 
 def main(argv):
+    # A shell starts background jobs with SIGINT ignored, and Python keeps an
+    # inherited SIG_IGN: launched that way (the gate's parallel probes, any
+    # `&`), a SIGINT would never reach run_agent's cleanup and the child group
+    # would outlive the wrapper.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     if argv[:1] == ["ps"]:
         if len(argv) > 1:
             print("usage: agent.py ps", file=sys.stderr)
