@@ -168,6 +168,30 @@ class AgentTests(unittest.TestCase):
         # review.sh's packet lives in /tmp; headless opencode refuses it otherwise.
         self.assertEqual(settings["permission"]["external_directory"]["/tmp/*"], "allow")
 
+    def test_every_role_can_read_its_own_mktemp_output(self):
+        # macOS mktemp lands in $TMPDIR under /var/folders, not /tmp; a refused
+        # read there killed a live worker. The implementer runs `build`.
+        scratch = self.root / "sys-tmp"
+        scratch.mkdir()
+        self.env["TMPDIR"] = f"{scratch}/"
+        temp_dirs = {"/tmp", os.path.realpath("/tmp"), str(scratch), os.path.realpath(scratch)}
+        for role, agent in (("implement", "build"), ("reviewer-taste", "reviewer-taste")):
+            with self.subTest(role=role):
+                self.agent(role, "go do it", events=text_event("ok"))
+                settings = json.loads(self.calls()[-1]["config"])["agent"][agent]
+                # Exactly the temp dirs, both spellings: nothing else outside.
+                self.assertEqual(settings["permission"]["external_directory"],
+                                 {f"{tmp}/*": "allow" for tmp in temp_dirs})
+
+    def test_build_is_not_promoted_and_its_permissions_still_fail_loudly(self):
+        self.agent("implement", "go do it", events=text_event("ok"))
+        self.assertNotIn("mode", json.loads(self.calls()[-1]["config"])["agent"]["build"])
+        self.env["OPENCODE_CONFIG_CONTENT"] = '{"agent": {"build": {"permission": "allow"}}}'
+        out = self.agent("implement", "go do it", events=text_event("ok"))
+        self.assertEqual(out.returncode, 1)
+        self.assertNotIn("Traceback", out.stderr)
+        self.assertIn("agent.build.permission", out.stderr)
+
     def test_existing_config_content_is_merged_not_replaced(self):
         self.env["OPENCODE_CONFIG_CONTENT"] = '{"theme": "x", "agent": {"other": {"mode": "all"}}}'
         self.agent("reviewer-taste", "go do it", events=text_event("ok"))

@@ -353,8 +353,10 @@ implementation runs through `agent.py` from any tool.) Three behaviours of
   alone.
 - Headless, every permission prompt is answered no and the agent carries on
   without it — including reads outside the project, which is where review.sh
-  puts the packet. Reviewers are granted `/tmp`, and any other refusal makes
-  the script exit non-zero rather than pass on a reply written blind.
+  puts the packet and where a worker's own `mktemp` lands. Every role is
+  granted the system temp dirs (`/tmp` and `$TMPDIR`) and nothing else outside;
+  any other refusal makes the script exit non-zero rather than pass on a reply
+  written blind.
 - `reviewer-design` checks its selected model for image input before running:
   the legacy `opencode models --verbose` lookup first, then opencode's cached
   models.dev catalog (v2 dropped the flag). Unknown or text-only models fail,

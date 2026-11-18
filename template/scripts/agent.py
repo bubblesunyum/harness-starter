@@ -268,25 +268,39 @@ def inherited_config():
     return config
 
 
+def temp_dirs():
+    """The system temp dirs, each spelled as written and as resolved.
+    review.sh writes its packet to /tmp, and a worker's own mktemp lands in
+    $TMPDIR — on macOS under /var/folders, not /tmp at all. opencode checks
+    the path as the agent wrote it, and /tmp is a symlink on macOS, so both
+    spellings of each are needed."""
+    dirs = set()
+    for tmp in ("/tmp", tempfile.gettempdir()):
+        tmp = tmp.rstrip("/") or "/"
+        dirs.update({tmp, os.path.realpath(tmp)})
+    return sorted(dirs)
+
+
 def agent_config(agent):
-    """OPENCODE_CONFIG_CONTENT that lets `opencode run --agent` use a generated
-    agent, and lets it read what review.sh hands it — pinned throughout.
+    """OPENCODE_CONFIG_CONTENT for one run: pinned throughout, the system temp
+    dirs readable, and a generated agent runnable by `opencode run --agent`.
+
+    Headless opencode auto-rejects every path outside the project and the
+    run dies on it, so a reviewer could not read its packet and a worker
+    could not read back its own mktemp output. Only temp dirs are granted.
 
     The generated agents are `mode: subagent` so they stay out of opencode's
     agent picker, and `run --agent` quietly falls back to the default agent for
     a subagent — a reviewer that never saw its own prompt. Promoting it for
-    this one process is the only fix that touches neither.
-
-    review.sh writes the packet and the captures to /tmp, outside the project,
-    and headless opencode auto-rejects every read out there. Both spellings are
-    granted because /tmp is a symlink on macOS and opencode checks the path as
-    the agent wrote it."""
+    this one process is the only fix that touches neither. `build` is
+    opencode's own primary and needs no promotion."""
     config = inherited_config()
     if not isinstance(config.get("agent", {}).get(agent, {}), dict):
         fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent} to something that "
              f"isn't an object — unset it or fix it")
     settings = config.setdefault("agent", {}).setdefault(agent, {})
-    settings["mode"] = "primary"
+    if agent != "build":
+        settings["mode"] = "primary"
     permission = settings.setdefault("permission", {})
     if not isinstance(permission, dict):
         fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent}.permission to something "
@@ -295,7 +309,7 @@ def agent_config(agent):
     if not isinstance(outside, dict):
         fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent}.permission.external_directory "
              f"to something that isn't an object — unset it or fix it")
-    for tmp in sorted({"/tmp", os.path.realpath("/tmp")}):
+    for tmp in temp_dirs():
         outside[f"{tmp}/*"] = "allow"
     return json.dumps(pin_config(config))
 
@@ -677,14 +691,13 @@ def run_agent(role, agent, model, variant, session, prompt):
     # dropped `--variant` for `-m provider/model#variant`.
     # `--standalone`: opencode 2 otherwise hands the run to a shared background
     # service, which never sees this process's OPENCODE_CONFIG_CONTENT (so no
-    # agent promotion and no /tmp grant) and interrupts runs sharing it.
+    # agent promotion and no temp-dir grant) and interrupts runs sharing it.
     command = [opencode_bin(), "run", "--standalone", "--format", "json", "--agent", agent,
                "-m", OPENCODE_MODEL_ARG]
     if session:
         command += ["--session", session]
     env = dict(os.environ)
-    env["OPENCODE_CONFIG_CONTENT"] = (json.dumps(pin_config(inherited_config()))
-                                      if agent == "build" else agent_config(agent))
+    env["OPENCODE_CONFIG_CONTENT"] = agent_config(agent)
     idle_timeout = _seconds_env("HARNESS_AGENT_IDLE_SECONDS", IDLE_TIMEOUT_SECONDS)
     heartbeat_every = _seconds_env("HARNESS_AGENT_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
     tool_timeout = _seconds_env("HARNESS_AGENT_TOOL_SECONDS", TOOL_TIMEOUT_SECONDS)
