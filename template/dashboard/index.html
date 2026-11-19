@@ -1215,9 +1215,9 @@
       it never shifts the centered column) and only fits where that margin is
       wide enough, hence the 1360px breakpoint: the centered column leaves
       (100vw-856px)/2 per side, and the 200px sidebar plus its 32px gap only
-      clear the column at ~1352px and above. Buttons reuse the .seg and
-      .peer-seg treatments, so current/busy/greyed read exactly as in the
-      popover; the column override below is layout only. */
+      clear the column at ~1352px and above. Moki's sidebar pattern: no
+      surface of its own, no dividers, white text — the selected row is the
+      only one that takes a fill. */
       #peerSidebar {
         display: none;
       }
@@ -1230,17 +1230,6 @@
           width: 200px;
           z-index: 10;
         }
-        /* The sidebar head reads as an app h2, inset to the tab labels'
-        own edge (1px seg border + 10px button padding) rather than the box. */
-        #peerSidebar .peer-side-head {
-          font-size: 11px;
-          font-weight: 620;
-          text-transform: uppercase;
-          letter-spacing: 0.09em;
-          color: var(--ink);
-          margin: 0 0 8px;
-          padding-left: 11px;
-        }
         #peerSidebar .peer-seg.peer-side {
           flex-direction: column;
           flex-wrap: nowrap;
@@ -1248,19 +1237,46 @@
           overflow-y: auto;
           max-height: calc(100vh - 80px);
           max-width: 100%;
+          gap: 3px;
+          border: 0;
+          background: none;
         }
         #peerSidebar .peer-seg.peer-side button {
           flex: none;
           white-space: normal;
           text-align: left;
           overflow-wrap: anywhere;
-          /* Stacked, the row separators run horizontally: the .seg rule's
-          left border goes, and every button but the first takes a top one. */
-          border-left: 0;
-          border-top: 1px solid var(--line);
+          border: 0;
+          border-radius: 8px;
+          background: none;
+          color: #fff;
         }
-        #peerSidebar .peer-seg.peer-side button:first-child {
-          border-top: 0;
+        /* White vanishes on near-white body in light mode, so resting rows
+        take ink there; the selected row's own ink adapts on its own. */
+        @media (prefers-color-scheme: light) {
+          #peerSidebar .peer-seg.peer-side button:not([aria-checked='true']) {
+            color: var(--ink);
+          }
+        }
+        #peerSidebar .peer-seg.peer-side button:hover {
+          background: color-mix(in srgb, var(--accent) 12%, transparent);
+        }
+        #peerSidebar .peer-seg.peer-side button[aria-checked='true'] {
+          background: var(--accent);
+          color: var(--panel);
+          /* Content-hugging selection, like Moki's lens rows: shrink to the
+          label instead of running full width. */
+          align-self: flex-start;
+          width: auto;
+          /* Current is inert (aria-disabled), which damps opacity — the
+          selected row opts back out so its text stays white. */
+          opacity: 1;
+        }
+        /* The switching tab keeps its dimmed busy treatment: white is the
+        sidebar's resting color, not its busy message. */
+        #peerSidebar .peer-seg.peer-side button[aria-busy='true'],
+        #peerSidebar .peer-seg.peer-side button[aria-busy='true']:hover {
+          color: var(--dim);
         }
       }
       /* The sheet's keyboard move path: plain buttons in a wrapping row, so it
@@ -2165,10 +2181,9 @@
     1360px breakpoint. Clicks carry data-peer-root, so the existing peer
     switch handler and its single-flight guard own them — no second fetch,
     no second POST path. -->
-    <nav id="peerSidebar" aria-label="dashboards" hidden>
-      <div class="peer-side-head" id="peerSideHead" aria-hidden="true">dashboards</div>
-      <div class="seg peer-seg peer-side" id="peerSideSeg" role="radiogroup" aria-labelledby="peerSideHead"></div>
-    </nav>
+    <div id="peerSidebar" hidden>
+      <div class="seg peer-seg peer-side" id="peerSideSeg" role="radiogroup" aria-label="dashboards"></div>
+    </div>
     <header>
       <span class="titlemenu" id="titlemenu">
         <button class="titletrigger" id="metaToggle" aria-expanded="false" aria-controls="metaTip">
