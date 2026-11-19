@@ -22,6 +22,7 @@ __pycache__/
 .claude/skills/orchestrate
 .claude/skills/output-style
 .claude/skills/workflow
+.claude/skills/worktree-round
 .claude/agents/librarian.md
 .claude/agents/reviewer-correctness.md
 .claude/agents/reviewer-design.md
