@@ -1278,6 +1278,36 @@
         #peerSidebar .peer-seg.peer-side button[aria-busy='true']:hover {
           color: var(--dim);
         }
+        /* The more/less tail: a full-width row, never the hugging selected
+        shape, dimmed to its specified opacity. Padding is the base .seg
+        button's own 6px 10px — the sidebar override above never strips it,
+        so no new scale here. Its chevron points down to
+        invite opening and flips up while the hidden rows are shown. */
+        #peerSidebar .peer-seg.peer-side button.peer-more {
+          opacity: 0.81;
+          width: 100%;
+          align-self: stretch;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        #peerSidebar .peer-seg.peer-side button.peer-more svg {
+          display: block;
+          width: 14px;
+          height: 14px;
+          transition: transform 0.2s ease;
+        }
+        #peerSidebar .peer-seg.peer-side button.peer-more[aria-expanded='true'] svg {
+          transform: rotate(180deg);
+        }
+        /* A hidden board shown behind more/less: the same row, damped below
+        the tail's 0.81 so the two read clearly different. Hidden *and*
+        inert rows keep the generic 0.35 instead — one opacity for inert
+        wins; their hidden cue is the expanded-section placement plus the
+        title's unhide hint. */
+        #peerSidebar .peer-seg.peer-side button.peer-hidden:not([aria-disabled='true']) {
+          opacity: 0.55;
+        }
       }
       /* The sheet's keyboard move path: plain buttons in a wrapping row, so it
       reads as actions rather than another segmented setting. */
@@ -3851,6 +3881,15 @@
          repaints this same page as the new project — title, branch, board all
          change, the URL does not. The self tab is pressed and inert. */
       document.addEventListener('click', (e) => {
+        const sideMore = e.target.closest('[data-sidebar-more]')
+        if (sideMore) {
+          // The tail of the sidebar: folding the hidden rows away is the
+          // reader's, kept across polls like the lane folds above — the
+          // redraw below only paints because the signature covers it.
+          sidebarShowHidden = !sidebarShowHidden
+          if (lastLedger) drawMeta(lastLedger)
+          return
+        }
         const scroll = e.target.closest('[data-peer-scroll]')
         if (scroll) {
           // A damped arrow is at its limit: pressing it must not nudge.
@@ -3865,6 +3904,36 @@
         // root the server has already moved past and cry failure wrongly.
         if (startingPeerRoot) return
         switchPeer(peer)
+      })
+
+      /* Sidebar-only hide: right-clicking a sidebar repo toggles it hidden
+      for that root, persisted across polls and reloads. The popover keeps
+      the full list (see peerGroup) — this never touches peers or state. */
+      function toggleHiddenPeer(root) {
+        if (!root) return
+        // Park focus before the repaint drops it, in case the pressed row
+        // is the focused one and the toggle removes its node.
+        const parkedRow = document.activeElement?.closest?.('#peerSideSeg [data-peer-root]')
+        const parked = parkedRow ? parkedRow.dataset.peerRoot : null
+        if (hiddenPeerRoots.has(root)) {
+          hiddenPeerRoots.delete(root)
+          if (!hiddenPeerRoots.size) sidebarShowHidden = false
+        } else hiddenPeerRoots.add(root)
+        saveHiddenPeerRoots()
+        if (lastLedger) drawMeta(lastLedger)
+        // The focused row is gone: land on the more tail holding the hidden
+        // rows, when there is one. Otherwise the sidebar's roving restore in
+        // drawPeerSidebar already put focus back on a row.
+        if (parked && !document.querySelector(`#peerSideSeg [data-peer-root="${CSS.escape(parked)}"]`))
+          document.querySelector('#peerSideSeg [data-sidebar-more]')?.focus({preventScroll: true})
+      }
+      document.addEventListener('contextmenu', (e) => {
+        const peer = e.target.closest('#peerSideSeg [data-peer-root]')
+        if (!peer) return
+        e.preventDefault()
+        // The current row never hides: right-clicking it is a no-op.
+        if (peer.getAttribute('aria-checked') === 'true') return
+        toggleHiddenPeer(peer.dataset.peerRoot)
       })
 
       async function switchPeer(peer) {
@@ -4186,6 +4255,20 @@
       Scoped to the event's own radiogroup, so popover and sidebar each keep
       a single tab stop. */
       document.addEventListener('keydown', (e) => {
+        // Sidebar-only hide from the keyboard: Delete (and Backspace)
+        // toggles hidden for the focused sidebar row — the same toggle, and
+        // the same guards, as right-click above. The current row is a no-op.
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          const sideTab = e.target.closest?.('#peerSideSeg [role="radio"]')
+          if (sideTab) {
+            if (sideTab.getAttribute('aria-checked') === 'true') return
+            const root = sideTab.dataset.peerRoot
+            if (!root) return
+            e.preventDefault()
+            toggleHiddenPeer(root)
+            return
+          }
+        }
         const tab = e.target.closest?.('.peer-seg [role="radio"]')
         if (
           !tab ||
@@ -4497,6 +4580,33 @@
       // repaint restoring the old label mid-flight.
       let startingPeerRoot = ''
 
+      /* Sidebar-only hide: the roots the reader tucked away with a
+      right-click, persisted across polls and reloads. The set holds roots,
+      so the popover (see peerGroup) never reads it — only the sidebar
+      filters on it. The expanded/collapsed tail beside it lives here too,
+      so both join the drawMeta signature and a poll can't snap them back. */
+      let hiddenPeerRoots = new Set()
+      try {
+        const savedHidden = typeof localStorage !== 'undefined' ? localStorage.getItem('harness.hiddenPeers') : null
+        if (savedHidden) {
+          const parsed = JSON.parse(savedHidden)
+          // Shape surprises drop only the corrupt entries — non-string
+          // members — never the peers; the dashboard must render regardless.
+          if (Array.isArray(parsed)) hiddenPeerRoots = new Set(parsed.filter((r) => typeof r === 'string' && r))
+        }
+      } catch {
+        // Persistence is a nicety: a blocked or corrupt store must never blank the board.
+      }
+      let sidebarShowHidden = false
+      function saveHiddenPeerRoots() {
+        try {
+          if (typeof localStorage !== 'undefined')
+            localStorage.setItem('harness.hiddenPeers', JSON.stringify([...hiddenPeerRoots]))
+        } catch {
+          // Same as load: without persistence the hide just lasts the session.
+        }
+      }
+
       /* One entry counts: a root that names a checkout and a name to show.
          Both the tab bar and the discovery poll trust only this shape — a
          foreign entry blanks the whole list rather than growing dead tabs. */
@@ -4588,20 +4698,47 @@
       function peerList(d) {
         const known = peers.filter(isPeerEntry)
         const list = known.length ? known : [{name: d.project, root: '', self: true}]
+        return {list, rovingIx: rovingIxFor(list)}
+      }
+
+      /* Starting (the in-flight switch) outranks current, which outranks
+      first: one comparison owns the tab stop for the popover tabs and
+      the sidebar column alike. */
+      function rovingIxFor(list) {
         const startingIx = list.findIndex((p) => startingPeerRoot && p.root === startingPeerRoot)
-        const selfIx = list.findIndex((p) => (p.self && !p.root) || (selfRoot && p.root === selfRoot))
-        let rovingIx = 0
-        if (startingIx >= 0) rovingIx = startingIx
-        else if (selfIx >= 0) rovingIx = selfIx
-        return {list, rovingIx}
+        const selfIx = list.findIndex(isCurrentPeer)
+        if (startingIx >= 0) return startingIx
+        if (selfIx >= 0) return selfIx
+        return 0
+      }
+
+      /* The board on screen: the lone-board fallback's `self` flag, or a
+      listed root matching the endpoint's own. One predicate for the tab
+      stop, the hidden mark, and the sidebar split alike. */
+      function isCurrentPeer(p) {
+        return !!((p.self && !p.root) || (selfRoot && p.root === selfRoot))
+      }
+
+      /* A tucked-away row's mark: the peer-hidden class plus the unhide hint
+      for its title. Sidebar-only — the popover never marks (see the
+      hiddenRoots gate in peerButtonsHtml), so its tabs read exactly as
+      before. The current row never reads as hidden (see drawPeerSidebar): a
+      switch back to a tucked-away board lands it in the visible list, lit. */
+      function hiddenMark(p) {
+        const hidden = !!p.root && hiddenPeerRoots.has(p.root) && !isCurrentPeer(p)
+        return hidden ? {cls: ' class="peer-hidden"', hint: ' — right-click to unhide'} : {cls: '', hint: ''}
       }
 
       /* One button per peer, shared by the popover row and the sidebar column:
-      same order, same guards, same starting/self/incapable treatments. */
-      function peerButtonsHtml(list, rovingIx) {
+      same order, same guards, same starting/self/incapable treatments. The
+      sidebar passes its hidden set so tucked-away rows carry their unhide
+      hint; the popover never does, so its tabs read exactly as before. */
+      function peerButtonsHtml(list, rovingIx, opts = {}) {
+        const hiddenRoots = opts.hiddenRoots instanceof Set ? opts.hiddenRoots : null
         return list
           .map((p, ix) => {
             const tabStop = peerTabStop(ix, rovingIx)
+            const {cls: hiddenCls, hint: unhideHint} = hiddenRoots ? hiddenMark(p) : {cls: '', hint: ''}
             // The in-flight tab first, so no current check below can steal
             // its busy state: it keeps its root and its name — the row doesn't
             // reflow mid-flight — and carries the busy treatment until the
@@ -4609,17 +4746,16 @@
             const starting = startingPeerRoot && p.root === startingPeerRoot
             if (starting)
               return (
-                `<button type="button" role="radio" tabindex="${tabStop}" aria-checked="false" aria-disabled="true" aria-busy="true"` +
-                ` data-peer-root="${esc(p.root)}" title="${esc(p.root)}">${esc(p.name)}</button>`
+                `<button type="button"${hiddenCls} role="radio" tabindex="${tabStop}" aria-checked="false" aria-disabled="true" aria-busy="true"` +
+                ` data-peer-root="${esc(p.root)}" title="${esc(p.root + unhideHint)}">${esc(p.name)}</button>`
               )
             // Current is the board on screen. The `self` flag is only ever set
             // on the local lone-board fallback above — a listed entry carrying
             // one must not out-rank the endpoint's own root.
-            const self = (p.self && !p.root) || (selfRoot && p.root === selfRoot)
-            if (self)
+            if (isCurrentPeer(p))
               return (
-                `<button type="button" role="radio" tabindex="${tabStop}" aria-checked="true" aria-disabled="true"` +
-                `${p.root ? ` title="${esc(p.root)}"` : ''}>${esc(p.name)}</button>`
+                `<button type="button"${hiddenCls} role="radio" tabindex="${tabStop}" aria-checked="true" aria-disabled="true"` +
+                `${p.root ? ` title="${esc(p.root + unhideHint)}"` : ''}>${esc(p.name)}</button>`
               )
             // A board from before the switch speaks only `start`: landing there
             // would strand the tab bar with no way back, so its tab is inert
@@ -4635,9 +4771,13 @@
             // row must not advertise pressable. Only the switching tab is
             // dimmed — the dim is its busy message.
             return (
-              `<button type="button" role="radio" tabindex="${tabStop}" aria-checked="false"${disabled ? ' aria-disabled="true"' : ''}` +
+              `<button type="button"${hiddenCls} role="radio" tabindex="${tabStop}" aria-checked="false"${disabled ? ' aria-disabled="true"' : ''}` +
               `${incapable ? ' data-peer-incapable="true"' : ` data-peer-root="${esc(p.root)}"`}` +
-              ` title="${esc(title)}">${esc(p.name)}</button>`
+              // A hidden incapable row keeps its flag but still carries its
+              // root, so the sidebar's right-click unhide can find it;
+              // presses stay guarded by switchPeer's aria-disabled check.
+              `${incapable && hiddenCls ? ` data-peer-root="${esc(p.root)}"` : ''}` +
+              ` title="${esc(title + unhideHint)}">${esc(p.name)}</button>`
             )
           })
           .join('')
@@ -4668,7 +4808,26 @@
       }
 
       /* The wide-screen sidebar: the peer list as a vertical radiogroup.
-      Rendered from drawMeta's own repaint, so polling stays single. */
+      Rendered from drawMeta's own repaint, so polling stays single. The
+      hidden roots filter here only — the popover above keeps every peer. */
+
+      /* The more/less tail: rendered last, and only while hidden roots
+      exist. A plain button rather than a radio, so the radiogroup's
+      arrow-key path skips it while Enter/Space still press it. */
+      function sidebarMoreHtml(hiddenCount) {
+        if (!hiddenCount) return ''
+        const open = sidebarShowHidden
+        return (
+          `<button type="button" class="peer-more" data-sidebar-more="true" aria-expanded="${open ? 'true' : 'false'}"` +
+          ` title="${open ? 'hide the hidden boards' : 'show the hidden boards'}"` +
+          `>` +
+          `<span>${open ? 'less' : 'more'}</span>` +
+          `<svg viewBox="0 0 16 16" aria-hidden="true">` +
+          `<path d="M3.5 6.5 8 11l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>` +
+          `</svg></button>`
+        )
+      }
+
       function drawPeerSidebar(d) {
         const nav = $('peerSidebar')
         const seg = $('peerSideSeg')
@@ -4679,15 +4838,62 @@
           seg.innerHTML = ''
           return
         }
-        const {list, rovingIx} = peerList(d)
-        const focusedIx = restoreFocus(seg, '#peerSideSeg [role="radio"]')
-        seg.innerHTML = peerButtonsHtml(list, rovingIx)
+        const {list} = peerList(d)
+        // Stale roots expire: a board that no longer discovers never unhides
+        // itself. Never prune on unknown discovery — an empty poll must not
+        // wipe the persisted set.
+        if (peers.length > 0) {
+          let dropped = false
+          for (const r of [...hiddenPeerRoots])
+            if (!peers.some((p) => isPeerEntry(p) && p.root === r)) {
+              hiddenPeerRoots.delete(r)
+              dropped = true
+            }
+          if (dropped) saveHiddenPeerRoots()
+        }
+        // The current row is never hidden: a switch back to a tucked-away
+        // board lands it in the visible list, lit.
+        const hidden = list.filter((p) => p.root && hiddenPeerRoots.has(p.root) && !isCurrentPeer(p))
+        const visible = list.filter((p) => !(p.root && hiddenPeerRoots.has(p.root)) || isCurrentPeer(p))
+        const shown = sidebarShowHidden && hidden.length ? [...visible, ...hidden] : visible
+        const rovingIx = rovingIxFor(shown)
+        // Radios plus the more/less tail: focus rides the repaint by
+        // identity — the focused row's root, 'current' for the rootless
+        // current row, 'tail' for the more/less button — so a reorder or a
+        // hide can't strand it on the wrong row by index.
+        const focusedEl = document.activeElement?.closest?.('#peerSideSeg button')
+        const focusedRoot = focusedEl
+          ? focusedEl.hasAttribute('data-sidebar-more')
+            ? 'tail'
+            : focusedEl.dataset.peerRoot || (focusedEl.getAttribute('aria-checked') === 'true' ? 'current' : null)
+          : null
+        const focusedIx = focusedEl ? [...seg.querySelectorAll('#peerSideSeg button')].indexOf(focusedEl) : -1
+        seg.innerHTML = peerButtonsHtml(shown, rovingIx, {hiddenRoots: hiddenPeerRoots}) + sidebarMoreHtml(hidden.length)
         nav.hidden = false
         if (focusedIx >= 0) {
-          const tabs = [...seg.querySelectorAll('[role="radio"]')]
-          const back = tabs[Math.min(focusedIx, tabs.length - 1)]
+          let back = null
+          if (focusedRoot === 'tail') back = seg.querySelector('[data-sidebar-more]')
+          else if (focusedRoot === 'current')
+            back = seg.querySelector('[role="radio"][aria-checked="true"]')
+          else if (focusedRoot)
+            back = seg.querySelector(`#peerSideSeg [data-peer-root="${CSS.escape(focusedRoot)}"]`)
+          if (!back) {
+            // The identity is gone: fall back to nearest-by-index — unless
+            // this was the parked row (hidden but still in the set), whose
+            // landing the toggle's own park to the tail already owns.
+            const parkedGone =
+              !!focusedRoot && focusedRoot !== 'tail' && focusedRoot !== 'current' && hiddenPeerRoots.has(focusedRoot)
+            if (!parkedGone) {
+              const buttons = [...seg.querySelectorAll('#peerSideSeg button')]
+              back = buttons[Math.min(focusedIx, buttons.length - 1)] || null
+            }
+          }
           if (back) {
-            setRoving(tabs, tabs.indexOf(back))
+            // The tail is no radio: only a radio moves the row's tab stop.
+            if (back.getAttribute('role') === 'radio') {
+              const tabs = [...seg.querySelectorAll('[role="radio"]')]
+              setRoving(tabs, tabs.indexOf(back))
+            }
             back.focus({preventScroll: true})
           }
         }
@@ -4726,8 +4932,10 @@
         // alone. On the peer slice the signature covers what is drawn and
         // nothing more — the tab bar's names and roots (not the endpoint's
         // live/port churn), the in-flight start, and the project and root the
-        // tabs read — plus the popover's own data below, as always.
-        const signature = JSON.stringify([peers.map((p) => [p.name, p.root, p.switch_capable]), startingPeerRoot, selfRoot, d.project, d.root, b, d.ledger, d.skills, d.agents, d.git.commits_today, d.board])
+        // tabs read — plus the popover's own data below, as always. The
+        // sidebar's hidden set and its more/less tail join it too, so a poll
+        // can't snap a hide or a reveal back.
+        const signature = JSON.stringify([peers.map((p) => [p.name, p.root, p.switch_capable]), startingPeerRoot, selfRoot, d.project, d.root, b, d.ledger, d.skills, d.agents, d.git.commits_today, d.board, [...hiddenPeerRoots].sort(), sidebarShowHidden])
         if (signature === metaSignature) return
         metaSignature = signature
 
