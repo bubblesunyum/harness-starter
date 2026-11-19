@@ -204,6 +204,39 @@ class AgentTests(unittest.TestCase):
         self.agent("reviewer-taste", "go do it", events=text_event("ok"))
         self.assertEqual(self.calls()[-1]["harness_agent_run"], "1")
 
+    def test_children_see_the_project_as_pwd_not_the_callers(self):
+        # opencode trusts $PWD over its real working directory, so an eval
+        # worker started from the live checkout with cwd=<its worktree> did
+        # its work in the live checkout. Every child must see PWD == ROOT.
+        self.env["PWD"] = "/somewhere/the/caller/was"
+        self.agent("reviewer-taste", "go do it", events=text_event("ok"))
+        for call in self.calls():
+            self.assertEqual(Path(call["pwd_env"]).resolve(), Path(call["cwd"]).resolve())
+            self.assertEqual(Path(call["cwd"]).resolve(), self.root.resolve())
+
+    def test_an_eval_worker_is_denied_the_gate_evals_and_other_workers(self):
+        # The worktree's own harness code may predate every nesting guard, so
+        # the block rides in the config opencode enforces, set by this runner.
+        self.env["HARNESS_IN_EVAL"] = "1"
+        self.agent("implement", "go do it", events=text_event("ok"))
+        call = self.calls()[-1]
+        bash = json.loads(call["config"])["agent"]["build"]["permission"]["bash"]
+        self.assertEqual(bash["*"], "allow")
+        for pattern in ("*harness verify*", "*verify.sh*", "*harness eval*",
+                        "*eval.sh*", "*harness agent*", "*agent.py*"):
+            self.assertEqual(bash[pattern], "deny", pattern)
+        prompt = call["argv"][-1]
+        self.assertNotIn("Run scripts/harness verify before you finish", prompt)
+        self.assertIn("this run is an eval", prompt)
+
+    def test_outside_an_eval_the_worker_keeps_the_gate(self):
+        self.env.pop("HARNESS_IN_EVAL", None)
+        self.agent("implement", "go do it", events=text_event("ok"))
+        call = self.calls()[-1]
+        permission = json.loads(call["config"])["agent"]["build"]["permission"]
+        self.assertNotIn("bash", permission)
+        self.assertIn("Run scripts/harness verify before you finish", call["argv"][-1])
+
     def test_existing_config_content_is_merged_not_replaced(self):
         self.env["OPENCODE_CONFIG_CONTENT"] = '{"theme": "x", "agent": {"other": {"mode": "all"}}}'
         self.agent("reviewer-taste", "go do it", events=text_event("ok"))
@@ -432,9 +465,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.strip(), "ok")
 
-    def test_ctrl_c_kills_the_child_group_and_keeps_exit_130(self):
-        # Ctrl-C on the wrapper must not orphan the headless child: the wall
-        # cap died with the wrapper, so the group dies here instead.
+    def interrupt_kills_the_child_group(self, sig):
         env = dict(self.env, FAKE_LOG=str(self.log), FAKE_MODEL=OPENCODE_MODEL,
                    FAKE_SLEEP="30", HARNESS_AGENT_IDLE_SECONDS="600",
                    HARNESS_AGENT_HEARTBEAT_SECONDS="60")
@@ -455,12 +486,12 @@ class AgentTests(unittest.TestCase):
                     break
                 time.sleep(0.1)
             self.assertIsNotNone(child, "no status file for the live run")
-            proc.send_signal(signal.SIGINT)
+            proc.send_signal(sig)
             try:
                 proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                self.fail("agent did not exit after SIGINT")
+                self.fail(f"agent did not exit after {sig.name}")
             self.assertEqual(proc.returncode, 130)
             with self.assertRaises(OSError):
                 os.kill(child, 0)
@@ -468,6 +499,19 @@ class AgentTests(unittest.TestCase):
         finally:
             if proc.poll() is None:
                 proc.kill()
+
+    def test_ctrl_c_kills_the_child_group_and_keeps_exit_130(self):
+        # Ctrl-C on the wrapper must not orphan the headless child: the wall
+        # cap died with the wrapper, so the group dies here instead.
+        self.interrupt_kills_the_child_group(signal.SIGINT)
+
+    def test_term_and_hup_kill_the_child_group_too(self):
+        # A watchdog or gate timeout ends the wrapper with TERM, a closed
+        # terminal with HUP. The child runs in its own session, so a wrapper
+        # that just died would leave it working as an orphan.
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig.name):
+                self.interrupt_kills_the_child_group(sig)
 
     def test_non_finite_timeouts_are_refused(self):
         # nan parses and compares False against everything, so without an

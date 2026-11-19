@@ -668,6 +668,14 @@ $duplicate_out"
 # evals one-line-per-case output echoes instead of being swallowed.
 knowledge_behavioural() {
   local out st eval_sh
+  # A gate started from inside an eval — an eval worker obeying "run the gate
+  # before you finish" — must never start evals of its own: each would spawn
+  # more workers running more gates, and that chain once ran away with ~17
+  # orphaned workers. eval.sh exports HARNESS_IN_EVAL to everything it starts.
+  if [ -n "${HARNESS_IN_EVAL:-}" ]; then
+    echo "  knowledge behavioural: inside an eval run — nested evals skip"
+    return 0
+  fi
   eval_sh="${HARNESS_ROOT:?harness root is missing}/scripts/eval.sh"
   if out="$(kl_python "$eval_sh" <<'PYEOF'
 import knowledge_layer as kl

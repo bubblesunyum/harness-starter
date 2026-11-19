@@ -1,0 +1,10 @@
+# Behavioural eval outcomes, one JSON object per case per run.
+# Readers skip blank lines and lines starting with #, which is this.
+{"case": "commit-bead", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 44, "ts": "2026-11-18T23:01:48Z"}
+{"case": "verify-gate", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 106, "ts": "2026-11-18T23:01:48Z"}
+{"case": "commit-bead", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 80, "ts": "2026-11-18T23:06:54Z"}
+{"case": "verify-gate", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 140, "ts": "2026-11-18T23:06:54Z"}
+{"case": "commit-bead", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 57, "ts": "2026-11-18T23:18:09Z"}
+{"case": "verify-gate", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 100, "ts": "2026-11-18T23:18:09Z"}
+{"case": "commit-bead", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 82, "ts": "2026-11-19T02:56:16Z"}
+{"case": "verify-gate", "harness_rev": "bd2293a4353266855fa90d32716eb866c377a4b2", "pass": true, "tokens": 146, "ts": "2026-11-19T02:56:16Z"}

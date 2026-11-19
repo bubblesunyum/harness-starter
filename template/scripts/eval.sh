@@ -36,6 +36,13 @@ ROOT="${HARNESS_PROJECT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # the copy a project file shadows. Same as ROOT when run as an installed copy.
 HARNESS="${HARNESS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT"
+if [ -n "${HARNESS_IN_EVAL:-}" ]; then
+  echo "eval: refusing to start inside another eval run (HARNESS_IN_EVAL is set) — nested evals recurse" >&2
+  exit 2
+fi
+# Everything this run starts — workers, and any gate a worker runs — inherits
+# this, and verify.sh's eval lane refuses to start under it: no nested evals.
+export HARNESS_IN_EVAL=1
 
 # ── Tune here: retries per case, this line only. One retry per the epic — a
 # flaky agent gets a second run, a broken layer gets the same verdict twice

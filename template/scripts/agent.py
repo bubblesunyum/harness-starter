@@ -126,6 +126,29 @@ The brief:
 
 """
 
+# Inside an eval (eval.sh exports HARNESS_IN_EVAL) a worker must never start
+# the gate, an eval or another worker. Its worktree holds the harness code of
+# the case's base commit, which may predate every guard against nesting, so
+# the block is enforced here, by opencode's own permission check, rather than
+# trusted to the code inside the worktree. Without it each worker's gate ran
+# evals that started more workers — a runaway of dozens of processes.
+EVAL_FORBIDDEN_COMMANDS = ("*harness verify*", "*verify.sh*", "*harness eval*",
+                           "*eval.sh*", "*harness agent*", "*agent.py*")
+EVAL_VERIFY_LINE = ("- Do not run scripts/harness verify, eval or agent: this run "
+                    "is an eval, and they are blocked.\n")
+
+
+def in_eval():
+    return bool(os.environ.get("HARNESS_IN_EVAL"))
+
+
+def implement_contract():
+    if not in_eval():
+        return IMPLEMENT_CONTRACT
+    return IMPLEMENT_CONTRACT.replace(
+        "- Run scripts/harness verify before you finish, and fix what it catches.\n",
+        EVAL_VERIFY_LINE)
+
 
 def strip_ansi(line):
     """A line of opencode's stderr without its colour codes."""
@@ -311,6 +334,20 @@ def agent_config(agent):
              f"to something that isn't an object — unset it or fix it")
     for tmp in temp_dirs():
         outside[f"{tmp}/*"] = "allow"
+    if in_eval():
+        bash = permission.setdefault("bash", {})
+        if isinstance(bash, str):
+            bash = permission["bash"] = {"*": bash}
+        if not isinstance(bash, dict):
+            fail(f"OPENCODE_CONFIG_CONTENT sets agent.{agent}.permission.bash to "
+                 f"something that isn't an object or a string — unset it or fix it")
+        # opencode applies the last matching pattern, so the denies go last
+        # even when an inherited config already named one of them earlier.
+        rebuilt = {"*": bash.get("*", "allow")}
+        rebuilt.update((k, v) for k, v in bash.items()
+                       if k != "*" and k not in EVAL_FORBIDDEN_COMMANDS)
+        rebuilt.update((pattern, "deny") for pattern in EVAL_FORBIDDEN_COMMANDS)
+        permission["bash"] = rebuilt
     return json.dumps(pin_config(config))
 
 
@@ -847,12 +884,30 @@ def run_agent(role, agent, model, variant, session, prompt):
     return reply, session_id, refused
 
 
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main(argv):
     # A shell starts background jobs with SIGINT ignored, and Python keeps an
     # inherited SIG_IGN: launched that way (the gate's parallel probes, any
     # `&`), a SIGINT would never reach run_agent's cleanup and the child group
     # would outlive the wrapper.
     signal.signal(signal.SIGINT, signal.default_int_handler)
+    # TERM and HUP are how a watchdog, a gate timeout or a closed terminal end
+    # this wrapper. Python's default for both is to die on the spot, skipping
+    # run_agent's cleanup — and the child runs in a session of its own, so it
+    # survives as an orphan that keeps working (an eval worker once kept
+    # running gates in the live checkout this way). Route both through the
+    # same cleanup as Ctrl-C.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _interrupt)
+    # opencode takes its working directory from $PWD, not the directory it
+    # was started in: launched with cwd=ROOT but an inherited PWD naming the
+    # caller's checkout, it works in the caller's checkout. That is how eval
+    # workers meant for a throwaway worktree wrote into the live one. Every
+    # child is started with cwd=ROOT, so PWD says the same.
+    os.environ["PWD"] = str(ROOT)
     if argv[:1] == ["ps"]:
         if len(argv) > 1:
             print("usage: agent.py ps", file=sys.stderr)
@@ -881,7 +936,7 @@ def main(argv):
 
     prompt = message
     if role == "implement" and not session:
-        prompt = IMPLEMENT_CONTRACT + message
+        prompt = implement_contract() + message
     reply, session_id, refused = run_agent(role, agent, model, variant, session, prompt)
     print(reply)
     print(f"agent.py: {role} on {model} ({variant}) · session {session_id} · "

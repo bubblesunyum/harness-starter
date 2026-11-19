@@ -41,8 +41,11 @@ POLL_INTERVAL=0.5
 
 # The shared tree before any fixture exists. Covers all of template/: a save
 # through a link would read as this probe writing through one.
+# The eval results log is excluded: the gate's eval lane appends to it while
+# this probe runs in parallel, and no install path writes there.
 shared_hash() {
   (cd "$REPO/template" && find . -type f ! -path '*/__pycache__/*' \
+    ! -path './harness/evals/results.jsonl' \
     -print0 | sort -z | xargs -0 shasum) | shasum | cut -d' ' -f1
 }
 SHARED_BEFORE="$(shared_hash)"

@@ -34,8 +34,11 @@ POLL_INTERVAL=0.5
 # Every install below links into this checkout's template/. A tool that writes
 # into a linked path (bd init writes .agents/skills/beads/SKILL.md) lands in
 # the SHARED harness, so hash the tree now and prove nothing wrote through.
+# The eval results log is excluded: the gate's eval lane appends to it while
+# this probe runs in parallel, and no install path writes there.
 shared_hash() {
-  (cd "$REPO/template" && find . -type f ! -path '*/__pycache__/*' -print0 \
+  (cd "$REPO/template" && find . -type f ! -path '*/__pycache__/*' \
+    ! -path './harness/evals/results.jsonl' -print0 \
     | sort -z | xargs -0 shasum) | shasum | cut -d' ' -f1
 }
 SHARED_BEFORE="$(shared_hash)"
