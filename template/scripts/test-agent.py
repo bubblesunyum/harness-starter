@@ -38,7 +38,10 @@ if len(sys.argv) > 1 and sys.argv[1] == "--version":
 log = os.environ["FAKE_LOG"]
 with open(log, "a") as f:
     f.write(json.dumps({"argv": sys.argv[1:],
-                        "config": os.environ.get("OPENCODE_CONFIG_CONTENT")}) + "\\n")
+                        "config": os.environ.get("OPENCODE_CONFIG_CONTENT"),
+                        "harness_agent_run": os.environ.get("HARNESS_AGENT_RUN"),
+                        "pwd_env": os.environ.get("PWD"),
+                        "cwd": os.getcwd()}) + "\\n")
 if sys.argv[1:3] == ["session", "export"]:
     n = int(os.environ.get("FAKE_ROUNDS", "1"))
     print(json.dumps({"messages": [{"type": "user"}] * n}))
@@ -191,6 +194,15 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(out.returncode, 1)
         self.assertNotIn("Traceback", out.stderr)
         self.assertIn("agent.build.permission", out.stderr)
+
+    def test_headless_runs_mark_themselves_for_the_session_plugin(self):
+        # The opencode session plugin injects the brief into every session;
+        # a headless harness run already carries its brief in the prompt, so
+        # run_agent marks the child to opt out rather than paying twice.
+        # Seeded first: the marker must be set by the runner, not inherited.
+        self.env["HARNESS_AGENT_RUN"] = "inherited-sentinel"
+        self.agent("reviewer-taste", "go do it", events=text_event("ok"))
+        self.assertEqual(self.calls()[-1]["harness_agent_run"], "1")
 
     def test_existing_config_content_is_merged_not_replaced(self):
         self.env["OPENCODE_CONFIG_CONTENT"] = '{"theme": "x", "agent": {"other": {"mode": "all"}}}'

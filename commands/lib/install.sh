@@ -517,6 +517,7 @@ harness_reference_files() {
 AGENTS.md
 .claude/settings.json
 opencode.json
+.opencode/plugins/harness-session.js
 .codex/hooks.json
 scripts/hooks/commit-msg
 scripts/hooks/pre-commit

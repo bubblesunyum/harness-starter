@@ -698,6 +698,10 @@ def run_agent(role, agent, model, variant, session, prompt):
         command += ["--session", session]
     env = dict(os.environ)
     env["OPENCODE_CONFIG_CONTENT"] = agent_config(agent)
+    # The opencode session plugin injects the brief into every session's
+    # system prompt; a headless run already carries its brief in the message,
+    # so it opts out here rather than paying for the brief twice.
+    env["HARNESS_AGENT_RUN"] = "1"
     idle_timeout = _seconds_env("HARNESS_AGENT_IDLE_SECONDS", IDLE_TIMEOUT_SECONDS)
     heartbeat_every = _seconds_env("HARNESS_AGENT_HEARTBEAT_SECONDS", HEARTBEAT_SECONDS)
     tool_timeout = _seconds_env("HARNESS_AGENT_TOOL_SECONDS", TOOL_TIMEOUT_SECONDS)

@@ -366,13 +366,16 @@ The revision cap lives in the script rather than in a skill's prose
 because guidance is what a long thread erodes first. It counts the session's
 messages back out of `opencode session export`, so there is no counter file to lose.
 
-**There is no session-start hook to write.** opencode's plugin hooks are
-`event`, `chat.message`, `chat.params`, `chat.headers`, `chat.completion`,
-`tool.execute.before/after`, `auth`, `config`, and `permission.*`. None of them
-can inject context at session start — `event` is a notification sink with no
-return channel. So the dynamic half of the brief has no automatic path here, and
-AGENTS.md's "run `scripts/harness session` yourself" line is the fallback that covers
-it. Don't build the plugin.
+**The session-start hook is a plugin.** opencode 2 loads
+`.opencode/plugins/harness-session.js`, a committed stub `harness add` installs
+like the finder. Its `context` hook runs `scripts/harness session` once per
+session and adds the contract and brief to the system prompt, so the dynamic
+half of the brief reaches opencode the way Claude Code's SessionStart hook
+delivers it. Headless `scripts/harness agent` runs set `HARNESS_AGENT_RUN=1` and
+skip it: their brief already rides in the message. A failing harness becomes
+one loud line, never a broken session. `scripts/harness doctor` and the gate
+name a missing plugin or contract link. (The opencode 1 hook list had no way to
+inject context; that finding no longer holds.)
 
 `opencode.json`'s `instructions` list is `AGENTS.md` and `CLAUDE.md` — exactly
 what Claude Code always-loads, since `CLAUDE.md` imports `AGENTS.md`. opencode

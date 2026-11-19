@@ -542,8 +542,6 @@ await_bead_ready() {
 }
 export -f await_bead_ready
 
-
-
 # The shared harness root one probe's finder resolves, on stdout. A reference
 # install keeps no scripts of its own, so probes that used to import the
 # probe's copy import the shared module instead — resolved the way a real
@@ -602,6 +600,24 @@ PYEOF
 }
 export -f probe_dashboard_verdict
 
+# The opencode session plugin: a fresh add installs it as a committed file,
+# and driving its context hook with a fake session returns the brief — cached
+# per session, retried (not replayed) after a fix, loud-but-quiet on a failing
+# harness, silent on headless runs.
+probe_step --when "bin/* commands/add.sh commands/migrate.sh commands/lib/* template/stubs/.opencode/* scripts/test-opencode-session-plugin.mjs" "opencode session plugin" bash -c '
+  PROBE_SCENARIO="opencode session plugin"
+  golden_probe || probe_fail "no golden fixture"
+  plugin="$probe/.opencode/plugins/harness-session.js"
+  [ -f "$plugin" ] || probe_fail "add never installed the opencode session plugin"
+  cmp -s "$PWD/template/stubs/.opencode/plugins/harness-session.js" "$plugin" ||
+    probe_fail "the installed plugin differs from the stub"
+  if (cd "$probe" && git check-ignore -q .opencode/plugins/harness-session.js); then
+    probe_fail "the installed plugin is gitignored — it must be committed like scripts/harness"
+  fi
+  if command -v bun >/dev/null 2>&1; then rt=bun; else rt=node; fi
+  out="$("$rt" "$PWD/scripts/test-opencode-session-plugin.mjs" "$plugin" "$probe" 2>&1)" ||
+    probe_fail "the plugin driver failed"
+  echo "$out" | grep -q "plugin ok" || probe_fail "the plugin driver never said ok"'
 
 # A template file that still says {{PROJECT}} after substitution is one the
 # installer missed — and the placeholder only shows up at the far end, in an
@@ -744,7 +760,6 @@ grep -q "scripts/harness reflect" "$root/.claude/skills/handoff/SKILL.md" || pro
 grep -q -- "--candidates-file" "$root/.claude/skills/handoff/SKILL.md" || probe_fail "handoff skill never documents --candidates-file"
 grep -q -- "--keep-lesson" "$root/.claude/skills/handoff/SKILL.md" || probe_fail "handoff skill never documents --keep-lesson"
 '
-
 
 # Propose path in one copy with a stubbed gate: fake opencode returns two candidates, wrap-up keeps one (the other logs unreviewed), learning log and export carry it. Reviewed closes log kept/dropped, brief pressure counts only kept, and a failed keyed remember logs failed. Same stub reason as above.
 probe_step --when "template/scripts/wrap-up.sh template/scripts/reflect.sh template/.claude/agents/reflector.md template/scripts/lib/journal.sh template/scripts/brief.sh template/scripts/harness" "reflect proposes a lesson and logs it kept" bash -c '
@@ -907,7 +922,6 @@ echo "$out" | grep -q "no trap count in the brief" || probe_fail "refusal never 
 [ "$(cat "$probe/harness/.last-consolidation")" = "$before" ] || probe_fail "refused mark rewrote the marker"
 '
 
-
 # The consolidation prompt: the librarian gains promote/correct/prune beside
 # delete/merge/move/shorten, scopes every pass to the marker, proposes only,
 # and turns a 3x finding category into a reviewer trap. Static checks on the
@@ -1042,7 +1056,6 @@ out=$(cd "$probe" && HOME="$probe/fakehome" HARNESS_PROJECT="$probe" HARNESS_ROO
 echo "$out" | grep -q "STALE" || probe_fail "moved generator failed without a STALE line"
 echo "$out" | grep -q "harness/wiki/probe.md" || probe_fail "STALE line never named the wiki page"
 '
-
 
 # No [verdict] section is the common case — every fresh install — so the
 # default must be served silently: no complaint on stderr, match-nothing

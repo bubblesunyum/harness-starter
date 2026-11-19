@@ -104,6 +104,16 @@ for stub_rel in $MIGRATE_STUBS; do
   printf '%s\n' "$files" | grep -qxF "$stub_rel" || files="$files
 $stub_rel"
 done
+# A reference file the project lacks entirely — one added to the reference
+# list after this install was made, like the opencode session plugin — joins
+# the list too, so the missing-file branch below writes it. Files already
+# present are left to the classification above; absent ones — a dangling
+# link counts as absent — are added.
+for ref_rel in $(harness_reference_files); do
+  [ -e "$target/$ref_rel" ] && continue
+  printf '%s\n' "$files" | grep -qxF "$ref_rel" || files="$files
+$ref_rel"
+done
 # A broken diverged list fails before anything is written — in the dry run as
 # well as --apply — or a typo silently un-acknowledges the fork it meant.
 migrate_validate_diverged "$files" "$diverged_want" || exit 1
@@ -266,7 +276,9 @@ while IFS= read -r rel; do
   dst="$target/$rel"
   # A link is already managed — by a previous migrate's link run — so it is
   # never classified. Removing one would strand the shared entry it points at.
-  if [ -L "$dst" ]; then
+  # The exception is a dangling reference link: it points nowhere, so the
+  # file it stood for is missing and gets written in its place.
+  if [ -L "$dst" ] && { [ -e "$dst" ] || ! migrate_is_reference_path "$rel"; }; then
     continue
   fi
   if [ ! -e "$dst" ]; then

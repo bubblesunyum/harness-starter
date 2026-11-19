@@ -28,11 +28,11 @@ seeds (`harness/seat.md`, `AGENTS.local.md`, `scripts/verify.steps.sh`,
 scripts/harness session
 ```
 
-> opencode: your first action every session is `scripts/harness session` — you must run it yourself before anything else.
+> opencode: `.opencode/plugins/harness-session.js` runs `scripts/harness session` and puts its output in your system prompt. If you do not see the brief, run it yourself before anything else.
 
 The seat and what it's for, the last session's note, the ready work, the known
-traps, in about 500 tokens. Claude Code runs it as a SessionStart hook and opencode loads this file
-through `opencode.json`, but the brief is *state* rather than a static file, so
+traps, in about 500 tokens. Claude Code runs it as a SessionStart hook and opencode through its session
+plugin, but the brief is *state* rather than a static file, so
 if your tool didn't hand it to you, run it yourself. Starting cold is how a
 session spends its first ten minutes rediscovering what the ledger already knew.
 

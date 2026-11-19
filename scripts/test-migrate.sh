@@ -286,7 +286,7 @@ else
   failcase "apply keeps the own skill" "own skill removed"
 fi
 stub_miss=""
-for stub in AGENTS.md opencode.json .codex/hooks.json scripts/hooks/commit-msg scripts/hooks/pre-commit; do
+for stub in AGENTS.md opencode.json .codex/hooks.json scripts/hooks/commit-msg scripts/hooks/pre-commit .opencode/plugins/harness-session.js; do
   cmp -s "$REPO/template/stubs/$stub" "$FIX/$stub" || stub_miss="$stub_miss $stub"
 done
 [ -x "$FIX/scripts/harness" ] || stub_miss="$stub_miss scripts/harness(not executable)"
@@ -325,11 +325,26 @@ else
   pass "second apply changes nothing"
 fi
 
+# --- a dangling session-plugin link is repaired, not skipped as managed ---
+plugin="$FIX/.opencode/plugins/harness-session.js"
+rm -f "$plugin" && ln -s "$TMP/nowhere.js" "$plugin" &&
+  (cd "$FIX" && git add -A >/dev/null 2>&1 && git -c commit.gpgsign=false commit -m "break plugin $BID" >/dev/null 2>&1) ||
+  { echo "FAIL setup: cannot break the plugin link"; exit 1; }
+if ! "$REPO/bin/harness" migrate --apply "$FIX" >"$TMP/plugin.log" 2>&1; then
+  failcase "apply repairs a dangling plugin link" "non-zero exit: $(tail -1 "$TMP/plugin.log")"
+elif [ -L "$plugin" ] || ! cmp -s "$REPO/template/stubs/.opencode/plugins/harness-session.js" "$plugin"; then
+  failcase "apply repairs a dangling plugin link" "still a link or not the shared plugin"
+else
+  pass "apply repairs a dangling plugin link"
+fi
+(cd "$FIX" && git add -A >/dev/null 2>&1 && git -c commit.gpgsign=false commit -m "repair plugin $BID" >/dev/null 2>&1) || true
+
 # --- the gate passes on the converted tree ---
 if "$FIX/scripts/harness" verify >"$TMP/verify.log" 2>&1; then
   pass "harness verify passes afterwards"
 else
-  failcase "harness verify passes afterwards" "non-zero exit: $(grep -m1 -E '^\s*(FAIL|!|✗)' "$TMP/verify.log" 2>/dev/null || tail -1 "$TMP/verify.log" 2>/dev/null)"
+  # The FAIL line names the step; the line under it says why.
+  failcase "harness verify passes afterwards" "non-zero exit: $(grep -m1 -A1 -E '^\s*(FAIL|!|✗)' "$TMP/verify.log" 2>/dev/null | tr '\n' ' ' || tail -1 "$TMP/verify.log" 2>/dev/null)"
 fi
 
 # --- a commit on the converted tree refreshes the export without a regen ---
