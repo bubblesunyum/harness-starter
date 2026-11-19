@@ -1096,6 +1096,72 @@ if ! in_probe_mode; then
   fi
 fi
 
+# The opencode contract the session reads: opencode.json lists
+# .harness-contract.md, a link `scripts/harness link` keeps, and the session
+# plugin that injects the brief. A clone or worktree can lose either — the
+# link is gitignored, the plugin is committed but a partial copy can drop it —
+# so the gate fails loudly naming the fix rather than starting sessions with
+# no contract. Projects without opencode skip: no opencode.json, or no
+# contract in its instructions, means nothing here applies.
+if ! in_probe_mode; then
+  if contract_out="$(python3 - "$ROOT" "${HARNESS_ROOT:-}" <<'PYEOF' 2>&1
+import json
+import os
+import sys
+
+root = sys.argv[1]
+# The shared contract link_contract keeps, so a resolved link anywhere else —
+# a moved root, a hand link — is stale, not ok. Unknown when HARNESS_ROOT is
+# unset (undispatched runs); then only the stale check skips, never the rest.
+expected = os.path.join(sys.argv[2], "AGENTS.md") if len(sys.argv) > 2 and sys.argv[2] else None
+cfg = os.path.join(root, "opencode.json")
+if not os.path.exists(cfg):
+    print("  opencode contract link: no opencode.json — skipping")
+    sys.exit(0)
+try:
+    with open(cfg) as handle:
+        tree = json.load(handle)
+except (OSError, ValueError) as exc:
+    print("error: %s is unparseable (%s) — fix the JSON" % (cfg, exc))
+    sys.exit(1)
+instr = tree.get("instructions", []) if isinstance(tree, dict) else []
+if not isinstance(instr, list) or ".harness-contract.md" not in instr:
+    print("  opencode contract link: contract not listed — skipping")
+    sys.exit(0)
+link = os.path.join(root, ".harness-contract.md")
+if not os.path.islink(link) and not os.path.exists(link):
+    print("error: .harness-contract.md missing — run scripts/harness link")
+    sys.exit(1)
+if os.path.islink(link) and not os.path.exists(link):
+    print("error: .harness-contract.md dangles — run scripts/harness link")
+    sys.exit(1)
+if os.path.islink(link) and os.path.exists(link):
+    if expected is not None and os.readlink(link) != expected:
+        print("error: .harness-contract.md is stale — run scripts/harness link")
+        sys.exit(1)
+elif os.path.exists(link):
+    print("error: .harness-contract.md is stale — run scripts/harness link")
+    sys.exit(1)
+plugin = os.path.join(root, ".opencode/plugins/harness-session.js")
+if os.path.islink(plugin) and not os.path.exists(plugin):
+    print("error: .opencode/plugins/harness-session.js dangles — re-add it with harness add %s from the harness-starter checkout" % root)
+    sys.exit(1)
+if not os.path.isfile(plugin):
+    print("error: .opencode/plugins/harness-session.js missing or not a file — re-add it with harness add %s from the harness-starter checkout" % root)
+    sys.exit(1)
+if expected is None:
+    print("  ok    opencode contract link (stale-link check skipped: run undispatched, shared root unknown)")
+else:
+    print("  ok    opencode contract link")
+PYEOF
+)"; then
+    echo "$contract_out"
+  else
+    contract_st=$?
+    capture_report "opencode contract link" "$contract_out" "$contract_st"
+  fi
+fi
+
 # ── PROJECT STEPS ─────────────────────────────────────────────────────────
 # Your project's build, test, and smoke steps live in scripts/verify.steps.sh,
 # sourced just below. That file is the project's own — installed once by

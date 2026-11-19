@@ -600,6 +600,73 @@ PYEOF
 }
 export -f probe_dashboard_verdict
 
+# The gate holds the opencode contract link and the session plugin: a missing
+# or dangling link fails naming `scripts/harness link`, a stale link (resolved
+# elsewhere, or a real file) fails the same way, and a missing or dangling
+# plugin fails naming the re-add. A healthy install passes. Proved through
+# nested --quick gates — the serial lane that carries the check — not a pasted
+# copy of its body.
+probe_step --when "template/scripts/verify.sh template/scripts/harness template/stubs/.opencode/* template/stubs/opencode.json opencode.json" "opencode contract link gate" bash -c '
+  PROBE_SCENARIO="opencode contract link gate"
+  golden_probe || probe_fail "no golden fixture"
+  top="$PWD"
+  printf "%s\n" "step \"probe build\" true" > "$probe/scripts/verify.steps.sh" || probe_fail "cannot plant trivial steps"
+  qv() { (cd "$probe" && HARNESS_HOME="$top" "$probe/scripts/harness" verify --quick 2>&1); }
+  # The healthy install reaches the check and passes it: the ok line, not the
+  # exit status, is the proof — any other serial step may fail on its own.
+  out="$(qv)" || true
+  echo "$out" | grep -q "ok    opencode contract link" || probe_fail "a healthy install never passed the contract check"
+  rm -f "$probe/.harness-contract.md" || probe_fail "cannot remove the probe link"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a missing contract link"
+  echo "$out" | grep -q "run scripts/harness link" || probe_fail "a missing link never named the fix"
+  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot re-link the probe install"
+  [ -L "$probe/.harness-contract.md" ] || probe_fail "link never restored the probe link"
+  rm -f "$probe/.harness-contract.md" || probe_fail "cannot remove the probe link again"
+  ln -s "$probe/nonexistent-probe-target" "$probe/.harness-contract.md" || probe_fail "cannot plant a dangling probe link"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a dangling contract link"
+  echo "$out" | grep -q "run scripts/harness link" || probe_fail "a dangling link never named the fix"
+  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot re-link after the dangling probe"
+  # A link that resolves, but not to the shared contract, is stale: a moved
+  # root or a hand link the gate must not read as the contract.
+  rm -f "$probe/.harness-contract.md" || probe_fail "cannot remove the probe link for the stale case"
+  ln -s "$probe/opencode.json" "$probe/.harness-contract.md" || probe_fail "cannot plant a stale probe link"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a stale contract link"
+  echo "$out" | grep -q "run scripts/harness link" || probe_fail "a stale link never named the fix"
+  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot re-link after the stale probe"
+  # A real file where the link belongs is stale generated output, not a
+  # project file — link_contract replaces it, and the gate fails it the same way.
+  rm -f "$probe/.harness-contract.md" || probe_fail "cannot remove the probe link for the file case"
+  printf "stale\n" > "$probe/.harness-contract.md" || probe_fail "cannot plant a real probe contract file"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a real file at the contract link"
+  echo "$out" | grep -q "run scripts/harness link" || probe_fail "a real file at the link never named the fix"
+  HARNESS_HOME="$top" "$probe/scripts/harness" link >/dev/null 2>&1 || probe_fail "cannot re-link after the file probe"
+  rm -f "$probe/.opencode/plugins/harness-session.js" || probe_fail "cannot remove the probe plugin"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a missing session plugin"
+  echo "$out" | grep -q "re-add it with harness add" || probe_fail "a missing plugin never named the re-add"
+  cp "$top/template/stubs/.opencode/plugins/harness-session.js" "$probe/.opencode/plugins/harness-session.js" || probe_fail "cannot restore the probe plugin"
+  rm -f "$probe/.opencode/plugins/harness-session.js" || probe_fail "cannot remove the probe plugin again"
+  ln -s "$probe/nonexistent-probe-target" "$probe/.opencode/plugins/harness-session.js" || probe_fail "cannot plant a dangling probe plugin"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a dangling session plugin"
+  echo "$out" | grep -q "dangles" || probe_fail "a dangling plugin never said it dangles"
+  echo "$out" | grep -q "re-add it with harness add" || probe_fail "a dangling plugin never named the re-add"
+  doc="$(cd "$probe" && HARNESS_HOME="$top" "$probe/scripts/harness" doctor 2>&1)" || true
+  echo "$doc" | grep -q "opencode plugin: dangling" || probe_fail "doctor never called a dangling plugin dangling"
+  # A directory where the plugin belongs is no plugin opencode can load.
+  rm -f "$probe/.opencode/plugins/harness-session.js" && mkdir "$probe/.opencode/plugins/harness-session.js" || probe_fail "cannot plant a directory at the plugin path"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a directory at the plugin path"
+  rmdir "$probe/.opencode/plugins/harness-session.js" && ln -s "$probe/.opencode" "$probe/.opencode/plugins/harness-session.js" || probe_fail "cannot plant a link to a directory at the plugin path"
+  out="$(qv)" || true
+  echo "$out" | grep -q "FAIL  opencode contract link" || probe_fail "the gate passed a plugin link to a directory"'
+
+
+
 # The opencode session plugin: a fresh add installs it as a committed file,
 # and driving its context hook with a fake session returns the brief — cached
 # per session, retried (not replayed) after a fix, loud-but-quiet on a failing

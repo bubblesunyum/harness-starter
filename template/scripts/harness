@@ -173,6 +173,55 @@ usage: h [-h|--help] <command> [args]
 EOF
 }
 
+# The opencode-readable contract link: a clone or worktree can lose the
+# gitignored link, leaving a session with no brief and no line saying why.
+# Prints the state link_contract keeps by, so the fix is obvious.
+doctor_contract_status() {
+  contract_dst="$PROJECT/.harness-contract.md"
+  contract_src="$ROOT/AGENTS.md"
+  if [ ! -e "$contract_dst" ] && [ ! -L "$contract_dst" ]; then
+    contract_status="missing"
+  elif [ -L "$contract_dst" ] && [ ! -e "$contract_dst" ]; then
+    contract_status="dangling"
+  elif [ -L "$contract_dst" ]; then
+    # The same predicate link_contract keeps by: an exact match is the link
+    # it maintains, anything else resolving is a moved root or a hand link.
+    if [ "$(readlink "$contract_dst")" = "$contract_src" ]; then
+      contract_status="ok"
+    else
+      contract_status="stale"
+    fi
+  else
+    # A real file where the link belongs is stale generated output, not a
+    # project override the way a real skill file is — link_contract replaces it.
+    contract_status="stale"
+  fi
+  printf '%s\n' "$contract_status"
+}
+
+# The session plugin: a partial copy can lose the committed file, leaving a
+# session with no brief and no line saying why. Prints ok/missing/dangling/differs.
+doctor_plugin_status() {
+  plugin_dst="$PROJECT/.opencode/plugins/harness-session.js"
+  # The shared copy resolves through stubs/ when present, the way
+  # harness_reference_src resolves installer sources — never a hardcoded path.
+  if [ -e "$ROOT/stubs/.opencode/plugins/harness-session.js" ]; then
+    plugin_src="$ROOT/stubs/.opencode/plugins/harness-session.js"
+  else
+    plugin_src="$ROOT/.opencode/plugins/harness-session.js"
+  fi
+  if [ ! -e "$plugin_dst" ] && [ ! -L "$plugin_dst" ]; then
+    plugin_status="missing"
+  elif [ -L "$plugin_dst" ] && [ ! -e "$plugin_dst" ]; then
+    plugin_status="dangling"
+  elif cmp -s "$plugin_src" "$plugin_dst" 2>/dev/null; then
+    plugin_status="ok"
+  else
+    plugin_status="differs"
+  fi
+  printf '%s\n' "$plugin_status"
+}
+
 cmd_doctor() {
   rev=""
   rev="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)" || rev=""
@@ -183,6 +232,8 @@ cmd_doctor() {
   printf 'root: %s\n' "$ROOT"
   printf 'source: %s\n' "$SOURCE"
   printf 'revision: %s\n' "$rev"
+  printf 'contract link: %s\n' "$(doctor_contract_status)"
+  printf 'opencode plugin: %s\n' "$(doctor_plugin_status)"
   # Every shared script the project shadows or overlays. verify.steps.sh
   # and review.scope.sh are overlays the project extends; anything else a
   # project copy fully replaces is a shadow.
