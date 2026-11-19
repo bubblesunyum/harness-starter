@@ -1208,6 +1208,61 @@
       .peer-group .peer-seg {
         margin: 2px 0 14px;
       }
+      /* The wide-screen sidebar: the same dashboards the title popover tabs
+      offer, as a sticky list on the left. Hidden below the breakpoint, so
+      narrow viewports keep the popover as the only peer path. The main column
+      keeps its 856px cap — the sidebar lives in the left margin (fixed, so
+      it never shifts the centered column) and only fits where that margin is
+      wide enough, hence the 1360px breakpoint: the centered column leaves
+      (100vw-856px)/2 per side, and the 200px sidebar plus its 32px gap only
+      clear the column at ~1352px and above. Buttons reuse the .seg and
+      .peer-seg treatments, so current/busy/greyed read exactly as in the
+      popover; the column override below is layout only. */
+      #peerSidebar {
+        display: none;
+      }
+      @media (min-width: 1360px) {
+        #peerSidebar:not([hidden]) {
+          display: block;
+          position: fixed;
+          left: max(16px, calc((100vw - 856px) / 2 - 232px));
+          top: 26px;
+          width: 200px;
+          z-index: 10;
+        }
+        /* The sidebar head reads as an app h2, inset to the tab labels'
+        own edge (1px seg border + 10px button padding) rather than the box. */
+        #peerSidebar .peer-side-head {
+          font-size: 11px;
+          font-weight: 620;
+          text-transform: uppercase;
+          letter-spacing: 0.09em;
+          color: var(--ink);
+          margin: 0 0 8px;
+          padding-left: 11px;
+        }
+        #peerSidebar .peer-seg.peer-side {
+          flex-direction: column;
+          flex-wrap: nowrap;
+          overflow-x: visible;
+          overflow-y: auto;
+          max-height: calc(100vh - 80px);
+          max-width: 100%;
+        }
+        #peerSidebar .peer-seg.peer-side button {
+          flex: none;
+          white-space: normal;
+          text-align: left;
+          overflow-wrap: anywhere;
+          /* Stacked, the row separators run horizontally: the .seg rule's
+          left border goes, and every button but the first takes a top one. */
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+        #peerSidebar .peer-seg.peer-side button:first-child {
+          border-top: 0;
+        }
+      }
       /* The sheet's keyboard move path: plain buttons in a wrapping row, so it
       reads as actions rather than another segmented setting. */
       .move-row {
@@ -2105,6 +2160,15 @@
     </style>
   </head>
   <body>
+    <!-- Wide-screen peer sidebar: rendered from the same peers/selfRoot data
+    as the title-popover peerGroup (see drawPeerSidebar), hidden below the
+    1360px breakpoint. Clicks carry data-peer-root, so the existing peer
+    switch handler and its single-flight guard own them — no second fetch,
+    no second POST path. -->
+    <nav id="peerSidebar" aria-label="dashboards" hidden>
+      <div class="peer-side-head" id="peerSideHead" aria-hidden="true">dashboards</div>
+      <div class="seg peer-seg peer-side" id="peerSideSeg" role="radiogroup" aria-labelledby="peerSideHead"></div>
+    </nav>
     <header>
       <span class="titlemenu" id="titlemenu">
         <button class="titletrigger" id="metaToggle" aria-expanded="false" aria-controls="metaTip">
@@ -4102,18 +4166,20 @@
         }
       })
 
-      /* Peer tabs answer the same keys as the priority radiogroups — but
-      arrows move only the tab stop and the focus, never the board: a switch
-      POSTs and rebuilds, so it stays on Enter/Space/click like any button. */
+      /* Peer radiogroups share one key handler: arrows move only the tab stop
+      and the focus, never the board — a switch stays on Enter/Space/click.
+      Scoped to the event's own radiogroup, so popover and sidebar each keep
+      a single tab stop. */
       document.addEventListener('keydown', (e) => {
-        const tab = e.target.closest?.('#peerSeg [role="radio"]')
+        const tab = e.target.closest?.('.peer-seg [role="radio"]')
         if (
           !tab ||
           !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)
         )
           return
         e.preventDefault()
-        const order = [...document.querySelectorAll('#peerSeg [role="radio"]')]
+        const scope = tab.closest('.peer-seg')
+        const order = [...scope.querySelectorAll('[role="radio"]')]
         if (!order.length) return
         let ix = order.indexOf(tab)
         if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ix = (ix + 1) % order.length
@@ -4492,31 +4558,33 @@
           el.tabIndex = peerTabStop(i, ix)
         })
       }
+      /* A wholesale rebuild drops focus; hand it back to the same index. */
+      function restoreFocus(container, selector) {
+        const focused = document.activeElement?.closest?.(selector)
+        const ix = focused ? [...container.querySelectorAll('[role="radio"]')].indexOf(focused) : -1
+        return ix
+      }
 
-      /* One segment per detected harness, the current board pressed and inert:
-         a press switches this same page to the peer (see switchPeer). With no peer list yet — a lone board, or
-         a server from before the dashboards endpoint — the bar is just this
-         board. `p.self` is only ever set on that local fallback; listed peers
-         compare roots against the endpoint's `self`. A radiogroup like the
-         priority segments: the tab that says where you are is the one tab
-         stop, arrows move focus without switching (a switch rebuilds, so it
-         stays on Enter/Space/click). */
-      function peerGroup(d) {
-        // A section the project hid never renders, even while switching —
-        // the in-flight label lives on the tab being hidden.
-        if (boardConfig(d).hidden.has('peers')) return ''
-        // Foreign entries make the whole list absent, not dead tabs — and a
-        // lone board simply arrives as a list of one.
+      /* The peer list both the popover tabs and the sidebar render: foreign
+      entries blank it (never dead tabs), and a lone board arrives as a list
+      of one. The tab that says where you are — or where you're headed
+      mid-switch — owns the tab stop; a list with no current board falls back
+      to first. */
+      function peerList(d) {
         const known = peers.filter(isPeerEntry)
         const list = known.length ? known : [{name: d.project, root: '', self: true}]
-        // The tab that says where you are — or where you're headed mid-switch —
-        // owns the tab stop; a list with no current board falls back to first.
         const startingIx = list.findIndex((p) => startingPeerRoot && p.root === startingPeerRoot)
         const selfIx = list.findIndex((p) => (p.self && !p.root) || (selfRoot && p.root === selfRoot))
         let rovingIx = 0
         if (startingIx >= 0) rovingIx = startingIx
         else if (selfIx >= 0) rovingIx = selfIx
-        const buttons = list
+        return {list, rovingIx}
+      }
+
+      /* One button per peer, shared by the popover row and the sidebar column:
+      same order, same guards, same starting/self/incapable treatments. */
+      function peerButtonsHtml(list, rovingIx) {
+        return list
           .map((p, ix) => {
             const tabStop = peerTabStop(ix, rovingIx)
             // The in-flight tab first, so no current check below can steal
@@ -4558,6 +4626,22 @@
             )
           })
           .join('')
+      }
+
+      /* One segment per detected harness, the current board pressed and inert:
+         a press switches this same page to the peer (see switchPeer). With no peer list yet — a lone board, or
+         a server from before the dashboards endpoint — the bar is just this
+         board. `p.self` is only ever set on that local fallback; listed peers
+         compare roots against the endpoint's `self`. A radiogroup like the
+         priority segments: the tab that says where you are is the one tab
+         stop, arrows move focus without switching (a switch rebuilds, so it
+         stays on Enter/Space/click). */
+      function peerGroup(d) {
+        // A section the project hid never renders, even while switching —
+        // the in-flight label lives on the tab being hidden.
+        if (boardConfig(d).hidden.has('peers')) return ''
+        const {list, rovingIx} = peerList(d)
+        const buttons = peerButtonsHtml(list, rovingIx)
         return (
           `<div class="group peer-group">` +
           `<div class="peer-scroll" id="peerScroll">` +
@@ -4566,6 +4650,32 @@
           `<button class="peer-scroll-control" type="button" data-peer-scroll="1" aria-label="Scroll boards right" aria-disabled="false" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5l5 4.5-5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>` +
           `</div></div>`
         )
+      }
+
+      /* The wide-screen sidebar: the peer list as a vertical radiogroup.
+      Rendered from drawMeta's own repaint, so polling stays single. */
+      function drawPeerSidebar(d) {
+        const nav = $('peerSidebar')
+        const seg = $('peerSideSeg')
+        if (!nav || !seg) return
+        // A section the project hid never renders, in either place.
+        if (boardConfig(d).hidden.has('peers')) {
+          nav.hidden = true
+          seg.innerHTML = ''
+          return
+        }
+        const {list, rovingIx} = peerList(d)
+        const focusedIx = restoreFocus(seg, '#peerSideSeg [role="radio"]')
+        seg.innerHTML = peerButtonsHtml(list, rovingIx)
+        nav.hidden = false
+        if (focusedIx >= 0) {
+          const tabs = [...seg.querySelectorAll('[role="radio"]')]
+          const back = tabs[Math.min(focusedIx, tabs.length - 1)]
+          if (back) {
+            setRoving(tabs, tabs.indexOf(back))
+            back.focus({preventScroll: true})
+          }
+        }
       }
 
       function updatePeerScroll() {
@@ -4608,13 +4718,7 @@
 
         // A section the project hid never renders, even with numbers on it.
         const showBudget = !boardConfig(d).hidden.has('budget')
-        // The popover rebuilds wholesale, which would drop the focus of anyone
-        // arrowing through the peer tabs — so a focused tab is handed back to
-        // the rebuilt row, the same way cards are refocused after a repaint.
-        const focusedTab = document.activeElement?.closest?.('#peerSeg [role="radio"]')
-        const focusedIx = focusedTab
-          ? [...document.querySelectorAll('#peerSeg [role="radio"]')].indexOf(focusedTab)
-          : -1
+        const focusedIx = restoreFocus(document, '#peerSeg [role="radio"]')
         $('metaTip').innerHTML =
           peerGroup(d) + (showBudget ? `
            <div class="group">
@@ -4647,6 +4751,7 @@
             <div class="note">Skills cost their description until invoked. Reviewers run on
               cheap models, off the diff.</div>
           </div>`
+        drawPeerSidebar(d)
         updatePeerScroll()
         if (focusedIx >= 0) {
           const tabs = [...document.querySelectorAll('#peerSeg [role="radio"]')]
