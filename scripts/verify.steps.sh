@@ -2194,6 +2194,12 @@ n=$(wc -l < "$probe/results-backup.jsonl" | tr -d " ") || probe_fail "cannot cou
 head -n "$n" "$probe/harness/evals/results.jsonl" > "$probe/results-head.jsonl" || probe_fail "cannot slice the rerun"
 cmp -s "$probe/results-backup.jsonl" "$probe/results-head.jsonl" || probe_fail "second run rewrote earlier rows"
 rm -f "$probe/results-backup.jsonl" "$probe/results-head.jsonl" || probe_fail "cannot clean the comparison files"
+mkdir -p "$probe/check-fixture" || probe_fail "cannot make the check fixture"
+printf "%s\n" "probe work for har-000" > "$probe/check-fixture/msg.txt" || probe_fail "cannot plant exact bead line"
+(cd "$probe/check-fixture" && bash "$probe/harness/evals/commit-bead/check.sh" >/dev/null 2>&1) || probe_fail "check rejected exact har-000"
+printf "%s\n" "probe work for har-0001" > "$probe/check-fixture/msg.txt" || probe_fail "cannot plant longer bead line"
+(cd "$probe/check-fixture" && bash "$probe/harness/evals/commit-bead/check.sh" >/dev/null 2>&1) && probe_fail "check accepted longer har-0001" || true
+rm -rf "$probe/check-fixture" || probe_fail "cannot clean the check fixture"
 mkdir -p "$probe/harness/evals/my case" || probe_fail "cannot make the spaced case"
 cp "$probe/harness/evals/commit-bead/task.md" "$probe/harness/evals/commit-bead/check.sh" "$probe/harness/evals/commit-bead/base" "$probe/harness/evals/my case/" || probe_fail "cannot seed the spaced case"
 out=$(cd "$probe" && env -u OPENCODE_SESSION_ID -u OPENCODE_BIN HARNESS_HOME="$top" PATH="$probe:$PATH" HARNESS_PROJECT="$probe" HARNESS_ROOT="$root" bash "$root/scripts/eval.sh" --case "my case" 2>&1) || probe_fail "eval failed on a spaced case name"
